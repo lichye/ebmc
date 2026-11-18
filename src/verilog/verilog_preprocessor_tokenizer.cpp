@@ -11,6 +11,33 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <util/invariant.h>
 
 #include <algorithm>
+#include <istream>
+
+std::size_t
+verilog_preprocessor_scannert::yy_input(char *buffer, std::size_t max_size)
+{
+  const auto end = buffer + FLEX_CLASS_NAME::yy_input(buffer, max_size);
+  auto output = std::find(buffer, end, '\r');
+  for(auto input = output; input != end; ++input)
+  {
+    if(*input == '\r')
+    {
+      if(input + 1 != end && input[1] == '\n')
+        continue;
+
+      // The CR and LF may be separated by the end of a scanner buffer.
+      if(input + 1 == end && in->rdbuf()->sgetc() == '\n')
+      {
+        in->rdbuf()->sbumpc();
+        *output++ = '\n';
+        break;
+      }
+    }
+    *output++ = *input;
+  }
+
+  return output - buffer;
+}
 
 void verilog_preprocessor_token_sourcet::skip_until_eol()
 {

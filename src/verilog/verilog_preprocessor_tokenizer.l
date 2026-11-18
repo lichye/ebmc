@@ -19,10 +19,11 @@ using tokent = verilog_preprocessor_tokenizert::tokent;
 
 // The scanner is reentrant; its "extra" data is the flex_interfacet
 // wrapper (a verilog_preprocessor_scannert), reached via yyget_extra.
-#define YY_INPUT(buf, result, max_size)                          \
-  {                                                              \
-    result = FLEX_CLASS_NAME::from_extra(yyget_extra(yyscanner)) \
-               .yy_input(buf, max_size);                         \
+#define YY_INPUT(buf, result, max_size)                                  \
+  {                                                                      \
+    auto &scanner = static_cast<verilog_preprocessor_scannert &>(         \
+      FLEX_CLASS_NAME::from_extra(yyget_extra(yyscanner)));                \
+    result = scanner.yy_input(buf, max_size);                            \
   }
 %}
 

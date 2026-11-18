@@ -123,6 +123,8 @@ public:
   {
   }
 
+  std::size_t yy_input(char *buffer, std::size_t max_size);
+
   // see verilog_preprocessor_token_sourcet::in_macro_text
   const bool &in_macro_text;
 };
