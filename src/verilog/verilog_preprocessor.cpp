@@ -1054,6 +1054,12 @@ void verilog_preprocessort::directive()
   }
   else if(text == "default_nettype")
   {
+    if(!condition)
+    {
+      tokenizer().skip_until_eol();
+      return;
+    }
+
     // pass through
     out << '`' << text;
     while(true)
@@ -1071,13 +1077,15 @@ void verilog_preprocessort::directive()
   {
     // 1800 2017 22.13
     // String literal
-    out << verilog_string_literal(context().filename_as_string());
+    if(condition)
+      out << verilog_string_literal(context().filename_as_string());
   }
   else if(text == "__LINE__")
   {
     // 1800 2017 22.13
     // decimal number
-    out << tokenizer().line_no();
+    if(condition)
+      out << tokenizer().line_no();
   }
   else
   {
