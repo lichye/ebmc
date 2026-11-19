@@ -4697,6 +4697,11 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
       mp_integer msb = convert_integer_constant_expression(part_select.msb());
       mp_integer lsb = convert_integer_constant_expression(part_select.lsb());
 
+      if(
+        array_type.is_packed() && msb != lsb &&
+        (msb < lsb) != array_type.increasing())
+        throw errort{}.with_location(part_select.source_location())
+          << "part-select direction disagrees with the declared range";
       if(msb < lsb)
         std::swap(msb, lsb); // now msb>=lsb
 
@@ -4741,6 +4746,11 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
     mp_integer msb = convert_integer_constant_expression(part_select.msb());
     mp_integer lsb = convert_integer_constant_expression(part_select.lsb());
 
+    if(
+      msb != lsb &&
+      (msb < lsb) != to_verilog_vector_type(src.type()).increasing())
+      throw errort{}.with_location(part_select.source_location())
+        << "part-select direction disagrees with the declared range";
     if(msb < lsb)
       std::swap(msb, lsb); // now msb>=lsb
 
