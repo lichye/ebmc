@@ -69,6 +69,14 @@ static constant_exprt onehot0(const constant_exprt &expr, const namespacet &ns)
     return false_exprt();
 }
 
+bool verilog_is_constant(const exprt &expr)
+{
+  if(expr.id() == ID_struct || expr.id() == ID_union || expr.id() == ID_array)
+    return std::all_of(
+      expr.operands().begin(), expr.operands().end(), verilog_is_constant);
+  return expr.is_constant();
+}
+
 static exprt verilog_simplifier_rec(exprt expr, const namespacet &ns)
 {
   // Remember the Verilog type.
@@ -141,7 +149,7 @@ static exprt verilog_simplifier_rec(exprt expr, const namespacet &ns)
   {
     // recursive call
     op = verilog_simplifier_rec(op, ns);
-    if(!op.is_constant())
+    if(!verilog_is_constant(op))
       operands_are_constant = false;
   }
 

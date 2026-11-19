@@ -70,22 +70,42 @@ static constant_exprt lift_four_valued(
   return result;
 }
 
-exprt verilog_constant_folding(exprt expr, const namespacet &ns)
+static exprt lift_constant(
+  exprt expr_simplified,
+  const typet &verilog_type,
+  const source_locationt &source_location)
 {
-  // This performs constant-folding on a type-checked expression
-  // according to Section 11.2.1 IEEE 1800-2017.
-  // The result is a value, and hence has the range [size-1:0] rather
-  // than any declared range of the expression.
-  auto verilog_type = expr.type();
-  verilog_type.remove(ID_C_offset);
-  verilog_type.remove(ID_C_increasing);
-  auto source_location = expr.source_location();
-
-  auto expr_lowered = verilog_lowering(std::move(expr));
-
-  // simplify
-  auto expr_simplified = verilog_simplifier(std::move(expr_lowered), ns);
-
+  if(expr_simplified.id() == ID_struct && verilog_type.id() == ID_struct)
+  {
+    const auto &fields = to_struct_type(verilog_type).components();
+    auto &values = expr_simplified.operands();
+    CHECK_RETURN(fields.size() == values.size());
+    for(std::size_t i = 0; i < fields.size(); ++i)
+      values[i] =
+        lift_constant(std::move(values[i]), fields[i].type(), source_location);
+    expr_simplified.type() = verilog_type;
+    return expr_simplified;
+  }
+  if(expr_simplified.id() == ID_array && verilog_type.id() == ID_array)
+  {
+    for(auto &value : expr_simplified.operands())
+      value = lift_constant(
+        std::move(value),
+        to_array_type(verilog_type).element_type(),
+        source_location);
+    expr_simplified.type() = verilog_type;
+    return expr_simplified;
+  }
+  if(expr_simplified.id() == ID_union && verilog_type.id() == ID_union)
+  {
+    auto &active = to_union_expr(expr_simplified);
+    const auto &field = to_struct_union_type(verilog_type)
+                          .get_component(active.get_component_name());
+    active.op() =
+      lift_constant(std::move(active.op()), field.type(), source_location);
+    active.type() = verilog_type;
+    return expr_simplified;
+  }
   // Only constants are lifted.
   if(!expr_simplified.is_constant())
     return expr_simplified;
@@ -117,4 +137,25 @@ exprt verilog_constant_folding(exprt expr, const namespacet &ns)
   }
 
   return expr_simplified;
+}
+
+exprt verilog_constant_folding(exprt expr, const namespacet &ns)
+{
+  // This performs constant-folding on a type-checked expression
+  // according to Section 11.2.1 IEEE 1800-2017.
+  // The result is a value, and hence has the range [size-1:0] rather
+  // than any declared range of the expression.
+  auto verilog_type = expr.type();
+  verilog_type.remove(ID_C_offset);
+  verilog_type.remove(ID_C_increasing);
+  auto source_location = expr.source_location();
+
+  auto expr_lowered = verilog_lowering(std::move(expr));
+
+  // simplify
+  auto expr_simplified = verilog_simplifier(std::move(expr_lowered), ns);
+  if(!verilog_is_constant(expr_simplified))
+    return expr_simplified;
+  return lift_constant(
+    std::move(expr_simplified), verilog_type, source_location);
 }

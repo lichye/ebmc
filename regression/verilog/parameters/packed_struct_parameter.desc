@@ -1,0 +1,7 @@
+CORE
+packed_struct_parameter.sv
+--bound 0
+^\[main\.p0\].*: PROVED.*$
+^\[main\.p1\].*: PROVED.*$
+^EXIT=0$
+^SIGNAL=0$

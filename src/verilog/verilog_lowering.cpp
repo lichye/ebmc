@@ -50,6 +50,25 @@ typet verilog_lowering(typet type)
   {
     return lower_to_aval_bval(type);
   }
+  else if(type.id() == ID_struct || type.id() == ID_union)
+  {
+    const auto &fields = to_struct_union_type(std::as_const(type)).components();
+    for(std::size_t i = 0; i < fields.size(); ++i)
+    {
+      auto lowered = verilog_lowering(fields[i].type());
+      if(lowered != fields[i].type())
+        to_struct_union_type(type).components()[i].type() = std::move(lowered);
+    }
+    return type;
+  }
+  else if(type.id() == ID_array)
+  {
+    const auto &element = to_array_type(std::as_const(type)).element_type();
+    auto lowered = verilog_lowering(element);
+    if(lowered != element)
+      to_array_type(type).element_type() = std::move(lowered);
+    return type;
+  }
   else if(type.id() == ID_verilog_chandle)
   {
     return to_verilog_chandle_type(type).encoding();
@@ -301,6 +320,14 @@ exprt from_bitvector(
     }
 
     return array_exprt{std::move(element_values), array_type};
+  }
+  else if(is_four_valued(dest))
+  {
+    // The source is a packed bit vector. A four-state field stores
+    // these known bits in its value plane and has a zero unknown plane.
+    auto field = extract(
+      src, offset, unsignedbv_typet{to_bitvector_type(dest).get_width()});
+    return aval_bval_conversion(field, lower_to_aval_bval(dest));
   }
   else
   {
@@ -920,6 +947,12 @@ exprt verilog_lowering_node(exprt expr)
       return to_verilog_event_type(expr.type()).null_expr();
     }
 
+    return expr;
+  }
+  else if(
+    expr.id() == ID_struct || expr.id() == ID_union || expr.id() == ID_array)
+  {
+    expr.type() = verilog_lowering(expr.type());
     return expr;
   }
   else if(expr.id() == ID_symbol)
@@ -1571,7 +1604,10 @@ exprt verilog_lowering_node(exprt expr)
       return from_bitvector(bv, 0, member_expr.type());
     }
     else
-      return expr; // leave as is
+    {
+      expr.type() = verilog_lowering(expr.type());
+      return expr;
+    }
   }
   else if(expr.id() == ID_if)
   {

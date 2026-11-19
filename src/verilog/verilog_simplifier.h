@@ -12,6 +12,9 @@ Author: Daniel Kroening, kroening@kroening.com
 class exprt;
 class namespacet;
 
+/// Includes struct, union and array literals with constant members.
+bool verilog_is_constant(const exprt &);
+
 exprt verilog_simplifier(exprt, const namespacet &);
 
 #endif

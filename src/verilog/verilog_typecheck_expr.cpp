@@ -2823,7 +2823,7 @@ exprt verilog_typecheck_exprt::elaborate_constant_expression_check(exprt expr)
   exprt tmp = elaborate_constant_expression(std::move(expr));
 
   // $ counts as a constant
-  if(!tmp.is_constant() && tmp.id() != ID_infinity)
+  if(!verilog_is_constant(tmp) && tmp.id() != ID_infinity)
   {
     std::string tmp_string =
       given_type.has_value() ? *given_type : to_string(tmp);
