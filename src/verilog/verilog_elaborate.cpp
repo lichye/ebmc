@@ -298,6 +298,8 @@ void verilog_typecheckt::collect_symbols(
 
   function_or_task_name = symbol.name;
 
+  for(const auto &local : declaration.local_declarations())
+    collect_symbols(local);
   for(auto &port : declaration.ports())
     for(auto &declarator : port.declarators())
     {
@@ -331,6 +333,8 @@ void verilog_typecheckt::collect_symbols(
 
   function_or_task_name = symbol.name;
 
+  for(const auto &local : declaration.local_declarations())
+    collect_symbols(local);
   for(auto &port : declaration.ports())
     for(auto &declarator : port.declarators())
     {
@@ -928,9 +932,15 @@ void verilog_typecheckt::collect_symbols(
 
   function_or_task_name = symbol.name;
 
-  // do the ANSI-style ports, if applicable
-  for(auto &port_decl : decl.ports())
+  // With neither a direction nor a type, an ANSI formal inherits the
+  // previous formal's data type (1800-2017 13.3).
+  typet previous_type{ID_nil};
+  for(const auto &port : decl.ports())
   {
+    auto port_decl = port;
+    if(port.get_class() == ID_verilog_no_direction && port.type().is_nil())
+      port_decl.type() = previous_type;
+    previous_type = port_decl.type();
     // These must have one declarator exactly.
     DATA_INVARIANT(
       port_decl.declarators().size() == 1, "must have one port declarator");

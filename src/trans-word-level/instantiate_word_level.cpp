@@ -106,6 +106,16 @@ exprt wl_instantiatet::instantiate_rec(exprt expr, const mp_integer &t) const
 {
   expr.type() = instantiate_rec(expr.type(), t);
 
+  if(expr.id() == ID_sva_local)
+  {
+    // A concrete sequence match supplies an already instantiated sample.
+    const auto &sample = static_cast<const exprt &>(expr.find(ID_value));
+    if(sample.is_nil())
+      throw ebmc_errort{}.with_location(expr.source_location())
+        << "assertion local variable " << expr.get(ID_base_name)
+        << " is read before assignment";
+    return sample;
+  }
   if(expr.id() == ID_next_symbol)
   {
     PRECONDITION(next_symbol_allowed);

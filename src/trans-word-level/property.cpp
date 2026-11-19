@@ -781,7 +781,11 @@ static obligationst property_obligations_rec(
 
       // Get obligations for RHS
       auto rhs_obligations_rec = property_obligations_rec(
-        implication.rhs(), allow_pending_matches, t_rhs, no_timeframes, lasso);
+        bind_sva_locals(implication.rhs(), lhs_match_point.locals),
+        allow_pending_matches,
+        t_rhs,
+        no_timeframes,
+        lasso);
 
       for(auto &rhs_obligation : rhs_obligations_rec.map)
       {
@@ -839,13 +843,14 @@ static obligationst property_obligations_rec(
       }
       else
       {
-        auto obligations_rec = property_obligations_rec(
-                                 followed_by.consequent(),
-                                 allow_pending_matches,
-                                 property_start,
-                                 no_timeframes,
-                                 lasso)
-                                 .conjunction();
+        auto obligations_rec =
+          property_obligations_rec(
+            bind_sva_locals(followed_by.consequent(), match.locals),
+            allow_pending_matches,
+            property_start,
+            no_timeframes,
+            lasso)
+            .conjunction();
 
         disjuncts.push_back(
           and_exprt{match.condition(), obligations_rec.second});

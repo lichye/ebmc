@@ -1,0 +1,6 @@
+CORE
+nonlocal_match_assignment.sv
+--bound 1
+sequence match items can only modify assertion local variables
+^EXIT=2$
+^SIGNAL=0$

@@ -1298,7 +1298,7 @@ void verilog_typecheckt::convert_assign(
 
 /*******************************************************************\
 
-Function: verilog_typecheckt::compound_operator_id
+Function: verilog_typecheck_exprt::compound_operator_id
 
   Inputs:
 
@@ -1309,7 +1309,7 @@ Function: verilog_typecheckt::compound_operator_id
 \*******************************************************************/
 
 std::optional<irep_idt>
-verilog_typecheckt::compound_operator_id(const irep_idt &statement_id)
+verilog_typecheck_exprt::compound_operator_id(const irep_idt &statement_id)
 {
   // Maps a compound-assignment statement id to the id of the corresponding
   // binary operator, using the source-level shift ids expected by the
@@ -2206,7 +2206,15 @@ Function: verilog_typecheckt::preresolve_identifiers
 
 void verilog_typecheckt::preresolve_identifiers(exprt &expr)
 {
-  if(expr.id() == ID_verilog_identifier)
+  if(
+    expr.id() == ID_function_call &&
+    to_function_call_expr(expr).is_system_function_call())
+  {
+    // A system function has no declaration in the assertion's lexical scope.
+    for(auto &argument : to_function_call_expr(expr).arguments())
+      preresolve_identifiers(argument);
+  }
+  else if(expr.id() == ID_verilog_identifier)
   {
     auto &identifier_expr = to_verilog_identifier_expr(expr);
     auto base_name = identifier_expr.base_name();
@@ -2269,6 +2277,10 @@ void verilog_typecheckt::convert_property_declaration(
   // We'll annotate the scope of the identifiers.
   // Set function_or_task_name so that resolve() finds the port symbols.
   function_or_task_name = full_identifier;
+  for(auto &local : declaration.local_declarations())
+    for(auto &declarator : local.declarators())
+      if(declarator.has_value())
+        preresolve_identifiers(declarator.value());
   preresolve_identifiers(declaration.cond());
   function_or_task_name = "";
 
@@ -2303,6 +2315,10 @@ void verilog_typecheckt::convert_sequence_declaration(
   // We'll annotate the scope of the identifiers.
   // Set function_or_task_name so that resolve() finds the port symbols.
   function_or_task_name = full_identifier;
+  for(auto &local : declaration.local_declarations())
+    for(auto &declarator : local.declarators())
+      if(declarator.has_value())
+        preresolve_identifiers(declarator.value());
   preresolve_identifiers(declaration.cond());
   function_or_task_name = "";
 

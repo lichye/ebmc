@@ -1,0 +1,11 @@
+CORE
+sequence_local_threads.sv
+--bound 4
+^\[main\.p0\].*: PROVED.*$
+^\[main\.p2\].*: PROVED.*$
+^\[main\.p3\].*: PROVED.*$
+^\[main\.p1\].*: REFUTED$
+^\[main\.p4\].*: PROVED.*$
+^\[main\.p5\].*: PROVED.*$
+^EXIT=10$
+^SIGNAL=0$

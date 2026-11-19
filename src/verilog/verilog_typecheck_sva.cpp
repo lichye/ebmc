@@ -290,11 +290,16 @@ exprt verilog_typecheck_exprt::convert_binary_sva(binary_exprt expr)
   {
     auto &first_match_expr = to_sva_sequence_first_match_expr(expr);
 
+    if(first_match_expr.rhs().is_not_nil())
+    {
+      auto items = std::move(first_match_expr.rhs());
+      first_match_expr.rhs() = nil_exprt{};
+      expr.type() = verilog_sva_sequence_typet{};
+      return convert_sva_rec(binary_exprt{
+        std::move(expr), ID_sva_sequence_match_items, std::move(items)});
+    }
     convert_sva(first_match_expr.sequence());
     require_sva_sequence(first_match_expr.sequence());
-
-    if(first_match_expr.rhs().is_not_nil())
-      convert_expr(first_match_expr.rhs());
 
     expr.type() = verilog_sva_sequence_typet{};
 
@@ -539,6 +544,49 @@ exprt verilog_typecheck_exprt::convert_other_sva(exprt expr)
 
 exprt verilog_typecheck_exprt::convert_sva_rec(exprt expr)
 {
+  if(expr.id() == ID_sva_sequence_match_items)
+  {
+    auto &match = to_binary_expr(expr);
+    convert_sva(match.lhs());
+    require_sva_sequence(match.lhs());
+    for(auto &item : match.rhs().operands())
+    {
+      const bool increment =
+        item.id() == ID_preincrement || item.id() == ID_postincrement;
+      const bool decrement =
+        item.id() == ID_predecrement || item.id() == ID_postdecrement;
+      if(increment || decrement)
+      {
+        // The side effect is the same for prefix and postfix match items.
+        const auto target = to_unary_expr(item).op();
+        auto value = binary_exprt{
+          target,
+          increment ? ID_plus : ID_minus,
+          from_integer(1, unsignedbv_typet{1})};
+        item =
+          binary_exprt{target, ID_verilog_blocking_assign, std::move(value)}
+            .with_source_location(item);
+      }
+      else if(const auto op = compound_operator_id(item.id()))
+      {
+        auto &assign = to_binary_expr(item);
+        assign.rhs() = binary_exprt{assign.lhs(), *op, assign.rhs()};
+        assign.id(ID_verilog_blocking_assign);
+      }
+      else if(item.id() != ID_verilog_blocking_assign)
+        throw errort{}.with_location(item.source_location())
+          << "unsupported sequence match item";
+      auto &assignment = to_binary_expr(item);
+      convert_expr(assignment.lhs());
+      if(assignment.lhs().id() != ID_sva_local)
+        throw errort{}.with_location(assignment.lhs().source_location())
+          << "sequence match items can only modify assertion local variables";
+      convert_expr(assignment.rhs());
+      implicit_typecast(assignment.rhs(), assignment.lhs().type());
+    }
+    match.type() = verilog_sva_sequence_typet{};
+    return std::move(expr);
+  }
   switch(expr.operands().size())
   {
   case 1:
@@ -621,22 +669,40 @@ exprt verilog_typecheck_exprt::flatten_named_sequence_property(
     }
   }
 
-  // Substitute port identifiers with actual arguments
-  cond.visit_post(
-    [&](exprt &expr)
+  exprt initializers{ID_arguments};
+  const auto instance_number = ++sva_instance_number;
+  for(const auto &decl : instance.declaration().local_declarations())
+    for(const auto &declarator : decl.declarators())
     {
-      if(expr.id() == ID_verilog_identifier)
-      {
-        auto &identifier_expr = to_verilog_identifier_expr(expr);
-        auto it = substitution_map.find(identifier_expr.preresolved());
-        if(it != substitution_map.end())
-        {
-          expr = it->second;
-          return;
-        }
-      }
-    });
+      auto name =
+        id2string(symbol_name) + "." + id2string(declarator.base_name());
+      exprt local{ID_sva_local, ns.lookup(name).type};
+      local.set(ID_identifier, name + "::" + std::to_string(instance_number));
+      local.set(ID_base_name, declarator.base_name());
+      local.add_source_location() = declarator.source_location();
+      substitution_map.emplace(name, local);
+      if(
+        declarator.has_value() ||
+        instance.symbol().type().id() == ID_verilog_sva_named_sequence)
+        initializers.add_to_operands(
+          binary_exprt{local, ID_verilog_blocking_assign, declarator.value()});
+    }
 
+  auto substitute = [&](exprt &expr)
+  {
+    if(expr.id() == ID_verilog_identifier)
+    {
+      auto &identifier_expr = to_verilog_identifier_expr(expr);
+      auto it = substitution_map.find(identifier_expr.preresolved());
+      if(it != substitution_map.end())
+      {
+        expr = it->second;
+        return;
+      }
+    }
+  };
+  cond.visit_post(substitute);
+  initializers.visit_post(substitute);
   convert_sva(cond);
 
   // Convert the arguments for display purposes
@@ -655,6 +721,40 @@ exprt verilog_typecheck_exprt::flatten_named_sequence_property(
   }
   else
     PRECONDITION(false);
+
+  if(!initializers.operands().empty())
+  {
+    // Sample declaration initializers at the start of each assertion attempt.
+    for(auto &item : initializers.operands())
+    {
+      auto &assignment = to_binary_expr(item);
+      if(assignment.rhs().is_nil())
+        continue;
+      convert_expr(assignment.rhs());
+      implicit_typecast(assignment.rhs(), assignment.lhs().type());
+    }
+    if(instance.type().id() == ID_verilog_sva_sequence)
+    {
+      cond = binary_exprt{
+        std::move(cond),
+        ID_sva_sequence_match_items,
+        std::move(initializers),
+        verilog_sva_sequence_typet{}};
+      cond.set(ID_initial, true);
+    }
+    else
+    {
+      auto start =
+        sva_boolean_exprt{true_exprt{}, verilog_sva_sequence_typet{}};
+      auto capture = binary_exprt{
+        std::move(start),
+        ID_sva_sequence_match_items,
+        std::move(initializers),
+        verilog_sva_sequence_typet{}};
+      cond =
+        sva_overlapped_implication_exprt{std::move(capture), std::move(cond)};
+    }
+  }
 
   sva_flatten_stack.erase(identifier);
 

@@ -3404,6 +3404,18 @@ public:
   {
     return (portst &)(add(ID_ports).get_sub());
   }
+
+  const std::vector<verilog_declt> &local_declarations() const
+  {
+    return reinterpret_cast<const std::vector<verilog_declt> &>(
+      find(ID_variables).get_sub());
+  }
+
+  std::vector<verilog_declt> &local_declarations()
+  {
+    return reinterpret_cast<std::vector<verilog_declt> &>(
+      add(ID_variables).get_sub());
+  }
 };
 
 inline const verilog_sequence_property_declaration_baset &

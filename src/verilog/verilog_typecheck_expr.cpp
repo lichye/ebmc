@@ -2140,9 +2140,9 @@ exprt verilog_typecheck_exprt::convert_nullary_expr(nullary_exprt expr)
     return constant_exprt{ID_NULL, typet{ID_verilog_null}}.with_source_location(
       expr.source_location());
   }
-  else if(expr.id() == ID_symbol)
+  else if(expr.id() == ID_symbol || expr.id() == ID_sva_local)
   {
-    // Already resolved (e.g., substituted property port argument)
+    // Already resolved (e.g., substituted property port argument or local)
     return std::move(expr);
   }
   else

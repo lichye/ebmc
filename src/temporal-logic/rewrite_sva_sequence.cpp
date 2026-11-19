@@ -24,6 +24,9 @@ bool admits_empty(const exprt &expr)
 
   if(expr.id() == ID_sva_boolean)
     return false; // admits_empty(b) = 0
+  else if(expr.id() == ID_sva_sequence_match_items)
+    return expr.get_bool(ID_initial) &&
+           admits_empty(to_binary_expr(expr).lhs());
   else if(expr.id() == ID_sva_cycle_delay)
   {
     auto &cycle_delay = to_sva_cycle_delay_expr(expr);
@@ -137,6 +140,12 @@ exprt rewrite_sva_sequence(exprt expr)
   PRECONDITION(expr.type().id() == ID_verilog_sva_sequence);
   PRECONDITION(is_SVA_sequence_operator(expr));
 
+  if(expr.id() == ID_sva_sequence_match_items)
+  {
+    auto &match = to_binary_expr(expr);
+    match.lhs() = rewrite_sva_sequence(match.lhs());
+    return expr;
+  }
   if(expr.id() == ID_sva_cycle_delay)
   {
     // 1800-2017 16.9.2.1
