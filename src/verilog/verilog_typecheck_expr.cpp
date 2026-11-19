@@ -3012,7 +3012,10 @@ verilog_typecheck_exprt::is_constant_integer_post_convert(const exprt &expr)
   exprt tmp = expr;
 
   ns.follow_macros(tmp);
-  tmp = simplify_expr(tmp, ns);
+  // Verilog integer powers have defined results for negative exponents.
+  tmp = has_subexpr(tmp, ID_power)
+          ? verilog_constant_folding(std::move(tmp), ns)
+          : simplify_expr(std::move(tmp), ns);
 
   if(!tmp.is_constant())
     return {};
@@ -4043,6 +4046,26 @@ exprt verilog_typecheck_exprt::convert_power_expr(power_exprt expr)
 
   require_vector(expr.op0());
   require_vector(expr.op1());
+
+  // A known zero raised to a negative integer is x even when both
+  // operands happen to contain only zeroes and ones (Table 11-4).
+  if(
+    expr.exponent().type().id() == ID_signedbv &&
+    !has_subexpr(expr, ID_function_call))
+  {
+    const auto exponent = is_constant_integer_post_convert(expr.exponent());
+    if(exponent && *exponent < 0)
+    {
+      const auto base = is_constant_integer_post_convert(expr.base());
+      if(base && *base == 0)
+      {
+        auto type = four_valued(expr.base().type());
+        return constant_exprt{
+          std::string(to_bitvector_type(type).get_width(), 'x'), type}
+          .with_source_location(expr);
+      }
+    }
+  }
 
   // Is one of the operands four-valued?
   if(is_four_valued(expr.op0().type()))
