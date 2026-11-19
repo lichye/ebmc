@@ -1,0 +1,6 @@
+CORE
+enum_and_size_cast.sv
+--bound 0
+^\[main\.p0\].*: PROVED.*$
+^EXIT=0$
+^SIGNAL=0$

@@ -1291,6 +1291,12 @@ exprt verilog_typecheck_exprt::convert_expr_function_call(
 
     if(found == nullptr)
     {
+      const auto &import = to_verilog_identifier_expr(f_op).import();
+      if(!import.empty())
+        ns.lookup("Verilog::" + id2string(import), found);
+    }
+    if(found == nullptr)
+    {
       // compilation-unit scope
       irep_idt full_identifier = verilog_unit_scope_identifier(base_name);
 
@@ -4415,6 +4421,11 @@ exprt verilog_typecheck_exprt::convert_binary_expr(
     auto new_size = convert_integer_constant_expression(expr.lhs());
     expr.lhs() = from_integer(new_size, natural_typet{});
     auto new_size_int = numeric_cast_v<std::size_t>(new_size);
+    // Integer-valued system functions have a 32-bit signed value when sized.
+    if(
+      expr.rhs().type().id() == ID_integer ||
+      expr.rhs().type().id() == ID_verilog_integer)
+      expr.rhs() = typecast_exprt{std::move(expr.rhs()), signedbv_typet{32}};
     auto &op_type = expr.rhs().type();
 
     if(op_type.id() == ID_signedbv)
@@ -4822,6 +4833,12 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
     if(!is_four_valued(expr.op0().type()))
       make_boolean(expr.op0());
 
+    // A choice between values of one enumeration retains its identity.
+    const auto enum_id = expr.op1().type().get(ID_C_identifier);
+    const bool same_enum =
+      expr.op1().type().get(ID_C_verilog_type) == ID_verilog_enum &&
+      expr.op2().type().get(ID_C_verilog_type) == ID_verilog_enum &&
+      !enum_id.empty() && enum_id == expr.op2().type().get(ID_C_identifier);
     tc_binary_expr(expr, expr.op1(), expr.op2());
     expr.type()=expr.op1().type();
 
@@ -4843,6 +4860,11 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
       expr.op2() = typecast_exprt::conditional_cast(expr.op2(), expr.type());
     }
 
+    if(same_enum)
+    {
+      expr.type().set(ID_C_verilog_type, ID_verilog_enum);
+      expr.type().set(ID_C_identifier, enum_id);
+    }
     return std::move(expr);
   }
   else
