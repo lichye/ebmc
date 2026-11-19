@@ -3913,7 +3913,9 @@ exprt verilog_typecheck_exprt::convert_bit_select_expr(
       // x for 4-state and 0 for 2-state values.
       auto index_int = index_opt.value();
 
-      if(index_int < offset || index_int >= width + offset)
+      if(
+        (index_int < offset || index_int >= width + offset) &&
+        !(as_lvalue && src.id() == ID_sva_local))
         return false_exprt().with_source_location(expr);
     }
 
