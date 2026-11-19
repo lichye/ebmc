@@ -1,0 +1,7 @@
+CORE
+closed_within_window.sv
+--bound 2
+^\[main\.p1\].*: PROVED.*$
+^\[main\.p0\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

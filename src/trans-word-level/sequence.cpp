@@ -355,7 +355,9 @@ sequence_matchest instantiate_sequence_rec(
         {
           if(match_lhs.is_pending())
           {
-            has_pending = true;
+            // The RHS has already ended inside the verification window.
+            // An LHS that can only finish beyond that window cannot fit
+            // inside this concrete RHS match.
             continue;
           }
 
@@ -372,8 +374,8 @@ sequence_matchest instantiate_sequence_rec(
       }
     }
 
-    // If either operand has a pending match, 'within' might
-    // still match beyond the bound.
+    // Only a pending containing interval can extend 'within' beyond the
+    // bound. A pending inner match cannot extend a completed RHS interval.
     if(has_pending)
     {
       auto no_concrete = concrete_match_conditions.empty()
