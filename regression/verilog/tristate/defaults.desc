@@ -1,0 +1,10 @@
+CORE
+defaults.sv
+--bound 3
+^\[main\.released_bit\].*: PROVED up to bound 3$
+^\[main\.defaults\].*: PROVED up to bound 3$
+^\[main\.pulls_release\].*: PROVED up to bound 3$
+^\[main\.driven_bits\].*: PROVED up to bound 3$
+^\[main\.fill_literal\].*: PROVED up to bound 3$
+^EXIT=0$
+^SIGNAL=0$

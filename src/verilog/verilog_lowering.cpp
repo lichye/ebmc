@@ -878,6 +878,11 @@ exprt verilog_lowering(exprt expr)
   for(auto &op : expr.operands())
     op = verilog_lowering(op);
 
+  return verilog_lowering_node(std::move(expr));
+}
+
+exprt verilog_lowering_node(exprt expr)
+{
   if(expr.id() == ID_constant)
   {
     auto &constant_expr = to_constant_expr(expr);

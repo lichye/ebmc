@@ -199,6 +199,20 @@ public:
 
   identifier_mapt identifier_map;
 
+  struct drivert
+  {
+    verilog_rtl_slicet slice;
+    exprt value;
+  };
+
+  // Nets whose drivers must retain x/z until resolution. An empty list
+  // denotes an undriven net. Ordinary logic reads the public two-state net.
+  std::map<irep_idt, std::vector<drivert>> resolved_nets;
+
+  /// Each group denotes a single physical bit connected by inout ports.
+  using net_bitt = std::pair<irep_idt, std::size_t>;
+  std::map<std::size_t, std::vector<net_bitt>> inout_groups;
+
   /// the declared state-holding variables, including those
   /// that are not assigned; unassigned variables hold their value
   std::set<irep_idt> variables;

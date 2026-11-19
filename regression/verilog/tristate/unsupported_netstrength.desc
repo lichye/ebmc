@@ -1,0 +1,6 @@
+CORE
+unsupported.sv
+-DNETSTRENGTH
+^file .*unsupported\.sv line 11: .*unsupported .*strength.*$
+^EXIT=2$
+^SIGNAL=0$

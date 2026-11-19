@@ -1,0 +1,16 @@
+CORE
+bus.sv
+--bdd
+^\[main\.left\].*: PROVED$
+^\[main\.right\].*: PROVED$
+^\[main\.agree\].*: PROVED$
+^\[main\.consistent\].*: PROVED$
+^\[main\.shared_read\].*: PROVED$
+^\[main\.conflict_zero\].*: REFUTED$
+^\[main\.conflict_one\].*: REFUTED$
+^\[main\.can_read_zero\].*: REFUTED$
+^\[main\.can_read_one\].*: REFUTED$
+^\[main\.independent_steps\].*: REFUTED$
+^\[main\.independent_conflicts\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

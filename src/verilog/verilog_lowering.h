@@ -15,6 +15,8 @@ class typecast_exprt;
 class typet;
 
 exprt verilog_lowering(exprt);
+/// Lower one operator whose operands have already been lowered.
+exprt verilog_lowering_node(exprt);
 typet verilog_lowering(typet);
 
 exprt verilog_lowering_cast(typecast_exprt);

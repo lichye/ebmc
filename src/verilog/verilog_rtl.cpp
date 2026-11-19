@@ -18,6 +18,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <util/simplify_expr.h>
 #include <util/std_expr.h>
 #include <util/symbol_table_base.h>
+#include <util/union_find.h>
 
 #include <ebmc/ebmc_error.h>
 
@@ -28,6 +29,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include "verilog_constant_folding.h"
 #include "verilog_expr.h"
 #include "verilog_lowering.h"
+#include "verilog_tristate.h"
 #include "verilog_typecheck_base.h"
 #include "verilog_typecheck_expr.h"
 #include "verilog_types.h"
@@ -151,6 +153,36 @@ protected:
   void build_instances(const verilog_instt &);
   void build_gate_instances(const verilog_inst_builtint &);
 
+  struct pending_drivert
+  {
+    verilog_rtlt::drivert drive;
+    source_locationt location;
+    std::optional<exprt> constraint_lhs;
+  };
+  std::map<irep_idt, std::vector<pending_drivert>> net_drivers;
+  std::set<irep_idt> declared_nets;
+  using net_bitt = verilog_rtlt::net_bitt;
+  struct net_bit_hasht
+  {
+    std::size_t operator()(const net_bitt &bit) const
+    {
+      return std::hash<irep_idt>{}(bit.first) ^
+             std::hash<std::size_t>{}(bit.second);
+    }
+  };
+  union_find<net_bitt, net_bit_hasht> inout_bits;
+  void connect_inout(
+    const symbol_exprt &port,
+    const exprt &actual,
+    std::size_t &port_offset,
+    const source_locationt &);
+  void net_assignment(
+    const exprt &,
+    exprt,
+    const source_locationt &,
+    bool constraint = false);
+  void finish_net_drivers();
+
   // module instantiation
   void build_port_connections(
     const verilog_instt::instancet &,
@@ -231,7 +263,12 @@ protected:
     statet &);
 
   /// assign the given (already substituted) rhs to the given lvalue
-  void assign_to(const exprt &lhs, exprt rhs, statet &, bool blocking);
+  void assign_to(
+    const exprt &lhs,
+    exprt rhs,
+    statet &,
+    bool blocking,
+    bool continuous = false);
 
   /// record the assignment of the given value to the given slice
   /// of the given symbol, maintaining the invariants of the state.
@@ -327,6 +364,11 @@ protected:
     const symbolt *symbol;
     if(ns.lookup(identifier, symbol))
       return;
+
+    if(
+      !symbol->is_lvalue && !symbol->is_macro &&
+      is_tristate_net_type(symbol->type))
+      declared_nets.insert(identifier);
 
     if(symbol->is_lvalue && !symbol->is_macro)
     {
@@ -2375,7 +2417,8 @@ void verilog_rtl_buildert::assign_to(
   const exprt &lhs,
   exprt rhs,
   statet &state,
-  bool blocking)
+  bool blocking,
+  bool continuous)
 {
   // Assignments to reals are silently ignored.
   if(lhs.type().id() == ID_verilog_realtime)
@@ -2403,7 +2446,8 @@ void verilog_rtl_buildert::assign_to(
           unsignedbv_typet{numeric_cast_v<std::size_t>(width)}};
       }
 
-      assign_to(*it, std::move(part), state, blocking); // recursive call
+      assign_to(
+        *it, std::move(part), state, blocking, continuous); // recursive call
 
       offset += width;
     }
@@ -2439,6 +2483,17 @@ void verilog_rtl_buildert::assign_to(
     // non-constant index. Rewrite into an assignment to the
     // whole symbol.
     auto lowered = lower_lhs(lhs, std::move(rhs), state, blocking);
+    if(
+      continuous && !ns.lookup(lowered.symbol.get_identifier()).is_lvalue &&
+      (lowered.symbol.type().id() == ID_unsignedbv ||
+       lowered.symbol.type().id() == ID_signedbv))
+    {
+      // A net_lvalue requires a constant select (1800-2017, A.8.5).
+      // Preserving the old word here would feed the resolved net back
+      // into its own driver on every bit outside the selection.
+      throw errort{}.with_location(lhs.source_location())
+        << "unsupported non-constant select of a net lvalue";
+    }
     record_assignment(
       lowered.symbol,
       whole_slice(lowered.symbol),
@@ -4246,6 +4301,186 @@ void verilog_rtl_buildert::build_always(const verilog_always_baset &always)
     always.source_location());
 }
 
+void verilog_rtl_buildert::net_assignment(
+  const exprt &lhs,
+  exprt rhs,
+  const source_locationt &location,
+  bool constraint)
+{
+  statet state;
+  // An interface or expression connected to a port can be an equality
+  // without being a net lvalue.
+  if(
+    constraint &&
+    (!is_tristate_net_type(lhs.type()) ||
+     (lhs.id() != ID_symbol && lhs.id() != ID_member &&
+      lhs.id() != ID_concatenation && lhs.id() != ID_verilog_bit_select &&
+      lhs.id() != ID_verilog_non_indexed_part_select &&
+      lhs.id() != ID_verilog_indexed_part_select_plus &&
+      lhs.id() != ID_verilog_indexed_part_select_minus)))
+  {
+    rtl.constraints.push_back(equal_exprt{lhs, rhs});
+    return;
+  }
+
+  assign_to(lhs, std::move(rhs), state, false, true);
+  for(auto &entry : state.values)
+  {
+    const auto &symbol = ns.lookup(entry.first);
+    const symbol_exprt base{symbol.name, symbol.type};
+    for(auto &part : entry.second)
+    {
+      std::optional<exprt> connected;
+      if(constraint)
+      {
+        // Retain the original port/gate connection for ordinary nets.
+        connected = state.values.size() == 1 && entry.second.size() == 1
+                      ? lhs
+                      : extract_range(base, whole_slice(base), part.first);
+      }
+      net_drivers[entry.first].push_back(
+        {{part.first, std::move(part.second)}, location, std::move(connected)});
+    }
+  }
+}
+
+// An assignment or connection can carry x/z through a select, a resize,
+// a concatenation, or the arms of a conditional. Ordinary logic reads the
+// public two-valued value of each net.
+static bool drive_sources(const exprt &value, std::set<irep_idt> &sources)
+{
+  if(is_tristate_switch(value.id()))
+    return true;
+  if(value.is_constant())
+    return is_four_valued(value) &&
+           value.get_string(ID_value).find_first_of("xz?") != std::string::npos;
+  if(value.id() == ID_symbol)
+    sources.insert(to_symbol_expr(value).get_identifier());
+  if(
+    value.id() == ID_typecast || value.id() == ID_if ||
+    value.id() == ID_member || value.id() == ID_index ||
+    value.id() == ID_concatenation || value.id() == ID_replication ||
+    value.id() == ID_extractbit || value.id() == ID_extractbits ||
+    value.id() == ID_verilog_bit_select ||
+    value.id() == ID_verilog_non_indexed_part_select ||
+    value.id() == ID_verilog_indexed_part_select_plus ||
+    value.id() == ID_verilog_indexed_part_select_minus)
+  {
+    bool four_valued = false;
+    for(const auto &op : value.operands())
+      four_valued |= drive_sources(op, sources);
+    return four_valued;
+  }
+  return false;
+}
+
+void verilog_rtl_buildert::finish_net_drivers()
+{
+  std::set<irep_idt> resolved;
+  for(std::size_t n = 0; n < inout_bits.size(); ++n)
+  {
+    auto &bit = inout_bits[n];
+    rtl.inout_groups[inout_bits.find_number(n)].push_back(bit);
+    resolved.insert(bit.first);
+  }
+  // Only primary inputs receive an external drive. An open net port on
+  // an instance releases the net just like any other missing driver.
+  std::set<irep_idt> primary_inputs;
+  for(const auto &port : to_module_type(ns.lookup(module).type).ports())
+    if(port.input())
+      primary_inputs.insert(port.identifier());
+
+  std::map<irep_idt, std::vector<irep_idt>> dependents;
+  for(const auto &id : declared_nets)
+  {
+    const auto &symbol = ns.lookup(id);
+    const auto kind = symbol.type.get("#net_kind");
+    if(
+      kind == ID_trireg || kind == ID_tri0 || kind == ID_tri1 ||
+      (!primary_inputs.count(id) && !net_drivers.count(id) &&
+       !rtl.forced.count(id) && !rtl.identifier_map.count(id)))
+      resolved.insert(id);
+  }
+  for(const auto &entry : net_drivers)
+  {
+    const auto &symbol = ns.lookup(entry.first);
+    if(!is_tristate_net_type(symbol.type))
+      continue;
+    std::set<irep_idt> sources;
+    std::map<mp_integer, mp_integer> ranges;
+    for(const auto &d : entry.second)
+    {
+      if(drive_sources(d.drive.value, sources))
+        resolved.insert(entry.first);
+      const auto &s = d.drive.slice;
+      auto after = ranges.upper_bound(s.higher);
+      if(after != ranges.begin() && std::prev(after)->second >= s.lower)
+      {
+        if(symbol.is_lvalue || symbol.type.get("#net_kind") == ID_uwire)
+          throw errort{}.with_location(d.location)
+            << "`" << symbol.name << "' has multiple drivers";
+        resolved.insert(entry.first);
+      }
+      auto interval = ranges.emplace(s.lower, s.higher).first;
+      interval->second = std::max(interval->second, s.higher);
+    }
+    // A partially driven net releases its other bits. Preserve those z
+    // bits when another net reads the vector as a four-state driver.
+    if(declared_nets.count(entry.first))
+    {
+      mp_integer next = 0;
+      for(const auto &range : ranges)
+      {
+        if(range.first > next)
+          break;
+        next = std::max(next, range.second + 1);
+      }
+      if(next < verilog_bits(symbol.type))
+        resolved.insert(entry.first);
+    }
+    for(const auto &source : sources)
+      dependents[source].push_back(entry.first);
+  }
+  std::vector<irep_idt> work(resolved.begin(), resolved.end());
+  while(!work.empty())
+  {
+    auto source = work.back();
+    work.pop_back();
+    for(const auto &dest : dependents[source])
+      if(resolved.insert(dest).second)
+        work.push_back(dest);
+  }
+  for(const auto &id : resolved)
+  {
+    if(rtl.identifier_map.count(id))
+      throw errort{}.with_location(ns.lookup(id).location)
+        << "`" << id << "' has multiple drivers";
+    auto &drivers = rtl.resolved_nets[id];
+    for(auto &d : net_drivers[id])
+      drivers.push_back(std::move(d.drive));
+    if(ns.lookup(id).is_lvalue)
+      rtl.forced.insert(id);
+  }
+  for(auto &entry : net_drivers)
+  {
+    if(resolved.count(entry.first))
+      continue;
+    for(auto &d : entry.second)
+    {
+      if(d.constraint_lhs)
+        rtl.constraints.push_back(
+          equal_exprt{*d.constraint_lhs, d.drive.value});
+      else
+      {
+        statet state;
+        state.values[entry.first].emplace(
+          d.drive.slice, std::move(d.drive.value));
+        commit(state, kindt::WIRE, d.location);
+      }
+    }
+  }
+}
+
 /*******************************************************************\
 
 Function: verilog_rtl_buildert::build_continuous_assign
@@ -4267,10 +4502,10 @@ void verilog_rtl_buildert::build_continuous_assign(
 
     statet state;
 
-    assign_to(
-      equal_expr.lhs(), substitute(equal_expr.rhs(), state), state, false);
-
-    commit(state, kindt::WIRE, module_item.source_location());
+    net_assignment(
+      equal_expr.lhs(),
+      substitute(equal_expr.rhs(), state),
+      module_item.source_location());
   }
 }
 
@@ -4390,8 +4625,10 @@ void verilog_rtl_buildert::build_module_item_decl(
       {
         // a net declaration with a value is a continuous assignment
         statet state;
-        assign_to(lhs, substitute(declarator.value(), state), state, false);
-        commit(state, kindt::WIRE, declarator.source_location());
+        net_assignment(
+          lhs,
+          substitute(declarator.value(), state),
+          declarator.source_location());
       }
       else
       {
@@ -4620,6 +4857,43 @@ void verilog_rtl_buildert::build_interface_port_array_connection(
   }
 }
 
+// An inout port collapses net bits across the instance boundary, including
+// constant part selects and concatenations (IEEE 1800-2017, 23.3.3).
+void verilog_rtl_buildert::connect_inout(
+  const symbol_exprt &port,
+  const exprt &actual,
+  std::size_t &offset,
+  const source_locationt &location)
+{
+  if(actual.id() == ID_concatenation)
+  {
+    for(auto it = actual.operands().rbegin(); it != actual.operands().rend();
+        ++it)
+      connect_inout(port, *it, offset, location);
+    return;
+  }
+
+  statet state;
+  const auto lvalue = decompose_lhs(actual, state);
+  if(!lvalue || !verilog_bits_opt(lvalue->symbol.type()))
+    throw errort{}.with_location(location)
+      << "unsupported inout net connection";
+
+  const auto width = numeric_cast_v<std::size_t>(lvalue->slice.width());
+  const auto port_width =
+    numeric_cast_v<std::size_t>(verilog_bits(port.type()));
+  const auto net_width = verilog_bits(lvalue->symbol.type());
+  for(std::size_t i = 0; i < width && offset + i < port_width; ++i)
+  {
+    const auto bit = lvalue->slice.lower + i;
+    if(bit >= 0 && bit < net_width)
+      inout_bits.make_union(
+        {port.get_identifier(), offset + i},
+        {lvalue->symbol.get_identifier(), numeric_cast_v<std::size_t>(bit)});
+  }
+  offset += width;
+}
+
 /*******************************************************************\
 
 Function: verilog_rtl_buildert::build_port_connection
@@ -4662,6 +4936,12 @@ void verilog_rtl_buildert::build_port_connection(
   }
 
   symbol_exprt port_symbol{port.identifier(), port.type()};
+  if(port.direction() == ID_inout && is_tristate_net_type(port.type()))
+  {
+    std::size_t offset = 0;
+    connect_inout(port_symbol, value, offset, source_location);
+    return;
+  }
 
   // A ref port and its actual denote the same variable (1800-2017
   // 23.2.2.3): a write on either side is visible on the other. The two
@@ -4698,8 +4978,11 @@ void verilog_rtl_buildert::build_port_connection(
 
   statet state;
   record_forced(lhs, instance_identifier);
-  rtl.constraints.push_back(equal_exprt{
-    substitute(std::move(lhs), state), substitute(std::move(rhs), state)});
+  net_assignment(
+    substitute(std::move(lhs), state),
+    substitute(std::move(rhs), state),
+    source_location,
+    true);
 }
 
 /*******************************************************************\
@@ -4863,7 +5146,7 @@ void verilog_rtl_buildert::build_port_connections(
 
     for(const auto &connection : instance.connections())
     {
-      // Unconnected ports are left unconstrained.
+      // An open port contributes no driver.
       if(connection.is_not_nil())
       {
         build_port_connection(
@@ -4921,19 +5204,23 @@ void verilog_rtl_buildert::build_gate_instances(
 
   for(auto &instance : module_item.instances())
   {
-    if(
-      module == ID_bufif0 || module == ID_bufif1 || module == ID_notif0 ||
-      module == ID_notif1 || module == ID_nmos || module == ID_pmos ||
-      module == ID_rnmos || module == ID_rpmos || module == "tranif0" ||
-      module == "tranif1" || module == "rtranif1" || module == "rtranif0" ||
-      module == "tran" || module == "rtran")
+    if(is_tristate_switch(module))
     {
-      // add to the general constraints
-      exprt constraint = instance;
-      constraint.id("verilog-primitive-module");
-      constraint.type() = bool_typet{};
-      constraint.set(ID_module, module);
-      rtl.constraints.push_back(std::move(constraint));
+      const auto &ports = instance.connections();
+      exprt drive{module, instance.type(), {ports.begin() + 1, ports.end()}};
+      auto width = numeric_cast_v<std::size_t>(verilog_bits(instance.type()));
+      if(width > 1 && verilog_bits(ports.front().type()) == 1)
+      {
+        // A scalar output collects a separate driver from every instance.
+        for(std::size_t i = 0; i < width; ++i)
+          net_assignment(
+            ports.front(),
+            extractbit_exprt{drive, i},
+            module_item.source_location());
+      }
+      else
+        net_assignment(
+          ports.front(), std::move(drive), module_item.source_location());
     }
     else if(
       module == ID_and || module == ID_nand || module == ID_or ||
@@ -4961,8 +5248,11 @@ void verilog_rtl_buildert::build_gate_instances(
 
       // a constraint, since a net may have multiple drivers
       statet state;
-      rtl.constraints.push_back(
-        equal_exprt{output, substitute(std::move(op), state)});
+      net_assignment(
+        output,
+        substitute(std::move(op), state),
+        module_item.source_location(),
+        true);
     }
     else if(module == ID_buf || module == ID_not)
     {
@@ -4988,15 +5278,17 @@ void verilog_rtl_buildert::build_gate_instances(
       for(std::size_t i = 0; i < instance.connections().size() - 1; i++)
       {
         statet state;
-        rtl.constraints.push_back(
-          equal_exprt{instance.connections()[i], substitute(rhs, state)});
+        net_assignment(
+          instance.connections()[i],
+          substitute(rhs, state),
+          module_item.source_location(),
+          true);
       }
     }
     else
     {
       throw errort().with_location(module_item.source_location())
-        << "primitive gate `" << module
-        << "' is not supported by RTL construction";
+        << "unsupported primitive " << module;
     }
   }
 }
@@ -5243,6 +5535,7 @@ verilog_rtlt verilog_rtl_buildert::build()
 
   build_module(module_symbol);
 
+  finish_net_drivers();
   // now that all drivers are known
   force_interface_port_connections();
   mark_self_dependent_wires();
@@ -5281,6 +5574,41 @@ void verilog_rtlt::output(const namespacet &ns, std::ostream &out) const
 
       out << expr2verilog(definition.value, ns) << '\n';
     }
+  }
+
+  for(const auto &entry : resolved_nets)
+  {
+    const auto &symbol = ns.lookup(entry.first);
+    out << strip_verilog_prefix(entry.first) << " resolved "
+        << (symbol.type.get("#net_kind").empty() ? ID_wire
+                                                 : symbol.type.get("#net_kind"))
+        << '\n';
+    for(const auto &driver : entry.second)
+    {
+      out << "  [" << driver.slice.higher << ':' << driver.slice.lower << "] ";
+      if(is_tristate_switch(driver.value.id()))
+      {
+        out << driver.value.id() << '(';
+        for(std::size_t i = 0; i < driver.value.operands().size(); ++i)
+        {
+          if(i != 0)
+            out << ", ";
+          out << expr2verilog(driver.value.operands()[i], ns);
+        }
+        out << ')';
+      }
+      else
+        out << expr2verilog(driver.value, ns);
+      out << '\n';
+    }
+  }
+
+  for(const auto &group : inout_groups)
+  {
+    out << "inout:";
+    for(const auto &bit : group.second)
+      out << ' ' << strip_verilog_prefix(bit.first) << '[' << bit.second << ']';
+    out << '\n';
   }
 
   for(auto &initial_entry : initial_values)

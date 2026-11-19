@@ -22,6 +22,7 @@ Author: Daniel Kroening, kroening@kroening.com
 
 #include "expr2verilog.h"
 #include "verilog_bind.h"
+#include "verilog_bits.h"
 #include "verilog_expr.h"
 #include "verilog_types.h"
 
@@ -341,7 +342,8 @@ Function: verilog_typecheckt::typecheck_builtin_port_connections
 \*******************************************************************/
 
 void verilog_typecheckt::typecheck_builtin_port_connections(
-  verilog_inst_baset::instancet &inst)
+  verilog_inst_baset::instancet &inst,
+  bool tristate_switch)
 {
   exprt &range_expr = static_cast<exprt &>(inst.add(ID_range));
 
@@ -383,7 +385,36 @@ void verilog_typecheckt::typecheck_builtin_port_connections(
       convert_expr(connection);
     }
 
-    // like an assignment
+    if(tristate_switch)
+    {
+      // A scalar terminal connects to every instance of a primitive array
+      // (1800-2017, 28.3.6). Keep the output as a net lvalue.
+      const auto bits = verilog_bits_opt(connection.type());
+      if(!bits || (width > 1 && *bits != width && *bits != 1))
+        throw errort{}.with_location(inst.source_location())
+          << "unsupported switch terminal width";
+      if(&connection == &inst.connections().front())
+      {
+        check_lhs(connection, A_CONTINUOUS);
+        if(width == 1 && *bits > 1)
+        {
+          const auto &vector = to_verilog_vector_type(connection.type());
+          const auto lsb =
+            vector.offset() + (vector.increasing() ? *bits - 1 : mp_integer{0});
+          connection = verilog_bit_select_exprt{
+            std::move(connection),
+            from_integer(lsb, integer_typet{}),
+            bool_typet{}};
+        }
+        continue;
+      }
+      if(width > 1 && *bits == 1)
+      {
+        connection = replication_exprt{
+          from_integer(width, integer_typet{}), std::move(connection), type};
+        continue;
+      }
+    }
     assignment_conversion(connection, type);
   }
 }
@@ -939,6 +970,10 @@ Function: verilog_typecheckt::convert_continuous_assign
 void verilog_typecheckt::convert_continuous_assign(
   verilog_continuous_assignt &module_item)
 {
+  if(module_item.get_bool("explicit_strength"))
+    throw errort{}.with_location(module_item.source_location())
+      << "unsupported explicit drive strength";
+
   Forall_operands(it, module_item)
   {
     if(it->id()!=ID_equal || it->operands().size()!=2)

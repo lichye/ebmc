@@ -1,0 +1,16 @@
+CORE
+bus.sv
+--bound 3
+^\[main\.left\].*: PROVED up to bound 3$
+^\[main\.right\].*: PROVED up to bound 3$
+^\[main\.agree\].*: PROVED up to bound 3$
+^\[main\.consistent\].*: PROVED up to bound 3$
+^\[main\.shared_read\].*: PROVED up to bound 3$
+^\[main\.conflict_zero\].*: REFUTED$
+^\[main\.conflict_one\].*: REFUTED$
+^\[main\.can_read_zero\].*: REFUTED$
+^\[main\.can_read_one\].*: REFUTED$
+^\[main\.independent_steps\].*: REFUTED$
+^\[main\.independent_conflicts\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

@@ -1,0 +1,11 @@
+CORE
+inout.sv
+--bound 3
+^\[main\.same_sample\].*: PROVED up to bound 3$
+^\[main\.from_child\].*: PROVED up to bound 3$
+^\[main\.from_sibling\].*: PROVED up to bound 3$
+^\[main\.pull\].*: PROVED up to bound 3$
+^\[main\.conflict\].*: REFUTED$
+^\[main\.released_port\].*: PROVED up to bound 3$
+^EXIT=10$
+^SIGNAL=0$

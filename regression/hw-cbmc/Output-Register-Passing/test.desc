@@ -1,6 +1,10 @@
 CORE
 main.c
 --module top --bound 5 main.v
-^EXIT=0$
+^\[main\.assertion\.2\].*top\.A2\.c==stop\.A2\.c: FAILURE$
+^\*\* 1 of 6 failed .*$
+^EXIT=10$
 ^SIGNAL=0$
 --
+--
+A2 reads the multiply driven o1, whose conflicting feedback bit can resolve to x and differ from the C model's direct read of A1.

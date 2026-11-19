@@ -1,10 +1,11 @@
 CORE
 xnor4.sv
 
-^\[main\.xnor_x1_ok\] always ~\(main\.xnor_in1 \^ main\.xnor_in2 \^ main.xnor_in3\) == main.xnor_out: PROVED .*$
-^\[main\.xnor_x2_ok\] always ~main\.xnor_in1 == main.xnor_out: PROVED .*$
-^EXIT=0$
+^\[main\.xnor_x1_ok\].*: REFUTED$
+^\[main\.xnor_x2_ok\].*: REFUTED$
+^EXIT=10$
 ^SIGNAL=0$
 --
 ^warning: ignoring
 --
+The two gates can drive opposing values on the same wire, so each equality has a counterexample when the resolved value is x.

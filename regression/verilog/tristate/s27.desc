@@ -1,0 +1,13 @@
+CORE
+s27.sv
+--top s27 --show-trans
+activate-multi-line-match
+^State variables:\n(?:\n  s27\.DFF_[0-2]\.(?:NQ|M)::charge\n){6}\nInitial state constraints:$
+^  s27\.DFF_0\.M::charge$
+^  s27\.DFF_0\.NQ::charge$
+^  s27\.DFF_1\.M::charge$
+^  s27\.DFF_1\.NQ::charge$
+^  s27\.DFF_2\.M::charge$
+^  s27\.DFF_2\.NQ::charge$
+^EXIT=0$
+^SIGNAL=0$
