@@ -1,0 +1,6 @@
+CORE
+reversed_slice.sv
+--show-rtl
+part-select direction.*declared
+^EXIT=2$
+^SIGNAL=0$
