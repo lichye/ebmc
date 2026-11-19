@@ -1,0 +1,7 @@
+CORE
+shared_aggregate_update.sv
+--bound 3
+^\[main\.p0\].*: PROVED.*$
+^\[main\.p1\].*: PROVED.*$
+^EXIT=0$
+^SIGNAL=0$

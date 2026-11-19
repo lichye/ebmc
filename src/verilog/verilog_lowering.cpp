@@ -912,7 +912,7 @@ exprt verilog_lowering(exprt expr)
   }
   else if(expr.id() == ID_function_call)
   {
-    auto &call = to_function_call_expr(expr);
+    const auto &call = to_function_call_expr(std::as_const(expr));
     if(call.is_system_function_call())
     {
       auto base_name = to_verilog_identifier_expr(call.function()).base_name();
@@ -926,50 +926,58 @@ exprt verilog_lowering(exprt expr)
     }
   }
 
-  // Do the operands recursively
-  for(auto &op : expr.operands())
-    op = verilog_lowering(op);
+  // A mutable operands() access detaches a shared expression, even a leaf.
+  // Keep its storage (including annotations) until a child changes.
+  const auto &node = std::as_const(expr);
+  for(std::size_t i = 0; i < node.operands().size(); ++i)
+  {
+    const auto &op = node.operands()[i];
+    auto lowered = verilog_lowering(op);
+    if(&lowered.read() != &op.read())
+      expr.operands()[i] = std::move(lowered);
+  }
 
   return verilog_lowering_node(std::move(expr));
 }
 
 exprt verilog_lowering_node(exprt expr)
 {
+  const exprt &node = expr;
   if(expr.id() == ID_constant)
   {
-    auto &constant_expr = to_constant_expr(expr);
+    const auto &constant_expr = to_constant_expr(node);
 
     if(
-      expr.type().id() == ID_verilog_unsignedbv ||
-      expr.type().id() == ID_verilog_signedbv)
+      node.type().id() == ID_verilog_unsignedbv ||
+      node.type().id() == ID_verilog_signedbv)
     {
       // encode into aval/bval
       return lower_to_aval_bval(constant_expr);
     }
     else if(
-      expr.type().id() == ID_verilog_real ||
-      expr.type().id() == ID_verilog_realtime ||
-      expr.type().id() == ID_verilog_shortreal)
+      node.type().id() == ID_verilog_real ||
+      node.type().id() == ID_verilog_realtime ||
+      node.type().id() == ID_verilog_shortreal)
     {
       // turn into floatbv -- same encoding,
       // no need to change value
-      expr.type() = verilog_lowering(expr.type());
+      expr.type() = verilog_lowering(node.type());
     }
-    else if(expr.type().id() == ID_string)
+    else if(node.type().id() == ID_string)
     {
       auto result = convert_string_literal(constant_expr.get_value());
       result.add_source_location() = expr.source_location();
       expr = std::move(result);
     }
-    else if(expr.type().id() == ID_verilog_chandle)
+    else if(node.type().id() == ID_verilog_chandle)
     {
       // this is 'null'
-      return to_verilog_chandle_type(expr.type()).null_expr();
+      return to_verilog_chandle_type(node.type()).null_expr();
     }
-    else if(expr.type().id() == ID_verilog_event)
+    else if(node.type().id() == ID_verilog_event)
     {
       // this is 'null'
-      return to_verilog_event_type(expr.type()).null_expr();
+      return to_verilog_event_type(node.type()).null_expr();
     }
 
     return expr;
@@ -977,29 +985,31 @@ exprt verilog_lowering_node(exprt expr)
   else if(
     expr.id() == ID_struct || expr.id() == ID_union || expr.id() == ID_array)
   {
-    expr.type() = verilog_lowering(expr.type());
+    auto lowered_type = verilog_lowering(node.type());
+    if(&lowered_type.read() != &node.type().read())
+      expr.type() = std::move(lowered_type);
     return expr;
   }
   else if(expr.id() == ID_symbol)
   {
-    auto &symbol_expr = to_symbol_expr(expr);
-    if(expr.type().id() == ID_verilog_chandle)
+    const auto &symbol_expr = to_symbol_expr(node);
+    if(node.type().id() == ID_verilog_chandle)
     {
-      auto &chandle_type = to_verilog_chandle_type(expr.type());
+      auto &chandle_type = to_verilog_chandle_type(node.type());
       return symbol_exprt{symbol_expr.identifier(), chandle_type.encoding()};
     }
-    else if(expr.type().id() == ID_verilog_event)
+    else if(node.type().id() == ID_verilog_event)
     {
-      auto &event_type = to_verilog_event_type(expr.type());
+      auto &event_type = to_verilog_event_type(node.type());
       return symbol_exprt{symbol_expr.identifier(), event_type.encoding()};
     }
     else if(
-      expr.type().id() == ID_verilog_real ||
-      expr.type().id() == ID_verilog_shortreal ||
-      expr.type().id() == ID_verilog_realtime)
+      node.type().id() == ID_verilog_real ||
+      node.type().id() == ID_verilog_shortreal ||
+      node.type().id() == ID_verilog_realtime)
     {
       // The symbol table keeps the Verilog type; turn into floatbv.
-      expr.type() = verilog_lowering(expr.type());
+      expr.type() = verilog_lowering(node.type());
       return expr;
     }
     else
@@ -1019,12 +1029,12 @@ exprt verilog_lowering_node(exprt expr)
   else if(expr.id() == ID_concatenation)
   {
     if(
-      expr.type().id() == ID_verilog_unsignedbv ||
-      expr.type().id() == ID_verilog_signedbv)
+      node.type().id() == ID_verilog_unsignedbv ||
+      node.type().id() == ID_verilog_signedbv)
     {
       return aval_bval_concatenation(
         to_concatenation_expr(expr).operands(),
-        lower_to_aval_bval(expr.type()));
+        lower_to_aval_bval(node.type()));
     }
 
     return expr;
@@ -1034,7 +1044,7 @@ exprt verilog_lowering_node(exprt expr)
     auto &power_expr = to_power_expr(expr);
 
     // encode into aval/bval
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
       return aval_bval(power_expr);
     else
     {
@@ -1046,14 +1056,14 @@ exprt verilog_lowering_node(exprt expr)
       if(exponent_int.has_value())
       {
         if(*exponent_int == 0)
-          return from_integer(1, expr.type());
+          return from_integer(1, node.type());
         else if(*exponent_int == 1)
           return power_expr.base();
         else // >= 2
         {
           auto factors =
             exprt::operandst{exponent_int.value(), power_expr.base()};
-          return mult_exprt{factors, expr.type()};
+          return mult_exprt{factors, node.type()};
         }
       }
       else
@@ -1069,7 +1079,7 @@ exprt verilog_lowering_node(exprt expr)
     // These act like an assignment, and hence, the type checker
     // has already converted the argument to the target type.
     auto &type_cast = to_verilog_explicit_type_cast_expr(expr);
-    expr.type() = verilog_lowering(expr.type());
+    expr.type() = verilog_lowering(node.type());
     DATA_INVARIANT(
       type_cast.op().type() == type_cast.type(), "type cast type consistency");
     return type_cast.op();
@@ -1094,7 +1104,7 @@ exprt verilog_lowering_node(exprt expr)
     // These act like an assignment, and hence, the type checker
     // has already converted the argument to the target type.
     auto &size_cast = to_verilog_explicit_size_cast_expr(expr);
-    expr.type() = verilog_lowering(expr.type());
+    expr.type() = verilog_lowering(node.type());
     DATA_INVARIANT(
       size_cast.op().type() == size_cast.type(), "size cast type consistency");
     return size_cast.op();
@@ -1268,7 +1278,7 @@ exprt verilog_lowering_node(exprt expr)
     auto &not_expr = to_not_expr(expr);
 
     // encode into aval/bval
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
       return aval_bval(not_expr);
     else
       return expr; // leave as is
@@ -1278,7 +1288,7 @@ exprt verilog_lowering_node(exprt expr)
     auto &bitnot_expr = to_bitnot_expr(expr);
 
     // encode into aval/bval
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
       return aval_bval(bitnot_expr);
     else
       return expr; // leave as is
@@ -1286,7 +1296,7 @@ exprt verilog_lowering_node(exprt expr)
   else if(expr.id() == ID_bitand)
   {
     // encode into aval/bval
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
       return aval_bval_bitand(to_bitand_expr(expr));
     else
       return expr; // leave as is
@@ -1294,7 +1304,7 @@ exprt verilog_lowering_node(exprt expr)
   else if(expr.id() == ID_bitor)
   {
     // encode into aval/bval
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
       return aval_bval_bitor(to_bitor_expr(expr));
     else
       return expr; // leave as is
@@ -1302,7 +1312,7 @@ exprt verilog_lowering_node(exprt expr)
   else if(expr.id() == ID_bitxor || expr.id() == ID_bitxnor)
   {
     // encode into aval/bval
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
       return aval_bval_xor_xnor(to_multi_ary_expr(expr));
     else
       return expr; // leave as is
@@ -1312,7 +1322,7 @@ exprt verilog_lowering_node(exprt expr)
     auto &replication_expr = to_replication_expr(expr);
 
     // encode into aval/bval
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
       return aval_bval_replication(replication_expr);
     else
       return expr; // leave as is
@@ -1323,7 +1333,7 @@ exprt verilog_lowering_node(exprt expr)
     expr.id() == ID_reduction_xor || expr.id() == ID_reduction_xnor)
   {
     // encode into aval/bval
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
       return aval_bval_reduction(to_unary_expr(expr));
     else
       return expr; // leave as is
@@ -1333,7 +1343,7 @@ exprt verilog_lowering_node(exprt expr)
     // Logical && and ||.
     // Four-valued only if the type is four-valued; otherwise the
     // operands are boolean and the expression is left as is.
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
     {
       PRECONDITION(expr.operands().size() == 2);
       if(expr.id() == ID_and)
@@ -1391,10 +1401,10 @@ exprt verilog_lowering_node(exprt expr)
   }
   else if(expr.id() == ID_unary_minus || expr.id() == ID_unary_plus)
   {
-    if(is_verilog_real(expr.type()))
+    if(is_verilog_real(node.type()))
     {
       // turn into floatbv
-      expr.type() = verilog_lowering(expr.type());
+      expr.type() = verilog_lowering(node.type());
       return expr;
     }
     else if(is_four_valued(expr))
@@ -1406,7 +1416,7 @@ exprt verilog_lowering_node(exprt expr)
   }
   else if(expr.id() == ID_plus || expr.id() == ID_minus || expr.id() == ID_mult)
   {
-    if(is_verilog_real(expr.type()))
+    if(is_verilog_real(node.type()))
       return lower_real_arithmetic(to_multi_ary_expr(expr));
     else if(is_four_valued(expr))
       return default_aval_bval_lowering(expr);
@@ -1415,7 +1425,7 @@ exprt verilog_lowering_node(exprt expr)
   }
   else if(expr.id() == ID_div || expr.id() == ID_mod)
   {
-    if(expr.id() == ID_div && is_verilog_real(expr.type()))
+    if(expr.id() == ID_div && is_verilog_real(node.type()))
       return lower_real_arithmetic(to_multi_ary_expr(expr));
     else if(is_four_valued(expr))
       return aval_bval_div_mod(to_binary_expr(expr));
@@ -1424,14 +1434,14 @@ exprt verilog_lowering_node(exprt expr)
   }
   else if(expr.id() == ID_lshr || expr.id() == ID_ashr || expr.id() == ID_shl)
   {
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
       return aval_bval(to_shift_expr(expr));
     else
       return expr;
   }
   else if(expr.id() == ID_zero_extend)
   {
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
       return aval_bval(to_zero_extend_expr(expr));
     else
       return expr;
@@ -1630,18 +1640,18 @@ exprt verilog_lowering_node(exprt expr)
     }
     else
     {
-      expr.type() = verilog_lowering(expr.type());
+      expr.type() = verilog_lowering(node.type());
       return expr;
     }
   }
   else if(expr.id() == ID_if)
   {
-    if(is_four_valued(expr.type()))
+    if(is_four_valued(node.type()))
       return aval_bval(to_if_expr(expr));
-    else if(is_verilog_real(expr.type()))
+    else if(is_verilog_real(node.type()))
     {
       // The operands are floatbv already; the result must be, too.
-      expr.type() = verilog_lowering(expr.type());
+      expr.type() = verilog_lowering(node.type());
       return expr;
     }
     else

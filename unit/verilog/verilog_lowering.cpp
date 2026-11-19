@@ -175,3 +175,29 @@ SCENARIO("verilog_lower_symbol_types lowers the Verilog-specific types")
     REQUIRE(symbol_table.lookup_ref("p").type == verilog_real_typet{});
   }
 }
+
+SCENARIO(
+  "Lowering preserves shared aggregate operands and their annotations",
+  "[core][verilog][verilog_lowering]")
+{
+  const unsignedbv_typet word{8};
+  const struct_typet packet{{{"data", word}}};
+  struct_exprt payload{{symbol_exprt{"data", word}}, packet};
+  payload.add_source_location().set_file("shared.sv");
+  const if_exprt shared{symbol_exprt{"select", bool_typet{}}, payload, payload};
+
+  const auto unchanged = verilog_lowering(shared);
+  REQUIRE(&unchanged.read() == &shared.read());
+  REQUIRE(&to_if_expr(unchanged).true_case().read() == &payload.read());
+  REQUIRE(
+    to_if_expr(unchanged).false_case().source_location().get_file() ==
+    "shared.sv");
+
+  const auto real = verilog_real_typet{};
+  const struct_typet mixed{{{"packet", packet}, {"fraction", real}}};
+  const struct_exprt source{{shared, real_constant(1.5, real)}, mixed};
+  const auto lowered = verilog_lowering(source);
+  REQUIRE(&lowered.read() != &source.read());
+  REQUIRE(&lowered.operands().front().read() == &shared.read());
+  REQUIRE(lowered.operands().back().type() == verilog_lowering(real));
+}
