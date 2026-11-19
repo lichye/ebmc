@@ -19,6 +19,55 @@ Author: Daniel Kroening, kroening@kroening.com
 #include "instantiate_word_level.h"
 #include "obligations.h"
 
+#include <algorithm>
+
+exprt bind_sva_locals(exprt expr, const sva_local_valuest &values)
+{
+  if(!values.empty())
+    expr.visit_pre(
+      [&](exprt &node)
+      {
+        if(node.id() == ID_sva_local)
+        {
+          auto it = values.find(node.get(ID_identifier));
+          if(it != values.end())
+            node.set(ID_value, it->second);
+        }
+      });
+  return expr;
+}
+
+static void capture_locals(
+  const exprt &items,
+  const mp_integer &t,
+  const mp_integer &no_timeframes,
+  sva_local_valuest &values)
+{
+  // Match items are blocking assignments, in source order (1800-2017 16.10).
+  for(const auto &item : items.operands())
+  {
+    const auto &assignment = to_binary_expr(item);
+    const auto &id = assignment.lhs().get(ID_identifier);
+    if(assignment.rhs().is_nil())
+      values[id] = nil_exprt{};
+    else
+      values[id] = instantiate(
+        bind_sva_locals(assignment.rhs(), values), t, no_timeframes);
+  }
+}
+
+// Parallel branches may export disjoint local variables (16.10.2).
+static sva_local_valuest
+parallel_locals(const sequence_matcht &lhs, const sequence_matcht &rhs)
+{
+  auto values = lhs.locals;
+  for(const auto &entry : rhs.locals)
+    if(!values.insert(entry).second)
+      throw ebmc_errort{} << "assertion local variable assigned in both "
+                             "parallel sequence branches";
+  return values;
+}
+
 // true iff there is a pending match in the given set
 static bool has_pending(const sequence_matchest &matches)
 {
@@ -92,6 +141,35 @@ sequence_matchest instantiate_sequence_rec(
 {
   PRECONDITION(t < no_timeframes);
 
+  if(expr.id() == ID_sva_sequence_match_items)
+  {
+    const auto &items = to_binary_expr(expr);
+    if(expr.get_bool(ID_initial))
+    {
+      sva_local_valuest initial;
+      capture_locals(items.rhs(), t, no_timeframes, initial);
+      auto matches = instantiate_sequence_rec(
+        bind_sva_locals(items.lhs(), initial), t, no_timeframes);
+      // Declaration locals have the lifetime of this sequence invocation.
+      for(auto &match : matches)
+        for(const auto &local : initial)
+          match.locals.erase(local.first);
+      return matches;
+    }
+
+    auto matches = instantiate_sequence_rec(items.lhs(), t, no_timeframes);
+    for(auto &match : matches)
+      if(!match.is_pending() && !match.empty_match())
+        capture_locals(
+          items.rhs(), match.end_time(), no_timeframes, match.locals);
+    matches.erase(
+      std::remove_if(
+        matches.begin(),
+        matches.end(),
+        [](const sequence_matcht &m) { return m.empty_match(); }),
+      matches.end());
+    return matches;
+  }
   if(expr.id() == ID_sva_cycle_delay) // ##[1:2] something
   {
     auto &sva_cycle_delay_expr = to_sva_cycle_delay_expr(expr);
@@ -161,7 +239,9 @@ sequence_matchest instantiate_sequence_rec(
         else // still inside bound
         {
           const auto rhs_matches = instantiate_sequence_rec(
-            sva_cycle_delay_expr.rhs(), t_rhs, no_timeframes);
+            bind_sva_locals(sva_cycle_delay_expr.rhs(), lhs_match.locals),
+            t_rhs,
+            no_timeframes);
 
           for(auto &rhs_match : rhs_matches)
           {
@@ -176,7 +256,13 @@ sequence_matchest instantiate_sequence_rec(
                   sequence_matcht::pending_match(std::move(cond)));
               }
               else
-                result.emplace_back(rhs_match.end_time(), std::move(cond));
+              {
+                auto values = rhs_match.locals;
+                // A later assignment supersedes an earlier one.
+                values.insert(lhs_match.locals.begin(), lhs_match.locals.end());
+                result.emplace_back(
+                  rhs_match.end_time(), std::move(cond), std::move(values));
+              }
             }
           }
         }
@@ -224,7 +310,10 @@ sequence_matchest instantiate_sequence_rec(
           {
             auto cond = and_exprt{lhs_match.condition(), rhs_match.condition()};
             concrete_match_conditions.push_back(cond);
-            result.emplace_back(lhs_match.end_time(), std::move(cond));
+            result.emplace_back(
+              lhs_match.end_time(),
+              std::move(cond),
+              parallel_locals(lhs_match, rhs_match));
           }
         }
       }
@@ -260,18 +349,31 @@ sequence_matchest instantiate_sequence_rec(
     exprt no_earlier_match = true_exprt{};
 
     // Group by end_time and process in order.
-    std::map<mp_integer, exprt::operandst> by_time;
+    std::map<mp_integer, std::vector<const sequence_matcht *>> by_time;
     for(auto &match : matches)
     {
       if(!match.is_pending())
-        by_time[match.end_time()].push_back(match.condition());
+        by_time[match.end_time()].push_back(&match);
     }
 
-    for(auto &[end_time, conditions] : by_time)
+    for(auto &[end_time, at_time] : by_time)
     {
+      exprt::operandst conditions;
+      for(const auto *match : at_time)
+        conditions.push_back(match->condition());
       auto any_match_here = disjunction(conditions);
-      auto guarded = and_exprt{no_earlier_match, any_match_here};
-      result.emplace_back(end_time, std::move(guarded));
+      if(std::all_of(
+           at_time.begin(),
+           at_time.end(),
+           [](const sequence_matcht *match) { return match->locals.empty(); }))
+        result.emplace_back(
+          end_time, and_exprt{no_earlier_match, any_match_here});
+      else
+        for(const auto *match : at_time)
+          result.emplace_back(
+            end_time,
+            and_exprt{no_earlier_match, match->condition()},
+            match->locals);
       // For the next time point, add the condition that no match
       // fired at this time point or earlier.
       no_earlier_match = and_exprt{no_earlier_match, not_exprt{any_match_here}};
@@ -320,7 +422,8 @@ sequence_matchest instantiate_sequence_rec(
         conjuncts.push_back(lhs_inst);
       }
 
-      result.emplace_back(match.end_time(), conjunction(conjuncts));
+      result.emplace_back(
+        match.end_time(), conjunction(conjuncts), match.locals);
     }
 
     return result;
@@ -366,7 +469,9 @@ sequence_matchest instantiate_sequence_rec(
             // return the rhs end_time
             auto cond = and_exprt{match_lhs.condition(), match_rhs.condition()};
             concrete_match_conditions.push_back(cond);
-            result.emplace_back(match_rhs.end_time(), std::move(cond));
+            // Only the containing sequence exports its locals (16.10.2).
+            result.emplace_back(
+              match_rhs.end_time(), std::move(cond), match_rhs.locals);
           }
         }
       }
@@ -408,7 +513,10 @@ sequence_matchest instantiate_sequence_rec(
           auto end_time = std::max(match_lhs.end_time(), match_rhs.end_time());
           auto cond = and_exprt{match_lhs.condition(), match_rhs.condition()};
           concrete_match_conditions.push_back(cond);
-          result.emplace_back(std::move(end_time), std::move(cond));
+          result.emplace_back(
+            std::move(end_time),
+            std::move(cond),
+            parallel_locals(match_lhs, match_rhs));
         }
       }
 

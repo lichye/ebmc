@@ -266,6 +266,8 @@ void verilog_typecheckt::collect_symbols(
 
   function_or_task_name = symbol.name;
 
+  for(const auto &local : declaration.local_declarations())
+    collect_symbols(local);
   for(auto &port : declaration.ports())
     for(auto &declarator : port.declarators())
     {
@@ -299,6 +301,8 @@ void verilog_typecheckt::collect_symbols(
 
   function_or_task_name = symbol.name;
 
+  for(const auto &local : declaration.local_declarations())
+    collect_symbols(local);
   for(auto &port : declaration.ports())
     for(auto &declarator : port.declarators())
     {

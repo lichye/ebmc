@@ -3233,15 +3233,23 @@ property_declaration:
                   auto base_name = stack_expr($2).get(ID_base_name);
                   push_scope(base_name, ".", verilog_scopet::PROPERTY); }
           property_port_list_paren_opt ';'
-          property_spec semicolon_opt
+          assertion_variable_declarations property_spec semicolon_opt
           TOK_ENDPROPERTY property_identifier_opt
                 { init($$, ID_verilog_property_declaration);
                   auto base_name = stack_expr($2).get(ID_base_name);
                   stack_expr($$).set(ID_base_name, base_name);
                   addswap($$, ID_ports, $4);
-                  mto($$, $6);
+                  addswap($$, ID_variables, $6);
+                  mto($$, $7);
                   pop_scope();
                 }
+        ;
+
+assertion_variable_declarations:
+          /* optional */
+                { init($$); }
+        | assertion_variable_declarations data_declaration
+                { $$ = $1; mto($$, $2); }
         ;
 
 property_identifier_opt:
@@ -3350,6 +3358,8 @@ property_expr_proper:
                 { init($$, ID_sva_weak); mto ($$, $3); }
         | '(' property_expr_proper ')'
                 { $$ = $2; }
+        | '(' property_expr ',' sequence_match_item_brace ')'
+                { init($$, ID_sva_sequence_match_items); mto($$, $2); mto($$, $4); }
         | "not" property_expr
                 { init($$, ID_sva_not); mto($$, $2); }
         | property_expr "or" property_expr
@@ -3475,12 +3485,13 @@ sequence_declaration:
                   push_scope(base_name, ".", verilog_scopet::SEQUENCE);
                 }
           sequence_port_list_opt ';'
-          sequence_expr semicolon_opt
+          assertion_variable_declarations sequence_expr semicolon_opt
           "endsequence" sequence_identifier_opt
                 { $$=$2;
                   stack_expr($$).set(ID_base_name, stack_expr($3).get(ID_base_name));
                   addswap($$, ID_ports, $5);
-                  mto($$, $7);
+                  addswap($$, ID_variables, $7);
+                  mto($$, $8);
                   pop_scope();
                 }
         ;
@@ -3497,12 +3508,19 @@ sequence_port_list_opt:
 sequence_port_list:
           sequence_port_item
                 { init($$); mto($$, $1); }
-        | sequence_port_list sequence_port_item
-                { $$=$1; mto($$, $2); }
+        | sequence_port_list ',' sequence_port_item
+                { $$=$1; mto($$, $3); }
         ;
 
 sequence_port_item:
           formal_port_identifier
+                { PARSER.scopes.add_identifier(stack_expr($1).get(ID_base_name), verilog_scopet::VAR);
+                  init($$, ID_decl);
+                  stack_expr($$).set(ID_class, ID_input);
+                  stack_expr($$).add(ID_type).id(ID_verilog_untyped);
+                  stack_expr($1).id(ID_declarator);
+                  mto($$, $1);
+                }
         ;
 
 sequence_identifier_opt:
@@ -3544,6 +3562,8 @@ sequence_expr_proper:
                   mto($$, $3); }
         | '(' sequence_expr_proper ')'
                 { $$ = $2; }
+        | '(' sequence_expr ',' sequence_match_item_brace ')'
+                { init($$, ID_sva_sequence_match_items); mto($$, $2); mto($$, $4); }
         | '(' sequence_expr_proper ')' sequence_abbrev
                 { $$ = $4;
                   // preserve the operand ordering as in the source code
@@ -3572,7 +3592,9 @@ sequence_expr_proper:
 
 sequence_match_item_brace:
           sequence_match_item
+                { init($$); mto($$, $1); }
         | sequence_match_item_brace ',' sequence_match_item
+                { $$ = $1; mto($$, $3); }
         ;
 
 sequence_match_item:

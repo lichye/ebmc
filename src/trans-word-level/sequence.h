@@ -14,17 +14,31 @@ Author: Daniel Kroening, kroening@kroening.com
 
 #include <verilog/sva_expr.h>
 
+#include <map>
+
+using sva_local_valuest = std::map<irep_idt, exprt>;
+
+/// Attach previously sampled values to local-variable references.
+exprt bind_sva_locals(exprt, const sva_local_valuest &);
+
 /// A potential match for an SVA sequence.
 class sequence_matcht
 {
 public:
-  sequence_matcht(mp_integer __end_time, exprt __condition)
-    : _is_empty_match(false),
+  sequence_matcht(
+    mp_integer __end_time,
+    exprt __condition,
+    sva_local_valuest values = {})
+    : locals(std::move(values)),
+      _is_empty_match(false),
       _is_pending(false),
       _condition(std::move(__condition)),
       _end_time(std::move(__end_time))
   {
   }
+
+  // Captures belong to this particular match, including its start and end.
+  sva_local_valuest locals;
 
   const exprt &condition() const
   {

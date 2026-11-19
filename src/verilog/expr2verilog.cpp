@@ -1741,6 +1741,22 @@ Function: expr2verilogt::convert_rec
 
 expr2verilogt::resultt expr2verilogt::convert_rec(const exprt &src)
 {
+  if(src.id() == ID_sva_local)
+    return {verilog_precedencet::MAX, id2string(src.get(ID_base_name))};
+  if(src.id() == ID_sva_sequence_match_items)
+  {
+    const auto &match = to_binary_expr(src);
+    if(src.get_bool(ID_initial))
+      return convert_rec(match.lhs());
+    auto text = "(" + convert(match.lhs());
+    for(const auto &item : match.rhs().operands())
+    {
+      const auto &assignment = to_binary_expr(item);
+      text +=
+        ", " + convert(assignment.lhs()) + " = " + convert(assignment.rhs());
+    }
+    return {verilog_precedencet::MAX, text + ")"};
+  }
   static const std::map<irep_idt, std::function<resultt(expr2verilogt &, const exprt &)>> action_table =
   {
     { ID_plus, [](expr2verilogt &expr2verilog, const exprt &src) { return expr2verilog.convert_binary(

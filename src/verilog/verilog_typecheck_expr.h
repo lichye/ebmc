@@ -75,6 +75,7 @@ protected:
   // Named properties/sequences currently being flattened, used to
   // detect recursive instantiation (1800-2017 16.12.17).
   std::set<irep_idt> sva_flatten_stack;
+  std::size_t sva_instance_number = 0;
 
   // module_identifier.function.block.base_name
   // including the Verilog:: prefix.
@@ -245,6 +246,8 @@ protected:
   convert_replication_expr(replication_exprt, bool zero_allowed);
   [[nodiscard]] exprt convert_power_expr(power_exprt);
   [[nodiscard]] exprt convert_shl_expr(shl_exprt);
+  static std::optional<irep_idt>
+  compound_operator_id(const irep_idt &statement_id);
   void implicit_typecast(exprt &, const typet &type);
   void tc_binary_expr(binary_exprt &);
   void tc_binary_expr(const exprt &expr, exprt &op0, exprt &op1);

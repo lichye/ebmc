@@ -253,8 +253,6 @@ protected:
   void convert_repeat(class verilog_repeatt &);
   void convert_return(class verilog_returnt &);
   void convert_assign(class verilog_assignt &, bool blocking);
-  static std::optional<irep_idt>
-  compound_operator_id(const irep_idt &statement_id);
   void convert_procedural_continuous_assign(
     class verilog_procedural_continuous_assignt &);
   void convert_prepostincdec(class verilog_statementt &);
