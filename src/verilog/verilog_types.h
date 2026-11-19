@@ -1083,6 +1083,6 @@ bool is_four_state_vector(const typet &);
 
 /// the inverse of make_two_valued: restores the four-valued (x/z-capable)
 /// type for the corresponding two-valued bit-vector type
-typet make_four_valued(typet);
+typet make_four_valued(typet, bool declared_only = false);
 
 #endif

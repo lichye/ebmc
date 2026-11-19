@@ -1392,15 +1392,13 @@ Function: verilog_typecheck_exprt::isunknown
 
 constant_exprt verilog_typecheck_exprt::isunknown(const constant_exprt &expr)
 {
-  // constant folding for $isunknown
-  auto bval = ::bval(expr);
-  auto bval_simplified = verilog_simplifier(bval, ns);
-  CHECK_RETURN(bval_simplified.is_constant());
-  auto all_zeros = to_bv_type(bval_simplified.type()).all_zeros_expr();
-  if(bval_simplified == all_zeros)
-    return false_exprt{};
-  else
-    return true_exprt{};
+  // IEEE 1800-2017 20.9: any x or z bit sets the result. Constant
+  // elaboration can return a Verilog literal in its original representation.
+  if(is_four_valued(expr.type()))
+    return make_boolean_expr(aval_bval_has_xz(lower_to_aval_bval(expr)));
+  if(is_aval_bval(expr))
+    return make_boolean_expr(aval_bval_has_xz(expr));
+  return false_exprt{};
 }
 
 /*******************************************************************\

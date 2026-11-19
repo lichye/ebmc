@@ -1651,21 +1651,9 @@ void verilog_typecheckt::elaborate_symbol_rec(irep_idt identifier)
 
         if(symbol.is_macro)
         {
-          // A parameter may hold x/z values (1800-2017 6.20.2). Packed
-          // vector types elaborate to their two-valued form, and hence
-          // the value is converted in the four-valued form of the
-          // declared type, so that x/z are retained. The parameter is then
-          // given the two-valued type unless the value does contain x/z,
-          // see parameter_type_and_value. Enumeration constants are excluded;
-          // their values are checked as given (1800-2017 6.19).
-          auto four_valued_type = make_four_valued(elaborated_type);
-
-          bool four_state_capable =
-            four_valued_type != make_two_valued(elaborated_type) &&
-            elaborated_type.get(ID_C_verilog_type) != ID_verilog_enum;
-
-          auto &conversion_type =
-            four_state_capable ? four_valued_type : elaborated_type;
+          // Preserve x/z only when the declared parameter type admits them
+          // (1800-2017 6.11.2, 6.20.2). Enum values are checked as given.
+          auto conversion_type = make_four_valued(elaborated_type, true);
 
           // Convert to the given type. These are assignment contexts.
           assignment_conversion(symbol.value, conversion_type);

@@ -1,0 +1,10 @@
+CORE
+isunknown_constant_parameter.sv
+--bound 1
+^\[main\.has_x\].*: PROVED.*$
+^\[main\.has_z\].*: PROVED.*$
+^\[main\.mixed\].*: PROVED.*$
+^\[main\.known\].*: PROVED.*$
+^\[main\.two_state\].*: PROVED.*$
+^EXIT=0$
+^SIGNAL=0$
