@@ -427,6 +427,14 @@ void verilog_typecheckt::elaborate_generate_for(
         elaborate_generate_assign(
           to_verilog_generate_assign(for_statement.iteration()), dest);
       }
+      else if(const auto op = compound_operator_id(statement))
+      {
+        const auto &iteration = to_binary_expr(for_statement.iteration());
+        auto value =
+          binary_exprt{iteration.lhs(), *op, iteration.rhs(), typet{}};
+        elaborate_generate_assign(
+          verilog_generate_assignt{iteration.lhs(), std::move(value)}, dest);
+      }
       else if(statement == ID_preincrement || statement == ID_predecrement)
       {
         // turn ++x and x++ into x = x + 1

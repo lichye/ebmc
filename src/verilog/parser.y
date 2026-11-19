@@ -4093,7 +4093,9 @@ genvar_initialization:
 
 genvar_iteration:
           genvar_identifier assignment_operator genvar_expression
-                { init($$, ID_generate_assign); mto($$, $1); mto($$, $3); }
+                { auto op=stack_expr($2).id();
+                  init($$, op==ID_verilog_blocking_assign ? ID_generate_assign : op);
+                  mto($$, $1); mto($$, $3); }
         | inc_or_dec_operator genvar_identifier
                 { $$ = $1; mto($$, $2); }
         | genvar_identifier inc_or_dec_operator
