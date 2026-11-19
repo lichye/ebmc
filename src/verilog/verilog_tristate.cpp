@@ -7,6 +7,7 @@ Module: Verilog net resolution and charge storage (IEEE 1800, 6.6 and 28)
 #include "verilog_tristate.h"
 
 #include <util/arith_tools.h>
+#include <util/expr_iterator.h>
 #include <util/expr_util.h>
 #include <util/mathematical_expr.h>
 #include <util/namespace.h>
@@ -149,23 +150,71 @@ using loweringt = std::function<exprt(exprt)>;
 using encoding_mapt = std::map<irep_idt, exprt>;
 using drive_lookupt = std::function<exprt(const irep_idt &)>;
 
+// Stop as soon as the budget is exhausted, even for a shared expression
+// whose unfolded tree would have exponentially many paths.
+bool fits_tree(const exprt &e, std::size_t budget)
+{
+  for(auto it = e.depth_begin(), end = e.depth_end(); it != end; ++it)
+    if(budget-- == 0)
+      return false;
+  return true;
+}
+
+// These limits only control inlining. Larger expressions use exactly the
+// same data and unknown-mask equations, with named intermediate signals.
+constexpr std::size_t inline_plane_nodes = 48;
+constexpr std::size_t public_projection_nodes = 64;
+using share_planet = std::function<exprt(exprt)>;
+
 class driver_valuet
 {
 public:
-  driver_valuet(const drive_lookupt &lookup, const loweringt &lower)
-    : lookup(lookup), lower(lower)
+  driver_valuet(
+    const drive_lookupt &lookup,
+    const loweringt &lower,
+    const share_planet &share)
+    : lookup(lookup), lower(lower), share(share)
   {
   }
-  exprt operator()(const exprt &e, std::size_t width) const
+  exprt evaluate(const exprt &e, std::size_t width)
   {
-    return aval_bval_conversion(value(e), encoded_type(width));
+    return aval_bval_conversion(compute(e), encoded_type(width));
   }
 
 private:
   const drive_lookupt &lookup;
   const loweringt &lower;
+  const share_planet &share;
+  // The source driver owns the entire operand DAG for this evaluation.
+  // Cache the intrinsic width; sizing an operand uses only its two planes.
+  std::unordered_map<const irept::dt *, exprt> values;
 
-  exprt logical_operand(const exprt &e) const
+  exprt share_result(const exprt &result)
+  {
+    auto data = share(aval(result));
+    auto mask = share(bval(result));
+    return concatenation_exprt{
+      {std::move(mask), std::move(data)}, result.type()};
+  }
+
+  exprt value(const exprt &e)
+  {
+    auto key = &e.read();
+    auto found = values.find(key);
+    if(found != values.end())
+      return found->second;
+    auto result = compute(e);
+    if(!e.operands().empty())
+      result = share_result(result);
+    return values.emplace(key, std::move(result)).first->second;
+  }
+
+  exprt operator()(const exprt &e, std::size_t width)
+  {
+    return aval_bval_conversion(value(e), encoded_type(width));
+  }
+
+  exprt logical_operand(const exprt &e)
   {
     // The type checker represents logical truth as a cast to bool.
     // A known one anywhere in the vector takes precedence over X/Z.
@@ -176,7 +225,7 @@ private:
     return value(e);
   }
 
-  exprt conditional(const if_exprt &mux, std::size_t width) const
+  exprt conditional(const if_exprt &mux, std::size_t width)
   {
     const auto cond = logical_operand(mux.cond());
     auto a = (*this)(mux.true_case(), width),
@@ -209,7 +258,8 @@ private:
     {
       // Unknown bits are already in either_unknown. Compare public data
       // on their known neighbours without reintroducing the source masks.
-      return is_verilog_net_connection(arm) && !is_four_valued(arm)
+      return !is_four_valued(arm) && fits_tree(arm, public_projection_nodes) &&
+                 is_verilog_net_connection(arm)
                ? typecast_exprt::conditional_cast(
                    to_bitvector(lower(arm)), bv_typet{width})
                : data;
@@ -225,20 +275,21 @@ private:
     return pack(std::move(data), std::move(mask));
   }
 
-  exprt logic(const exprt &e, std::size_t width) const
+  exprt logic(const exprt &e, std::size_t width)
   {
     const auto &id = e.id();
     exprt op = e;
-    for(auto &arg : op.operands())
+    for(std::size_t i = 0; i < e.operands().size(); ++i)
     {
-      auto t = arg.type();
+      const auto &arg = e.operands()[i];
+      const auto &t = arg.type();
       auto v = id == ID_and || id == ID_or || id == ID_not
                  ? logical_operand(arg)
                  : value(arg);
       if(t.id() == ID_signedbv || t.id() == ID_verilog_signedbv)
         v.type() =
           lower_to_aval_bval(verilog_signedbv_typet{aval_bval_width(v.type())});
-      arg = std::move(v);
+      op.operands()[i] = std::move(v);
     }
     if(id == ID_not)
     {
@@ -298,7 +349,7 @@ private:
         op.operands().pop_back();
         auto &lhs = op.operands().back();
         exprt pair{id, verilog_unsignedbv_typet{1}, {lhs, rhs}};
-        lhs = verilog_lowering_node(std::move(pair));
+        lhs = share_result(verilog_lowering_node(std::move(pair)));
       }
     }
     op.type() =
@@ -308,7 +359,7 @@ private:
     return verilog_lowering_node(std::move(op));
   }
 
-  exprt value(const exprt &e) const
+  exprt compute(const exprt &e)
   {
     const auto width = width_of(e);
     const auto &id = e.id();
@@ -386,8 +437,19 @@ private:
           e.operands().size() > 1 &&
           is_verilog_unknown_literal(e.operands()[1]))
           index_unknown = true_exprt{};
-        for(std::size_t i = 1; i < selection.operands().size(); ++i)
-          selection.operands()[i] = lower(selection.operands()[i]);
+        for(std::size_t i = 1; i < e.operands().size(); ++i)
+        {
+          const auto &index = e.operands()[i];
+          // A dynamic select only uses the address when all its bits are
+          // known. Reuse its data plane instead of unfolding a shared index.
+          if(
+            i == 1 && verilog_bits_opt(index.type()) &&
+            !fits_tree(index, public_projection_nodes))
+            selection.operands()[i] =
+              from_bits(aval(value(index)), make_two_valued(index.type()));
+          else
+            selection.operands()[i] = lower(index);
+        }
         selection.type() = make_two_valued(e.type());
         auto select = [&](exprt bits)
         {
@@ -759,11 +821,37 @@ void verilog_resolve_nets(
     return rtl.literal_nets.count(id) ? lookup(id, false)
                                       : static_cast<exprt>(nil_exprt{});
   };
-  const driver_valuet driver(physical_input, lower),
-    logic_driver(logic_input, lower);
   const namespacet ns{symbols};
   encoding_mapt logic_nets;
-  std::unordered_map<exprt, exprt, irep_hash> masks;
+  std::unordered_map<exprt, exprt, irep_hash> planes;
+  auto bind_plane =
+    [&](const symbolt &net, const std::string &name, exprt plane) -> exprt
+  {
+    auto [it, inserted] = planes.try_emplace(plane);
+    if(inserted)
+    {
+      it->second = auxiliary(net, name, plane.type());
+      trans.invar().add_to_operands(equal_exprt{it->second, std::move(plane)});
+    }
+    return it->second;
+  };
+  std::size_t layer = 0;
+  auto evaluate =
+    [&](const symbolt &net, bool physical, const exprt &e, std::size_t width)
+  {
+    // Fold one operator at a time. Keep its operands small for subsequent
+    // operators and for tree-based consumers of the transition relation.
+    const share_planet share = [&](exprt plane)
+    {
+      plane = simplify_expr(std::move(plane), ns);
+      if(fits_tree(plane, inline_plane_nodes))
+        return plane;
+      return bind_plane(
+        net, "layer_" + std::to_string(layer++), std::move(plane));
+    };
+    return driver_valuet(physical ? physical_input : logic_input, lower, share)
+      .evaluate(e, width);
+  };
   std::set<std::pair<irep_idt, bool>> active;
   // With no released driver, disagreement or an X makes a bit free. This
   // consensus only uses two-state words and never constrains the drivers.
@@ -778,18 +866,19 @@ void verilog_resolve_nets(
     {
       const bv_typet field{numeric_cast_v<std::size_t>(d.slice.width())};
       exprt a, b;
-      if(has_subexpr(
-           d.value,
-           [&](const exprt &v)
-           {
-             return is_verilog_unknown_literal(v) ||
-                    (v.id() == ID_symbol &&
-                     rtl.resolved_nets.count(
-                       to_symbol_expr(v).get_identifier()));
-           }))
+      if(
+        !fits_tree(d.value, public_projection_nodes) ||
+        has_subexpr(
+          d.value,
+          [&](const exprt &v)
+          {
+            return is_verilog_unknown_literal(v) ||
+                   (v.id() == ID_symbol &&
+                    rtl.resolved_nets.count(
+                      to_symbol_expr(v).get_identifier()));
+          }))
       {
-        const auto &evaluate = physical ? driver : logic_driver;
-        auto raw = evaluate(d.value, field.get_width());
+        auto raw = evaluate(net, physical, d.value, field.get_width());
         a = aval(raw);
         b = bval(raw);
       }
@@ -883,12 +972,15 @@ void verilog_resolve_nets(
     {
       // The remaining source slices are disjoint, including partial ports.
       // Assemble them in bit order and leave each gap released.
-      const auto &evaluate = physical ? driver : logic_driver;
       std::map<verilog_rtl_slicet, exprt> slices;
       for(const auto &d : source->second)
         slices.emplace(
           d.slice,
-          evaluate(d.value, numeric_cast_v<std::size_t>(d.slice.width())));
+          evaluate(
+            net,
+            physical,
+            d.value,
+            numeric_cast_v<std::size_t>(d.slice.width())));
       auto gap = [&](std::size_t lo, std::size_t hi)
       {
         const bv_typet field{hi - lo};
@@ -915,7 +1007,6 @@ void verilog_resolve_nets(
       value = parts.size() == 1
                 ? parts.front()
                 : aval_bval_concatenation(parts, encoded_type(width));
-      value = simplify_expr(std::move(value), ns);
     }
     const bv_typet word{width};
     value.type() = encoded_type(width);
@@ -927,16 +1018,10 @@ void verilog_resolve_nets(
     {
       if(mask.is_constant() || mask.id() == ID_symbol)
         return mask;
-      auto existing = masks.find(mask);
-      if(existing != masks.end())
-        return existing->second;
-      auto shared = auxiliary(
+      return bind_plane(
         net,
         physical ? std::string("physical_") + suffix : std::string(suffix),
-        word);
-      masks.emplace(mask, shared);
-      trans.invar().add_to_operands(equal_exprt{shared, mask});
-      return static_cast<exprt>(shared);
+        std::move(mask));
     };
     exprt released = word.all_zeros_expr();
     if(rtl.may_release.count(id))
@@ -947,6 +1032,7 @@ void verilog_resolve_nets(
       !physical && rtl.ambiguous_drives.count(id) &&
       source->second.size() == 1 &&
       source->second.front().slice.width() == width &&
+      fits_tree(source->second.front().value, public_projection_nodes) &&
       !has_subexpr(
         source->second.front().value,
         [](const exprt &v)
@@ -998,7 +1084,8 @@ void verilog_resolve_nets(
     std::vector<exprt> drives;
     for(const auto &d : entry.second)
       drives.push_back(place(
-        driver(d.value, numeric_cast_v<std::size_t>(d.slice.width())),
+        evaluate(
+          net, true, d.value, numeric_cast_v<std::size_t>(d.slice.width())),
         d.slice,
         width));
     auto drive = simplify_expr(resolve(drives, width), ns);

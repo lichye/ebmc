@@ -1,0 +1,12 @@
+CORE
+shared_conditional.sv
+--bound 1
+^\[main\.known_index\].*: PROVED.*$
+^\[main\.unknown_index\].*: REFUTED$
+^\[main\.common_bits\].*: PROVED.*$
+^\[main\.all_clear\].*: PROVED.*$
+^\[main\.one_set\].*: PROVED.*$
+^\[main\.unknown_low\].*: REFUTED$
+^\[main\.shared_read\].*: PROVED.*$
+^EXIT=10$
+^SIGNAL=0$
