@@ -68,7 +68,7 @@ public:
   }
 
   // throws errort on error
-  verilog_rtlt build();
+  verilog_rtlt build(verilog_undriven_modet);
 
 protected:
   const irep_idt module;
@@ -181,6 +181,7 @@ protected:
     exprt,
     const source_locationt &,
     bool constraint = false);
+  void find_undriven(bool only_reads);
   void collapse_inout_drivers();
   void finish_net_drivers();
 
@@ -4397,6 +4398,165 @@ static bool drive_sources(
   return false;
 }
 
+static std::vector<verilog_rtl_slicet>
+merged_ranges(std::vector<verilog_rtl_slicet> slices)
+{
+  std::sort(slices.begin(), slices.end());
+  std::vector<verilog_rtl_slicet> result;
+  for(const auto &slice : slices)
+  {
+    if(result.empty() || result.back().higher + 1 < slice.lower)
+      result.push_back(slice);
+    else
+      result.back().higher = std::max(result.back().higher, slice.higher);
+  }
+  return result;
+}
+
+// Inspect the actual drivers before port collapse creates synthetic reads.
+// A disabled driver (including an explicit Z) is still a driver.
+void verilog_rtl_buildert::find_undriven(bool only_reads)
+{
+  decltype(rtl.undriven) driven, reads;
+  const auto &ports = to_module_type(ns.lookup(module).type).ports();
+  std::set<irep_idt> inputs;
+  for(const auto &port : ports)
+    if(port.input())
+      inputs.insert(port.identifier());
+  for(const auto &id : declared_nets)
+  {
+    const auto &net = ns.lookup(id);
+    const auto kind = net.type.get("#net_kind");
+    if(
+      inputs.count(id) || kind == ID_tri0 || kind == ID_tri1 ||
+      kind == ID_trireg || kind == ID_supply0 || kind == ID_supply1 ||
+      (rtl.forced.count(id) && !net_drivers.count(id) &&
+       !rtl.identifier_map.count(id)))
+      continue;
+    auto &ranges = driven[id];
+    auto pending = net_drivers.find(id);
+    if(pending != net_drivers.end())
+      for(const auto &d : pending->second)
+        ranges.push_back(d.drive.slice);
+    auto definitions = rtl.identifier_map.find(id);
+    if(definitions != rtl.identifier_map.end())
+      for(const auto &d : definitions->second)
+        ranges.push_back(d.first);
+    ranges = merged_ranges(std::move(ranges));
+  }
+
+  // A bidirectional port and its actual have the same physical drivers.
+  std::set<std::size_t> driven_groups;
+  for(std::size_t i = 0; i < inout_bits.size(); ++i)
+  {
+    const auto &bit = inout_bits[i];
+    auto entry = driven.find(bit.first);
+    if(
+      entry == driven.end() ||
+      std::any_of(
+        entry->second.begin(),
+        entry->second.end(),
+        [&](const verilog_rtl_slicet &s)
+        { return s.lower <= bit.second && bit.second <= s.higher; }))
+      driven_groups.insert(inout_bits.find_number(i));
+  }
+  for(std::size_t i = 0; i < inout_bits.size(); ++i)
+  {
+    const auto &bit = inout_bits[i];
+    const auto group = inout_bits.find_number(i);
+    auto entry = driven.find(bit.first);
+    if(
+      entry != driven.end() &&
+      (driven_groups.count(group) || (!only_reads && i != group)))
+      entry->second.emplace_back(bit.second, bit.second);
+  }
+
+  if(only_reads)
+  {
+    auto read = [&](const exprt &expr)
+    {
+      std::set<irep_idt> ids;
+      expr.visit_pre(
+        [&](const exprt &op)
+        {
+          if(
+            op.id() == ID_symbol &&
+            driven.count(to_symbol_expr(op).get_identifier()))
+            ids.insert(to_symbol_expr(op).get_identifier());
+        });
+      for(const auto &id : ids)
+        collect_reads(
+          expr, id, whole_slice(ns.lookup(id).symbol_expr()), reads[id]);
+    };
+    for(const auto &entry : net_drivers)
+      for(const auto &d : entry.second)
+        read(d.drive.value);
+    for(const auto &entry : rtl.identifier_map)
+      for(const auto &d : entry.second)
+        read(d.second.value);
+    for(const auto &entry : rtl.initial_values)
+      for(const auto &d : entry.second)
+        read(d.second);
+    for(const auto &constraint : rtl.constraints)
+      read(constraint);
+    for(const auto &property : rtl.properties)
+      read(property.condition);
+    for(const auto &port : ports)
+      if(port.output() && !port.input() && driven.count(port.identifier()))
+        read(ns.lookup(port.identifier()).symbol_expr());
+  }
+  for(auto &entry : driven)
+  {
+    const auto &id = entry.first;
+    const auto covered = merged_ranges(std::move(entry.second));
+    auto requested = only_reads ? merged_ranges(std::move(reads[id]))
+                                : std::vector<verilog_rtl_slicet>{
+                                    whole_slice(ns.lookup(id).symbol_expr())};
+    auto d = covered.begin();
+    for(const auto &r : requested)
+    {
+      auto lo = r.lower;
+      while(d != covered.end() && d->higher < lo)
+        ++d;
+      for(auto it = d; it != covered.end() && it->lower <= r.higher; ++it)
+      {
+        if(lo < it->lower)
+          rtl.undriven[id].emplace_back(lo, it->lower - 1);
+        lo = std::max(lo, it->higher + 1);
+      }
+      if(lo <= r.higher)
+        rtl.undriven[id].emplace_back(lo, r.higher);
+    }
+  }
+}
+
+void verilog_rtlt::output_undriven(const namespacet &ns, std::ostream &out)
+  const
+{
+  for(const auto &[id, ranges] : undriven)
+  {
+    const auto &net = ns.lookup(id);
+    const auto width = verilog_bits(net.type);
+    for(const auto &range : ranges)
+    {
+      out << "UNDRIVEN\t" << net.display_name();
+      if(range.width() != width)
+      {
+        const mp_integer offset = net.type.get_int(ID_C_offset);
+        const bool increasing = net.type.get_bool(ID_C_increasing);
+        auto index = [&](const mp_integer &n)
+        { return offset + (increasing ? width - 1 - n : n); };
+        out << '[' << index(range.higher);
+        if(range.lower != range.higher)
+          out << ':' << index(range.lower);
+        out << ']';
+      }
+      out << '\t' << net.location.get_file() << ':' << net.location.get_line()
+          << '\n';
+    }
+  }
+}
+
 // Resolve the drivers of a collapsed inout bit once, at a single name.
 // A group with several pulls or stored charges retains its separate defaults.
 void verilog_rtl_buildert::collapse_inout_drivers()
@@ -5849,11 +6009,13 @@ Function: verilog_rtl_buildert::build
 
 \*******************************************************************/
 
-verilog_rtlt verilog_rtl_buildert::build()
+verilog_rtlt verilog_rtl_buildert::build(verilog_undriven_modet undriven)
 {
   const symbolt &module_symbol = ns.lookup(module);
 
   build_module(module_symbol);
+  if(undriven != verilog_undriven_modet::SEQ)
+    find_undriven(undriven == verilog_undriven_modet::REPORT);
 
   finish_net_drivers();
   // now that all drivers are known
@@ -6004,7 +6166,8 @@ verilog_rtlt verilog_rtl(
   const symbol_table_baset &symbol_table,
   const irep_idt &module_identifier,
   verilog_standardt standard,
-  message_handlert &message_handler)
+  message_handlert &message_handler,
+  verilog_undriven_modet undriven)
 {
   const namespacet ns(symbol_table);
 
@@ -6013,7 +6176,7 @@ verilog_rtlt verilog_rtl(
 
   try
   {
-    return builder.build();
+    return builder.build(undriven);
   }
   catch(verilog_rtl_buildert::errort error)
   {

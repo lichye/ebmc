@@ -350,7 +350,8 @@ transition_systemt verilog_ebmc_languaget::create_transition_system(
       standard,
       ignore_initial,
       initial_zero,
-      message_handler);
+      message_handler,
+      cmdline.get_value("undriven") == "const");
   }
   catch(ebmc_errort &)
   {
@@ -706,6 +707,18 @@ std::optional<transition_systemt> verilog_ebmc_languaget::transition_system()
     auto root_identifier = verilog_module_symbol(verilog_root_module_name());
     auto &root_symbol = symbol_table.lookup_ref(root_identifier);
     show_module_hierarchy(symbol_table, root_symbol, std::cout);
+    return {};
+  }
+
+  if(cmdline.isset("undriven-report"))
+  {
+    auto rtl = verilog_rtl(
+      symbol_table,
+      verilog_module_symbol(verilog_root_module_name()),
+      parse_trees.front().standard,
+      message_handler,
+      verilog_undriven_modet::REPORT);
+    rtl.output_undriven(namespacet{symbol_table}, std::cout);
     return {};
   }
 

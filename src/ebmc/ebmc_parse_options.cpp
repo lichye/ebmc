@@ -173,11 +173,18 @@ int ebmc_parse_optionst::doit()
     return 0;
   }
 
-  log_version_and_architecture("EBMC", EBMC_VERSION);
-
   try
   {
     expand_command_files(cmdline);
+    if(cmdline.isset("undriven-report"))
+      ui_message_handler.set_verbosity(messaget::M_WARNING);
+    else
+      log_version_and_architecture("EBMC", EBMC_VERSION);
+    if(
+      cmdline.isset("undriven") && cmdline.get_value("undriven") != "seq" &&
+      cmdline.get_value("undriven") != "const")
+      throw ebmc_errort{}.with_exit_code(2)
+        << "--undriven expects const or seq";
 
     if(cmdline.isset("diatest"))
     {
@@ -564,6 +571,8 @@ void ebmc_parse_optionst::help()
     " {y--z3}                        \t use Z3 as solver\n"
     "\n"
     "Verilog options:\n"
+    " {y--undriven} {uconst|seq}      \t hold floating bits constant or choose them each step (default: seq)\n"
+    " {y--undriven-report}           \t list read, undriven nets and source locations, then exit\n"
     " {y-I} {upath}                  \t set include path\n"
     " {y+incdir+}{upath}[{y+}{upath}...] \t set include path\n"
     " {y-D} {uvar}[={uvalue}]        \t set preprocessor define\n"

@@ -1,0 +1,15 @@
+CORE
+undriven_mode.sv
+--undriven-report
+^UNDRIVEN\tmain\.en\t.*undriven_mode\.sv:2$
+^UNDRIVEN\tmain\.partial\[0\]\t.*undriven_mode\.sv:3$
+^UNDRIVEN\tmain\.bus\[0\]\t.*undriven_mode\.sv:18$
+^UNDRIVEN\tmain\.u\.pad\[0\]\t.*undriven_mode\.sv:25$
+^EXIT=0$
+^SIGNAL=0$
+--
+^UNDRIVEN.*(unused|explicit_x|only_driven_read|main\.clk|main\.d|main\.pulled)
+^UNDRIVEN.*partial\[2\]
+Generating Decision Problem
+^\*\* Results:
+^EBMC version

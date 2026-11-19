@@ -1,0 +1,14 @@
+CORE
+undriven_mode.sv
+--bound 2 --undriven seq
+^\[main\.same_frame\].*: PROVED.*$
+^\[main\.stable_enable\].*: REFUTED$
+^\[main\.stable_gap\].*: REFUTED$
+^\[main\.any_initial\].*: REFUTED$
+^\[main\.driven\].*: PROVED.*$
+^\[main\.primary_can_change\].*: REFUTED$
+^\[main\.literal_can_change\].*: REFUTED$
+^\[main\.port_alias\].*: PROVED.*$
+^\[main\.port_stable\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

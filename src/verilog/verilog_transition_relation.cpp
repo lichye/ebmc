@@ -70,7 +70,7 @@ public:
   }
 
   // throws errort on error
-  transt convert();
+  transt convert(bool undriven_const);
 
 protected:
   const irep_idt module;
@@ -1167,7 +1167,7 @@ Function: verilog_transition_relationt::convert
 
 \*******************************************************************/
 
-transt verilog_transition_relationt::convert()
+transt verilog_transition_relationt::convert(bool undriven_const)
 {
   symbolt &module_symbol = symbol_table.get_writeable_ref(module);
 
@@ -1177,7 +1177,13 @@ transt verilog_transition_relationt::convert()
 
   // construct the RTL representation, which includes
   // module instances recursively
-  auto rtl = verilog_rtl(symbol_table, module, standard, message_handler);
+  auto rtl = verilog_rtl(
+    symbol_table,
+    module,
+    standard,
+    message_handler,
+    undriven_const ? verilog_undriven_modet::CONST
+                   : verilog_undriven_modet::SEQ);
 
   // Variables that are forced to a value, e.g. by a port
   // connection, become wires.
@@ -1238,7 +1244,8 @@ transt verilog_transition_relation(
   verilog_standardt standard,
   bool ignore_initial,
   bool initial_zero,
-  message_handlert &message_handler)
+  message_handlert &message_handler,
+  bool undriven_const)
 {
   const namespacet ns(symbol_table);
 
@@ -1253,7 +1260,7 @@ transt verilog_transition_relation(
 
   try
   {
-    return converter.convert();
+    return converter.convert(undriven_const);
   }
   catch(verilog_transition_relationt::errort error)
   {

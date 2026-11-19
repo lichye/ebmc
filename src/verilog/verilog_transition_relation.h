@@ -28,6 +28,7 @@ transt verilog_transition_relation(
   verilog_standardt,
   bool ignore_initial,
   bool initial_zero,
-  message_handlert &);
+  message_handlert &,
+  bool undriven_const = false);
 
 #endif // CPROVER_VERILOG_VERILOG_TRANSITION_RELATION_H

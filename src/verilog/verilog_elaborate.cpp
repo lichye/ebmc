@@ -159,6 +159,7 @@ void verilog_typecheckt::collect_port_symbols(const verilog_declt &decl)
     else
       DATA_INVARIANT(false, "unexpected port class");
 
+    new_symbol.location = declarator.source_location();
     new_symbol.module = verilog_root_module_identifier();
     new_symbol.value.make_nil();
     new_symbol.base_name = base_name;

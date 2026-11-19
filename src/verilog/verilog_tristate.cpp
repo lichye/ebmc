@@ -697,6 +697,28 @@ void verilog_resolve_nets(
     return expr;
   };
 
+  // Only --undriven const populates these ranges during synthesis.
+  // Leave the initial value unconstrained and hold it across transitions.
+  // The physical drive of the corresponding bits remains high impedance.
+  for(const auto &[id, ranges] : rtl.undriven)
+  {
+    const auto &net = symbols.lookup_ref(id);
+    const auto visible = to_bitvector(lower(net.symbol_expr()));
+    for(const auto &range : ranges)
+    {
+      const unsignedbv_typet type{numeric_cast_v<std::size_t>(range.width())};
+      auto held =
+        auxiliary(net, "undriven_" + integer2string(range.lower), type, true);
+      auto next = held;
+      next.id(ID_next_symbol);
+      trans.trans().add_to_operands(equal_exprt{next, held});
+      trans.invar().add_to_operands(equal_exprt{
+        extractbits_exprt{
+          visible, from_integer(range.lower, integer_typet{}), type},
+        held});
+    }
+  }
+
   std::set<irep_idt> connected;
   for(const auto &group : rtl.inout_groups)
     for(const auto &bit : group.second)

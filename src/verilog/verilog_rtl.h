@@ -184,6 +184,13 @@ public:
   }
 };
 
+enum class verilog_undriven_modet
+{
+  SEQ,
+  CONST,
+  REPORT
+};
+
 /// The register-transfer level (RTL) representation of a Verilog
 /// module: a map from identifiers to a map from slices to the
 /// definition of the slice, the initial values, further constraints,
@@ -198,6 +205,10 @@ public:
   using slice_value_mapt = std::map<verilog_rtl_slicet, exprt>;
 
   identifier_mapt identifier_map;
+
+  /// Statically undriven ranges, in least-significant-bit coordinates.
+  std::map<irep_idt, std::vector<verilog_rtl_slicet>> undriven;
+  void output_undriven(const namespacet &, std::ostream &) const;
 
   struct drivert
   {
@@ -253,6 +264,7 @@ verilog_rtlt verilog_rtl(
   const symbol_table_baset &,
   const irep_idt &module_identifier,
   verilog_standardt,
-  message_handlert &);
+  message_handlert &,
+  verilog_undriven_modet = verilog_undriven_modet::SEQ);
 
 #endif // CPROVER_VERILOG_VERILOG_RTL_H

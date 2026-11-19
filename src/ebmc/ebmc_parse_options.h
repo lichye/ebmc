@@ -59,7 +59,7 @@ public:
         "l:(libfile):"
         "y:(libdir):(libext):"
         "(preprocess)(systemverilog)(vl2smv-extensions)"
-        "(warn-implicit-nets)",
+        "(warn-implicit-nets)(undriven):(undriven-report)",
         argc,
         argv,
         std::string("EBMC ") + EBMC_VERSION),

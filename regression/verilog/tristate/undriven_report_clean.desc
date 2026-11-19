@@ -1,0 +1,11 @@
+CORE
+bus.sv
+--undriven-report
+^EXIT=0$
+^SIGNAL=0$
+--
+^UNDRIVEN
+^EBMC version
+^Converting
+^Generating Decision Problem
+^\*\* Results:
