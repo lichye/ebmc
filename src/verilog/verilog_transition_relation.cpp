@@ -661,6 +661,13 @@ void verilog_transition_relationt::convert_definitions(
     {
       if(slice_entry.second.is_state_holding() != state_holding)
       {
+        if(
+          symbol.type.id() == ID_array &&
+          to_verilog_array_type(symbol.type).is_unpacked())
+          throw errort().with_location(symbol.location)
+            << "conflicting assignment types for `" << symbol.display_name()
+            << "': unpacked array elements may have independent drivers, but "
+               "mixing clocked and combinational elements is not supported";
         throw errort().with_location(symbol.location)
           << "conflicting assignment types for `" << symbol.display_name()
           << "'";

@@ -1,0 +1,6 @@
+CORE
+unpacked_mixed_assignments.sv
+--bound 1
+unpacked array.*(element|slice).*clocked.*combinational
+^EXIT=2$
+^SIGNAL=0$
