@@ -16,6 +16,7 @@ Author: Daniel Kroening, dkr@amazon.com
 #include <verilog/sva_expr.h>
 
 #include "ltl.h"
+#include "rewrite_sva_sequence.h"
 #include "temporal_expr.h"
 #include "temporal_logic.h"
 
@@ -338,6 +339,35 @@ ltl_sva_to_stringt::rec(const exprt &expr, modet mode)
     PRECONDITION(mode == SEQUENCE);
     return infix("&&", expr, mode);
   }
+  else if(expr.id() == ID_sva_sequence_throughout)
+  {
+    // 1800-2017 16.9.9: `exp throughout seq' matches an interval iff seq
+    // matches it and exp holds at every tick of it. `&&' is the
+    // length-matching intersection, so it pins both operands to the same
+    // interval; `exp[*]' then contributes one copy of exp per tick and
+    // constrains the length not at all. The LHS is a Boolean condition
+    // rather than a sequence -- see verilog_typecheck_sva.
+    PRECONDITION(mode == SEQUENCE);
+    auto &throughout = to_sva_sequence_throughout_expr(expr);
+    auto condition = rec(throughout.lhs(), BOOLEAN);
+    auto sequence = rec(throughout.sequence(), SEQUENCE);
+    return resultt{
+      precedencet::INFIX, '(' + condition.s + ")[*] && (" + sequence.s + ')'};
+  }
+  else if(expr.id() == ID_sva_sequence_within)
+  {
+    // 1800-2017 16.9.10 defines this as
+    //   (1[*0:$] ##1 seq1 ##1 1[*0:$]) intersect seq2,
+    // i.e. seq1 matches over some contiguous sub-interval of seq2's match,
+    // with the two ends of the match padded out by anything at all. Spot
+    // writes 1[*0:$] as `[*]' and ##1 as `;'.
+    PRECONDITION(mode == SEQUENCE);
+    auto &within = to_sva_sequence_within_expr(expr);
+    auto lhs = rec(within.lhs(), SEQUENCE);
+    auto rhs = rec(within.rhs(), SEQUENCE);
+    return resultt{
+      precedencet::INFIX, "(1[*] ; (" + lhs.s + ") ; 1[*]) && (" + rhs.s + ')'};
+  }
   else if(expr.id() == ID_sva_boolean)
   {
     // can be sequence or property
@@ -395,8 +425,36 @@ ltl_sva_to_stringt::rec(const exprt &expr, modet mode)
 
         if(from == 0)
         {
-          // requires treatment of empty sequences on lhs
-          throw ltl_sva_to_string_unsupportedt{expr};
+          // 1800-2017 16.9.2: f ##[0:to] g is the disjunction of f ##i g
+          // for i in 0..to, and f ##0 g is the fusion f:g. Split the zero
+          // off the rest: (f : g) | (f ; 1[*0..to-1] ; g).
+          //
+          // An lhs that admits an empty match is a different question --
+          // 16.9.2.1 says (empty ##0 g) does not match at all, which the
+          // fusion would not respect. Leave that unsupported rather than
+          // silently wrong.
+          if(delay.lhs().is_not_nil() && admits_empty(delay.lhs()))
+            throw ltl_sva_to_string_unsupportedt{expr};
+
+          auto fusion = infix(" : ", new_expr, mode);
+
+          if(delay.is_unbounded()) // f ##[0:$] g
+          {
+            auto rest = infix(" ; 1[*] ; ", new_expr, mode);
+            return resultt{
+              precedencet::INFIX, '(' + fusion.s + ") | (" + rest.s + ')'};
+          }
+
+          auto to = numeric_cast_v<mp_integer>(delay.to());
+          PRECONDITION(to >= 0);
+
+          if(to == 0) // f ##[0:0] g is just the fusion
+            return fusion;
+
+          auto rest = infix(
+            " ; 1[*0.." + integer2string(to - 1) + "] ; ", new_expr, mode);
+          return resultt{
+            precedencet::INFIX, '(' + fusion.s + ") | (" + rest.s + ')'};
         }
         else if(delay.is_unbounded()) // f ##[n:$] g
         {
