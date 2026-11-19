@@ -11,6 +11,17 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <util/arith_tools.h>
 #include <util/mathematical_types.h>
 
+bool is_sva_local_target(const exprt &expr)
+{
+  const exprt *base = &expr;
+  while(base->id() == ID_verilog_bit_select ||
+        base->id() == ID_verilog_non_indexed_part_select ||
+        base->id() == ID_verilog_indexed_part_select_plus ||
+        base->id() == ID_verilog_indexed_part_select_minus)
+    base = &base->operands().front();
+  return base->id() == ID_sva_local;
+}
+
 exprt sva_iff_exprt::implications() const
 {
   return sva_and_exprt{

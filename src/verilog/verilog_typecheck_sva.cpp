@@ -542,19 +542,6 @@ exprt verilog_typecheck_exprt::convert_other_sva(exprt expr)
   }
 }
 
-// IEEE 1800-2017 16.10 allows a match item to assign a select of a local.
-static bool is_local_match_target(const exprt &expr)
-{
-  const exprt *base = &expr;
-  while(
-    base->id() == ID_verilog_bit_select ||
-    base->id() == ID_verilog_non_indexed_part_select ||
-    base->id() == ID_verilog_indexed_part_select_plus ||
-    base->id() == ID_verilog_indexed_part_select_minus)
-    base = &base->operands().front();
-  return base->id() == ID_sva_local;
-}
-
 exprt verilog_typecheck_exprt::convert_sva_rec(exprt expr)
 {
   if(expr.id() == ID_sva_sequence_match_items)
@@ -591,7 +578,7 @@ exprt verilog_typecheck_exprt::convert_sva_rec(exprt expr)
           << "unsupported sequence match item";
       auto &assignment = to_binary_expr(item);
       convert_expr(assignment.lhs(), true);
-      if(!is_local_match_target(assignment.lhs()))
+      if(!is_sva_local_target(assignment.lhs()))
         throw errort{}.with_location(assignment.lhs().source_location())
           << "sequence match items can only modify assertion local variables";
       convert_expr(assignment.rhs());

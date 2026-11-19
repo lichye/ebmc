@@ -1788,6 +1788,27 @@ exprt verilog_rtl_buildert::substitute(exprt expr, statet &state)
     expr.id() == ID_verilog_indexed_part_select_plus ||
     expr.id() == ID_verilog_indexed_part_select_minus || expr.id() == ID_member)
   {
+    if(expr.id() == ID_verilog_bit_select && is_sva_local_target(expr))
+    {
+      const auto &select = to_verilog_bit_select_expr(expr);
+      const auto &src = select.src();
+      if(is_signed_or_unsigned_bitvector(src.type()))
+      {
+        if(const auto index = constant_index(select.index(), state))
+        {
+          // Map the declared index before narrowing it to the index type.
+          // A one-bit constant can address bit zero of e.g. bit [0:7].
+          const auto &type = to_verilog_vector_type(src.type());
+          mp_integer offset = *index - type.offset();
+          if(type.increasing())
+            offset = verilog_bits(type) - 1 - offset;
+          return extractbit_exprt{
+            substitute(src, state), from_integer(offset, integer_typet{})}
+            .with_source_location(expr);
+        }
+      }
+    }
+
     // A select on a symbol that has been assigned by blocking assignments
     // in this block. When the indices are constants, only the selected
     // slice is read, rather than substituting the composed value of the

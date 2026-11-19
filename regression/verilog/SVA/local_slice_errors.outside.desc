@@ -1,0 +1,6 @@
+CORE
+local_slice_errors.sv
+--bound 2 --property main.p_outside
+requires a fixed, in-range bit or part select
+^EXIT=6$
+^SIGNAL=0$

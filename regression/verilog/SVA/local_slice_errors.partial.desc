@@ -1,0 +1,6 @@
+CORE
+local_slice_errors.sv
+--bound 2 --property main.p_partial
+assertion local variable v is read before assignment
+^EXIT=6$
+^SIGNAL=0$

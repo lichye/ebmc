@@ -9,6 +9,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include "sequence.h"
 
 #include <util/arith_tools.h>
+#include <util/bitvector_expr.h>
 #include <util/mathematical_types.h>
 
 #include <ebmc/ebmc_error.h>
@@ -21,6 +22,67 @@ Author: Daniel Kroening, kroening@kroening.com
 
 #include <algorithm>
 
+struct sva_local_referencet
+{
+  const exprt &local;
+  std::size_t offset;
+  std::size_t width; // zero for a whole variable, which need not be a vector
+};
+
+static std::optional<sva_local_referencet> local_reference(const exprt &expr)
+{
+  if(expr.id() == ID_sva_local)
+    return sva_local_referencet{expr, 0, 0};
+  if(expr.id() != ID_extractbit && expr.id() != ID_extractbits)
+    return {};
+
+  const auto &src = expr.operands()[0];
+  const auto base = local_reference(src);
+  if(
+    !base || !can_cast_type<bitvector_typet>(src.type()) ||
+    (expr.type().id() != ID_bool &&
+     !can_cast_type<bitvector_typet>(expr.type())))
+    return {};
+  const auto index = numeric_cast<std::size_t>(expr.operands()[1]);
+  const auto src_width = to_bitvector_type(src.type()).get_width();
+  const auto width = expr.type().id() == ID_bool
+                       ? 1
+                       : to_bitvector_type(expr.type()).get_width();
+  if(!index || width > src_width || *index > src_width - width)
+    return {};
+  return sva_local_referencet{base->local, base->offset + *index, width};
+}
+
+static mp_integer slice_mask(std::size_t offset, std::size_t width)
+{
+  return (power(2, width) - 1) * power(2, offset);
+}
+
+std::optional<exprt> read_sva_local(const exprt &expr)
+{
+  const auto ref = local_reference(expr);
+  if(!ref)
+    return {};
+
+  const auto &sample = static_cast<const exprt &>(ref->local.find(ID_value));
+  const auto &holes = ref->local.get_string(ID_unassigned);
+  if(
+    sample.is_nil() ||
+    (!holes.empty() &&
+     (ref->width == 0 ||
+      bitwise_and(
+        string2integer(holes, 16), slice_mask(ref->offset, ref->width)) != 0)))
+    throw ebmc_errort{}.with_location(ref->local.source_location())
+      << "assertion local variable " << ref->local.get(ID_base_name)
+      << " is read before assignment";
+
+  if(ref->width == 0)
+    return sample;
+  if(expr.id() == ID_extractbit)
+    return extractbit_exprt{sample, ref->offset};
+  return extractbits_exprt{sample, ref->offset, expr.type()};
+}
+
 exprt bind_sva_locals(exprt expr, const sva_local_valuest &values)
 {
   if(!values.empty())
@@ -31,10 +93,54 @@ exprt bind_sva_locals(exprt expr, const sva_local_valuest &values)
         {
           auto it = values.find(node.get(ID_identifier));
           if(it != values.end())
-            node.set(ID_value, it->second);
+          {
+            node.set(ID_value, it->second.find(ID_value));
+            if(it->second.get(ID_unassigned).empty())
+              node.remove(ID_unassigned);
+            else
+              node.set(ID_unassigned, it->second.get(ID_unassigned));
+          }
         }
       });
   return expr;
+}
+
+// Keep unwritten bits in a separate mask. Their placeholder value is never
+// observable because read_sva_local checks the mask on every read.
+static void
+write_local_slice(exprt &local, const sva_local_referencet &ref, exprt value)
+{
+  const auto width = to_bitvector_type(local.type()).get_width();
+  const auto end = ref.offset + ref.width;
+  auto old = static_cast<const exprt &>(local.find(ID_value));
+  mp_integer holes = 0;
+  if(old.is_nil())
+  {
+    holes = slice_mask(0, width);
+    old = from_integer(0, local.type());
+  }
+  else if(!local.get(ID_unassigned).empty())
+    holes = string2integer(local.get_string(ID_unassigned), 16);
+
+  exprt::operandst parts;
+  if(end < width)
+    parts.push_back(extractbits_exprt{old, end, unsignedbv_typet{width - end}});
+  parts.push_back(std::move(value));
+  if(ref.offset != 0)
+    parts.push_back(extractbits_exprt{old, 0, unsignedbv_typet{ref.offset}});
+
+  if(parts.size() == 1)
+    local.set(
+      ID_value, typecast_exprt::conditional_cast(parts.front(), local.type()));
+  else
+    local.set(ID_value, concatenation_exprt{std::move(parts), local.type()});
+
+  if(holes != 0)
+    holes -= bitwise_and(holes, slice_mask(ref.offset, ref.width));
+  if(holes == 0)
+    local.remove(ID_unassigned);
+  else
+    local.set(ID_unassigned, integer2string(holes, 16));
 }
 
 static void capture_locals(
@@ -47,12 +153,22 @@ static void capture_locals(
   for(const auto &item : items.operands())
   {
     const auto &assignment = to_binary_expr(item);
-    const auto &id = assignment.lhs().get(ID_identifier);
-    if(assignment.rhs().is_nil())
-      values[id] = nil_exprt{};
+    const auto ref = local_reference(assignment.lhs()).value();
+    auto value =
+      assignment.rhs().is_nil()
+        ? nil_exprt{}
+        : instantiate(
+            bind_sva_locals(assignment.rhs(), values), t, no_timeframes);
+    // The target may already carry a sample from an earlier match endpoint.
+    auto &local =
+      values.try_emplace(ref.local.get(ID_identifier), ref.local).first->second;
+    if(ref.width != 0)
+      write_local_slice(local, ref, std::move(value));
     else
-      values[id] = instantiate(
-        bind_sva_locals(assignment.rhs(), values), t, no_timeframes);
+    {
+      local.set(ID_value, std::move(value));
+      local.remove(ID_unassigned);
+    }
   }
 }
 
@@ -147,9 +263,10 @@ sequence_matchest instantiate_sequence_rec(
     for(const auto &item : items.rhs().operands())
     {
       const auto &target = to_binary_expr(item).lhs();
-      if(target.id() != ID_sva_local)
-        throw ebmc_errort{}.with_location(target.source_location())
-          << "unsupported assignment to a slice of an assertion local variable";
+      if(!local_reference(target))
+        throw ebmc_errort{}.with_location(item.find_source_location())
+          << "assignment to an assertion local variable requires a fixed, "
+             "in-range bit or part select";
     }
     if(expr.get_bool(ID_initial))
     {

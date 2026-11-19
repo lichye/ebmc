@@ -1,0 +1,9 @@
+CORE
+local_slice_samples.sv
+--bound 3
+^\[main\.p_saved\].*: PROVED.*$
+^\[main\.p_live\].*: REFUTED$
+^\[main\.p_overlap\].*: PROVED.*$
+^\[main\.p_partial\].*: PROVED.*$
+^EXIT=10$
+^SIGNAL=0$

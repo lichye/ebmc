@@ -14,6 +14,9 @@ Author: Daniel Kroening, kroening@kroening.com
 #include "verilog_expr.h"
 #include "verilog_types.h"
 
+/// A local variable or a selection of one (1800-2017 16.10).
+bool is_sva_local_target(const exprt &);
+
 /// 1800-2017 16.6 Boolean expressions
 /// Conversion of a Boolean expression into a sequence or property
 class sva_boolean_exprt : public unary_exprt
