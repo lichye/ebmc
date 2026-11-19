@@ -379,8 +379,8 @@ protected:
   exprt
   elaborate_constant_function_call(const class function_call_exprt &) override;
 
-  void verilog_interpreter(const class verilog_statementt &);
-  
+  std::optional<exprt> verilog_interpreter(const class verilog_statementt &);
+
   // counter for assertions
   unsigned assertion_counter;
 };

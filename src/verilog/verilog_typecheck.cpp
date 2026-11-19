@@ -629,6 +629,42 @@ exprt verilog_typecheckt::elaborate_constant_function_call(
   const symbolt &function_symbol=
     ns.lookup(to_symbol_expr(function_call.function()));
 
+  const code_typet &code_type = to_code_type(function_symbol.type);
+
+  const code_typet::parameterst &parameters = code_type.parameters();
+
+  if(parameters.size() != arguments.size())
+  {
+    throw errort().with_location(function_call.source_location())
+      << "function call has wrong number of arguments";
+  }
+
+  // Evaluate every actual in the caller before installing the callee's
+  // automatic variables. Nested calls get a fresh return slot as well.
+  varst locals;
+  for(std::size_t i = 0; i < arguments.size(); ++i)
+  {
+    auto value = elaborate_constant_expression(arguments[i]);
+    if(!value.is_constant())
+      throw errort{}.with_location(arguments[i].source_location())
+        << "constant function argument is not constant";
+    locals.emplace(parameters[i].get_identifier(), std::move(value));
+  }
+  struct call_framet
+  {
+    varst &vars;
+    varst saved_vars;
+    irep_idt &name;
+    irep_idt saved_name;
+    ~call_framet()
+    {
+      vars.swap(saved_vars);
+      name = saved_name;
+    }
+  } frame{vars, std::move(vars), function_or_task_name, function_or_task_name};
+  vars = std::move(locals);
+  function_or_task_name = function_symbol.name;
+
   verilog_function_or_task_declt::bodyt function_body;
 
   // If the function is in a package, it is already type checked.
@@ -636,8 +672,6 @@ exprt verilog_typecheckt::elaborate_constant_function_call(
   {
     // typecheck it
     auto decl = to_verilog_tf_source(function_symbol.value).decl();
-
-    function_or_task_name = function_symbol.name;
 
     for(auto &inner_decl : decl.declarations())
       convert_decl(inner_decl);
@@ -653,42 +687,6 @@ exprt verilog_typecheckt::elaborate_constant_function_call(
       function_symbol.value);
   }
 
-  const code_typet &code_type=
-    to_code_type(function_symbol.type);
-
-  const code_typet::parameterst &parameters=
-    code_type.parameters();
-
-  if(parameters.size()!=arguments.size())
-  {
-    throw errort().with_location(function_call.source_location())
-      << "function call has wrong number of arguments";
-  }
-
-  // elaborate the arguments of the call and assign to parameter
-
-  varst old_vars;
-
-  for(std::size_t i=0; i<arguments.size(); i++)
-  {
-    exprt value = elaborate_constant_expression(arguments[i]);
-
-    if(!value.is_constant())
-    {
-      throw errort().with_location(arguments[i].source_location())
-        << "constant function argument is not constant";
-    }
-
-    irep_idt p_identifier=parameters[i].get_identifier();
-
-    old_vars[p_identifier]=var_value(p_identifier);
-    vars[p_identifier]=value;
-
-#if 0
-    status() << "ASSIGN " << p_identifier << " <- " << to_string(value) << eom;
-#endif
-  }
-
   // The return variable (and any local variables) start out with their
   // default value, i.e., 0 (IEEE 1800-2017 13.4.3). We initialise the
   // return variable here so that a function body that reads its own,
@@ -697,17 +695,10 @@ exprt verilog_typecheckt::elaborate_constant_function_call(
                                id2string(function_symbol.base_name);
   vars[return_identifier] = from_integer(0, code_type.return_type());
 
-  // interpret it
-  for(auto &statement : function_body.statements())
-    verilog_interpreter(statement);
-
-  function_or_task_name="";
-
-  // get return value
-
-  exprt return_value = var_value(return_identifier);
-
-  return return_value;
+  for(const auto &statement : function_body.statements())
+    if(auto result = verilog_interpreter(statement))
+      return *result;
+  return var_value(return_identifier);
 }
 
 /*******************************************************************\

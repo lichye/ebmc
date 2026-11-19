@@ -1,0 +1,6 @@
+CORE
+nested_constant_return.sv
+--bound 0
+^\[main\.p0\].*: PROVED.*$
+^EXIT=0$
+^SIGNAL=0$

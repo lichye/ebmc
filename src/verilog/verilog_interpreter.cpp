@@ -23,8 +23,8 @@ Function: verilog_typecheckt::verilog_interpreter
 
 \*******************************************************************/
 
-void verilog_typecheckt::verilog_interpreter(
-  const verilog_statementt &statement)
+std::optional<exprt>
+verilog_typecheckt::verilog_interpreter(const verilog_statementt &statement)
 {
   if(statement.id() == ID_verilog_blocking_assign)
   {
@@ -51,14 +51,16 @@ void verilog_typecheckt::verilog_interpreter(
   else if(statement.id()==ID_block)
   {
     for(const auto & s : statement.operands())
-      verilog_interpreter(to_verilog_statement(s));
+      if(auto result = verilog_interpreter(to_verilog_statement(s)))
+        return result;
   }
   else if(statement.id()==ID_for)
   {
     const verilog_fort &verilog_for=to_verilog_for(statement);
 
     for(auto &init : verilog_for.initialization())
-      verilog_interpreter(init);
+      if(auto result = verilog_interpreter(init))
+        return result;
 
     while(true)
     {
@@ -82,8 +84,10 @@ void verilog_typecheckt::verilog_interpreter(
         if(cond_i==0) break;
       }
 
-      verilog_interpreter(verilog_for.body());
-      verilog_interpreter(verilog_for.inc_statement());
+      if(auto result = verilog_interpreter(verilog_for.body()))
+        return result;
+      if(auto result = verilog_interpreter(verilog_for.inc_statement()))
+        return result;
     }
   }
   else if(statement.id() == ID_if)
@@ -112,13 +116,23 @@ void verilog_typecheckt::verilog_interpreter(
     }
 
     if(taken)
-      verilog_interpreter(verilog_if.then_case());
+      return verilog_interpreter(verilog_if.then_case());
     else if(verilog_if.has_else_case())
-      verilog_interpreter(verilog_if.else_case());
+      return verilog_interpreter(verilog_if.else_case());
+  }
+  else if(statement.id() == ID_return)
+  {
+    const auto &ret = to_verilog_return(statement);
+    auto value = elaborate_constant_expression(ret.value());
+    if(!value.is_constant())
+      throw errort{}.with_location(ret.source_location())
+        << "constant function return value is not constant";
+    return value;
   }
   else
   {
     throw errort().with_location(statement.source_location())
       << "Don't know how to interpret statement `" << statement.id() << '\'';
   }
+  return {};
 }
