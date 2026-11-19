@@ -2999,12 +2999,16 @@ exprt verilog_typecheck_exprt::elaborate_constant_system_function_call(
   {
     DATA_INVARIANT(arguments.size() == 1, "$isunknown takes one argument");
 
-    auto op = elaborate_constant_expression(arguments[0]);
-
+    // Substitute parameters and constant-function locals first. Lowering can
+    // erase a runtime operand (e.g. d + 'x), but that does not make the
+    // argument an elaboration-time constant (1800-2017 11.2.1).
+    auto op = elaborate_constant_expression_rec(arguments[0]);
+    if(has_subexpr(op, ID_symbol))
+      return std::move(expr);
+    op = verilog_constant_folding(std::move(op), ns);
     if(!op.is_constant())
-      return std::move(expr); // give up
-    else
-      return isunknown(to_constant_expr(op));
+      return std::move(expr);
+    return isunknown(to_constant_expr(op));
   }
   else
     return std::move(expr); // don't know it, won't elaborate

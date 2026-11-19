@@ -1,0 +1,6 @@
+CORE
+isunknown_runtime_argument.sv
+-DNONCONSTANT_PARAMETER
+expected constant expression
+^EXIT=2$
+^SIGNAL=0$

@@ -1,0 +1,8 @@
+CORE
+isunknown_runtime_argument.sv
+--bound 1
+^\[main\.p0\].*: PROVED.*$
+^\[main\.p1\].*: PROVED.*$
+^\[main\.p2\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
