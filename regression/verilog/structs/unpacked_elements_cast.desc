@@ -1,0 +1,6 @@
+CORE
+unpacked_elements_cast.sv
+--bound 0
+expected 2 elements, but got 4
+^EXIT=2$
+^SIGNAL=0$

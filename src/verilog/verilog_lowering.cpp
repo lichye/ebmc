@@ -174,7 +174,9 @@ exprt from_bitvector(
   // than extracting each member or element from the entire source.
   // When the source is, e.g., the concatenation of the values of the
   // elements of an array, each element is then taken from its operand,
-  // rather than from all of them.
+  // rather than from all of them. Encoded vectors have separate value
+  // and unknown planes; their storage offsets are not Verilog bit positions.
+  if(!is_aval_bval(src.type()))
   {
     const auto dest_width_opt = verilog_bits_opt(dest);
     const auto src_width_opt = bitvector_bits_opt(src.type());
@@ -320,6 +322,19 @@ exprt from_bitvector(
     }
 
     return array_exprt{std::move(element_values), array_type};
+  }
+  else if(is_aval_bval(src.type()))
+  {
+    if(is_four_valued(dest))
+    {
+      const bv_typet plane{to_bitvector_type(dest).get_width()};
+      return concatenation_exprt{
+        {extract(bval(src), offset, plane), extract(aval(src), offset, plane)},
+        lower_to_aval_bval(dest)};
+    }
+    // IEEE 1800-2017 6.11.2: both X and Z become zero in a two-state field.
+    return extract(
+      bitand_exprt{aval(src), bitnot_exprt{bval(src)}}, offset, dest);
   }
   else if(is_four_valued(dest))
   {
@@ -694,6 +709,16 @@ exprt verilog_lowering_cast(typecast_exprt expr)
 
   if(is_aval_bval(src_type))
   {
+    if(
+      dest_type.id() == ID_struct || dest_type.id() == ID_union ||
+      (dest_type.id() == ID_array &&
+       to_verilog_array_type(dest_type).is_packed()))
+    {
+      auto width = numeric_cast_v<std::size_t>(verilog_bits(dest_type));
+      const auto resized = aval_bval_conversion(
+        expr.op(), lower_to_aval_bval(verilog_unsignedbv_typet{width}));
+      return from_bitvector(resized, 0, dest_type);
+    }
     // When casting a four-valued scalar to bool,
     // 'true' is defined as a "nonzero known value" (1800-2017 12.4).
     return aval_bval(expr);
