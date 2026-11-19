@@ -1,0 +1,24 @@
+CORE
+literal_or_floating.sv
+--bound 2
+^\[main\.literal_can_be_zero\].*: REFUTED$
+^\[main\.undriven_not_zero\].*: PROVED.*$
+^\[main\.consistent\].*: PROVED.*$
+^\[main\.passed_data\].*: PROVED.*$
+^\[main\.literal_branch\].*: REFUTED$
+^\[main\.initial_value\].*: PROVED.*$
+^\[main\.inverted_literal\].*: REFUTED$
+^\[main\.controlling_zero\].*: PROVED.*$
+^\[main\.xor_unknown\].*: REFUTED$
+^\[main\.floating_bit\].*: PROVED.*$
+^\[main\.explicit_bit\].*: REFUTED$
+^\[main\.physical_gap\].*: PROVED.*$
+^\[main\.ordinary_gap\].*: REFUTED$
+^\[main\.known_true\].*: PROVED.*$
+^\[main\.unknown_index\].*: REFUTED$
+^\[main\.exact_x\].*: PROVED.*$
+^\[main\.differing_bit\].*: PROVED.*$
+^\[main\.repeated_x\].*: REFUTED$
+^\[main\.driven_bus\].*: PROVED.*$
+^EXIT=10$
+^SIGNAL=0$

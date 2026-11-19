@@ -208,6 +208,17 @@ public:
   // Nets whose drivers must retain x/z until resolution. An empty list
   // denotes an undriven net. Ordinary logic reads the public two-state net.
   std::map<irep_idt, std::vector<drivert>> resolved_nets;
+  /// Resolution points for Z-capable co-drivers, pull defaults or stored charge.
+  std::set<irep_idt> merging_nets;
+  /// Overlapping drivers whose disagreement makes a public bit unconstrained.
+  std::set<irep_idt> binary_conflicts;
+  /// Conditional drivers whose unknown control may leave some output bits known.
+  std::set<irep_idt> ambiguous_drives;
+  /// Ordinary expressions can propagate explicit X/Z, but a floating bit
+  /// supplies its public two-state input outside a physical driver.
+  std::set<irep_idt> literal_nets;
+  /// Physical sources that can present high impedance to another driver.
+  std::set<irep_idt> may_release;
 
   /// Each group denotes a single physical bit connected by inout ports.
   using net_bitt = std::pair<irep_idt, std::size_t>;

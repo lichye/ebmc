@@ -1,0 +1,10 @@
+CORE
+plain_inout.sv
+--show-trans
+^State constraints:
+^EXIT=0$
+^SIGNAL=0$
+--
+::drive
+::read
+::charge

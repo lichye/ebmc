@@ -1,0 +1,11 @@
+CORE
+sampled_unknown_control.sv
+--bound 1
+^\[main\.always_agree\].*: PROVED.*$
+^\[main\.literal_unknown\].*: REFUTED$
+^\[main\.can_drive_unknown\].*: REFUTED$
+^\[main\.x_dominates\].*: REFUTED$
+^\[main\.gap_release\].*: PROVED.*$
+^\[main\.gap_conflict\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

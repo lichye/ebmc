@@ -1,0 +1,19 @@
+CORE
+sampled_drivers.sv
+--bound 2
+^\[main\.known\].*: PROVED.*$
+^\[main\.alias_sample\].*: PROVED.*$
+^\[main\.consensus\].*: PROVED.*$
+^\[main\.separate_slices\].*: PROVED.*$
+^\[main\.free_high\].*: REFUTED$
+^\[main\.independent_bits\].*: REFUTED$
+^\[main\.independent_replication\].*: REFUTED$
+^\[main\.free_gap\].*: REFUTED$
+^\[main\.independent_frames\].*: REFUTED$
+^\[main\.disagreement\].*: REFUTED$
+^\[main\.gap_free\].*: REFUTED$
+^\[main\.known_drive\].*: PROVED.*$
+^\[main\.pattern_known\].*: PROVED.*$
+^\[main\.pattern_free\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

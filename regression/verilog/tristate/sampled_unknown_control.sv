@@ -1,0 +1,20 @@
+module main(input bit a);
+  wire enable = 1'bx;
+  wire [1:0] agrees = enable ? {1'b1,a} : {1'b1,!a};
+  wire [1:0] literal = 1'bx ? 2'b01 : 2'b10;
+  wire unknown_gate;
+  bufif1 (unknown_gate,a,1'bx);
+  wire y;
+  assign y = 1'bx;
+  assign y = a;
+  wire [2:0] gap;
+  assign gap[1] = a;
+  assign gap[1] = !a;
+  tri1 [2:0] pulled = gap;
+  gap_release: assert property (pulled[2] && pulled[0]);
+  gap_conflict: assert property (pulled[1]);
+  always_agree: assert property (agrees[1]);
+  literal_unknown: assert property (literal != 2'b11);
+  can_drive_unknown: assert property (unknown_gate == a);
+  x_dominates: assert property (y == a);
+endmodule

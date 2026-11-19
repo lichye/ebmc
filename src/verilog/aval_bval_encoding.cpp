@@ -154,6 +154,10 @@ exprt aval(const exprt &src)
   if(is_aval_bval(src.type()))
   {
     auto width = aval_bval_width(src.type());
+    if(
+      src.id() == ID_concatenation && src.operands().size() == 2 &&
+      src.operands()[1].type() == bv_typet{width})
+      return src.operands()[1];
     return extractbits_exprt{src, 0, bv_typet{width}};
   }
   else
@@ -185,6 +189,10 @@ exprt bval(const exprt &src)
   if(is_aval_bval(src.type()))
   {
     auto width = aval_bval_width(src.type());
+    if(
+      src.id() == ID_concatenation && src.operands().size() == 2 &&
+      src.operands()[0].type() == bv_typet{width})
+      return src.operands()[0];
     return extractbits_exprt{src, width, bv_typet{width}};
   }
   else
@@ -233,7 +241,7 @@ exprt aval_bval_conversion(const exprt &src, const typet &dest)
     if(src_width == dest_width)
     {
       // same size
-      return typecast_exprt{src, dest};
+      return typecast_exprt::conditional_cast(src, dest);
     }
     else if(src_width > dest_width)
     {

@@ -181,6 +181,7 @@ protected:
     exprt,
     const source_locationt &,
     bool constraint = false);
+  void collapse_inout_drivers();
   void finish_net_drivers();
 
   // module instantiation
@@ -4347,13 +4348,19 @@ void verilog_rtl_buildert::net_assignment(
 // An assignment or connection can carry x/z through a select, a resize,
 // a concatenation, or the arms of a conditional. Ordinary logic reads the
 // public two-valued value of each net.
-static bool drive_sources(const exprt &value, std::set<irep_idt> &sources)
+static bool drive_sources(
+  const exprt &value,
+  std::set<irep_idt> &sources,
+  bool release_only = false)
 {
   if(is_tristate_switch(value.id()))
+  {
+    for(const auto &op : value.operands())
+      drive_sources(op, sources, release_only);
     return true;
-  if(value.is_constant())
-    return is_four_valued(value) &&
-           value.get_string(ID_value).find_first_of("xz?") != std::string::npos;
+  }
+  if(is_verilog_unknown_literal(value, release_only))
+    return true;
   if(value.id() == ID_symbol)
     sources.insert(to_symbol_expr(value).get_identifier());
   if(
@@ -4364,25 +4371,158 @@ static bool drive_sources(const exprt &value, std::set<irep_idt> &sources)
     value.id() == ID_verilog_bit_select ||
     value.id() == ID_verilog_non_indexed_part_select ||
     value.id() == ID_verilog_indexed_part_select_plus ||
-    value.id() == ID_verilog_indexed_part_select_minus)
+    value.id() == ID_verilog_indexed_part_select_minus ||
+    is_verilog_drive_operator(value.id()))
   {
+    if(
+      release_only && is_verilog_drive_operator(value.id()) &&
+      value.id() != ID_shl && value.id() != ID_lshr && value.id() != ID_ashr &&
+      value.id() != ID_zero_extend)
+      return false; // ordinary gates can produce X, but not high impedance
+    auto first = value.operands().begin(), last = value.operands().end();
+    if(release_only)
+    {
+      // A selector can make the selected value unknown, but cannot
+      // release a net if neither data operand can release it.
+      if(value.id() == ID_if || value.id() == ID_replication)
+        ++first;
+      else if(value.id() != ID_concatenation)
+        last = first + 1;
+    }
     bool four_valued = false;
-    for(const auto &op : value.operands())
-      four_valued |= drive_sources(op, sources);
+    for(auto it = first; it != last; ++it)
+      four_valued |= drive_sources(*it, sources, release_only);
     return four_valued;
   }
   return false;
 }
 
+// Resolve the drivers of a collapsed inout bit once, at a single name.
+// A group with several pulls or stored charges retains its separate defaults.
+void verilog_rtl_buildert::collapse_inout_drivers()
+{
+  if(inout_bits.size() == 0)
+    return;
+  decltype(rtl.inout_groups) groups;
+  for(std::size_t n = 0; n < inout_bits.size(); ++n)
+    groups[inout_bits.find_number(n)].push_back(inout_bits[n]);
+
+  std::map<irep_idt, std::map<std::size_t, net_bitt>> aliases;
+  for(auto &group : groups)
+  {
+    const net_bitt *representative = &group.second.front(), *fallback = nullptr;
+    bool keep_defaults = false;
+    for(const auto &bit : group.second)
+    {
+      const auto &net = ns.lookup(bit.first);
+      const auto kind = net.type.get("#net_kind");
+      if(kind == ID_tri0 || kind == ID_tri1 || kind == ID_trireg)
+      {
+        keep_defaults |= fallback != nullptr;
+        fallback = &bit;
+      }
+      if(rtl.identifier_map.count(bit.first))
+        throw errort{}.with_location(net.location)
+          << "`" << net.name << "' has multiple drivers";
+      // Pick the same physical owner for contiguous bits when possible.
+      if(bit < *representative)
+        representative = &bit;
+    }
+    if(keep_defaults)
+    {
+      rtl.inout_groups.emplace(group.first, std::move(group.second));
+      continue;
+    }
+    if(fallback)
+      representative = fallback;
+    for(const auto &bit : group.second)
+      if(bit != *representative)
+        aliases[bit.first].emplace(bit.second, *representative);
+  }
+
+  // Move only the portions of a driver whose physical bit has another name.
+  // Preserve wide drivers and untouched slices in their original form.
+  for(const auto &[id, bits] : aliases)
+  {
+    auto &drivers = net_drivers[id];
+    auto original = std::move(drivers);
+    drivers.clear();
+    for(auto &d : original)
+    {
+      const auto &slice = d.drive.slice;
+      auto first = numeric_cast_v<std::size_t>(slice.lower);
+      const auto last = numeric_cast_v<std::size_t>(slice.higher);
+      auto it = bits.lower_bound(first);
+      if(it == bits.end() || it->first > last)
+      {
+        drivers.push_back(std::move(d));
+        continue;
+      }
+      auto move_slice =
+        [&](const net_bitt &dest, std::size_t lo, std::size_t hi)
+      {
+        const verilog_rtl_slicet target{dest.second, dest.second + (hi - lo)};
+        const auto &rhs = d.drive.value;
+        exprt value;
+        if(lo == slice.lower && hi == slice.higher)
+          value = rhs;
+        else if(
+          can_cast_type<bitvector_typet>(rhs.type()) || ::is_four_valued(rhs))
+        {
+          // Extract from the original drive. Flattening it to a public
+          // two-state vector here would discard a released bit.
+          auto offset =
+            from_integer(mp_integer(lo) - slice.lower, integer_typet{});
+          value = lo == hi ? static_cast<exprt>(extractbit_exprt{rhs, offset})
+                           : static_cast<exprt>(extractbits_exprt{
+                               rhs, offset, unsignedbv_typet{hi - lo + 1}});
+        }
+        else
+          value = extract_range(rhs, slice, {lo, hi});
+        net_drivers[dest.first].push_back(
+          {{target, std::move(value)}, d.location, {}});
+      };
+      while(it != bits.end() && it->first <= last)
+      {
+        const auto begin = it++;
+        if(first < begin->first)
+          move_slice({id, first}, first, begin->first - 1);
+        auto end = begin->first;
+        while(it != bits.end() && it->first <= last && it->first == end + 1 &&
+              it->second.first == begin->second.first &&
+              it->second.second ==
+                begin->second.second + it->first - begin->first)
+          end = (it++)->first;
+        move_slice(begin->second, begin->first, end);
+        first = end + 1;
+      }
+      if(first <= last)
+        move_slice({id, first}, first, last);
+    }
+    for(const auto &[index, other] : bits)
+    {
+      const auto &net = ns.lookup(other.first);
+      const auto source = net.symbol_expr();
+      auto bit = extract_range(
+        source, whole_slice(source), {other.second, other.second});
+      drivers.push_back({{{index, index}, std::move(bit)}, net.location, {}});
+    }
+  }
+}
+
 void verilog_rtl_buildert::finish_net_drivers()
 {
-  std::set<irep_idt> resolved;
-  for(std::size_t n = 0; n < inout_bits.size(); ++n)
-  {
-    auto &bit = inout_bits[n];
-    rtl.inout_groups[inout_bits.find_number(n)].push_back(bit);
-    resolved.insert(bit.first);
-  }
+  collapse_inout_drivers();
+  std::set<irep_idt> resolved, may_release, overlaps, full, inouts;
+  std::map<irep_idt, std::set<irep_idt>> dependencies;
+  for(const auto &group : rtl.inout_groups)
+    for(const auto &bit : group.second)
+    {
+      resolved.insert(bit.first);
+      may_release.insert(bit.first);
+      full.insert(bit.first);
+      inouts.insert(bit.first);
+    }
   // Only primary inputs receive an external drive. An open net port on
   // an instance releases the net just like any other missing driver.
   std::set<irep_idt> primary_inputs;
@@ -4390,7 +4530,8 @@ void verilog_rtl_buildert::finish_net_drivers()
     if(port.input())
       primary_inputs.insert(port.identifier());
 
-  std::map<irep_idt, std::vector<irep_idt>> dependents;
+  using dependents_mapt = std::map<irep_idt, std::vector<irep_idt>>;
+  dependents_mapt dependents, release_dependents;
   for(const auto &id : declared_nets)
   {
     const auto &symbol = ns.lookup(id);
@@ -4399,19 +4540,32 @@ void verilog_rtl_buildert::finish_net_drivers()
       kind == ID_trireg || kind == ID_tri0 || kind == ID_tri1 ||
       (!primary_inputs.count(id) && !net_drivers.count(id) &&
        !rtl.forced.count(id) && !rtl.identifier_map.count(id)))
+    {
       resolved.insert(id);
+      if(kind == ID_trireg || kind == ID_tri0 || kind == ID_tri1)
+        full.insert(id);
+      else
+        may_release.insert(id);
+    }
   }
   for(const auto &entry : net_drivers)
   {
     const auto &symbol = ns.lookup(entry.first);
     if(!is_tristate_net_type(symbol.type))
       continue;
-    std::set<irep_idt> sources;
+    auto &sources = dependencies[entry.first];
+    std::set<irep_idt> release_sources;
     std::map<mp_integer, mp_integer> ranges;
     for(const auto &d : entry.second)
     {
       if(drive_sources(d.drive.value, sources))
         resolved.insert(entry.first);
+      if(has_subexpr(
+           d.drive.value,
+           [](const exprt &op) { return is_verilog_unknown_literal(op); }))
+        rtl.literal_nets.insert(entry.first);
+      if(drive_sources(d.drive.value, release_sources, true))
+        may_release.insert(entry.first);
       const auto &s = d.drive.slice;
       auto after = ranges.upper_bound(s.higher);
       if(after != ranges.begin() && std::prev(after)->second >= s.lower)
@@ -4420,6 +4574,7 @@ void verilog_rtl_buildert::finish_net_drivers()
           throw errort{}.with_location(d.location)
             << "`" << symbol.name << "' has multiple drivers";
         resolved.insert(entry.first);
+        overlaps.insert(entry.first);
       }
       auto interval = ranges.emplace(s.lower, s.higher).first;
       interval->second = std::max(interval->second, s.higher);
@@ -4436,37 +4591,202 @@ void verilog_rtl_buildert::finish_net_drivers()
         next = std::max(next, range.second + 1);
       }
       if(next < verilog_bits(symbol.type))
+      {
         resolved.insert(entry.first);
+        may_release.insert(entry.first);
+      }
     }
     for(const auto &source : sources)
       dependents[source].push_back(entry.first);
+    for(const auto &source : release_sources)
+      release_dependents[source].push_back(entry.first);
   }
-  std::vector<irep_idt> work(resolved.begin(), resolved.end());
-  while(!work.empty())
+  auto propagate = [&](
+                     std::set<irep_idt> &signals,
+                     const dependents_mapt &edges,
+                     bool release_only)
   {
-    auto source = work.back();
-    work.pop_back();
-    for(const auto &dest : dependents[source])
-      if(resolved.insert(dest).second)
-        work.push_back(dest);
+    std::vector<irep_idt> work(signals.begin(), signals.end());
+    while(!work.empty())
+    {
+      auto source = work.back();
+      work.pop_back();
+      if(release_only && !inouts.count(source))
+      {
+        const auto kind = ns.lookup(source).type.get("#net_kind");
+        if(kind == ID_tri0 || kind == ID_tri1 || kind == ID_trireg)
+          continue; // A pull or a stored charge takes over on release.
+      }
+      auto next = edges.find(source);
+      if(next != edges.end())
+        for(const auto &dest : next->second)
+        {
+          if(signals.insert(dest).second)
+            work.push_back(dest);
+        }
+    }
+  };
+  propagate(resolved, dependents, false);
+  propagate(rtl.literal_nets, dependents, false);
+  propagate(may_release, release_dependents, true);
+  for(const auto &entry : net_drivers)
+  {
+    const auto kind = ns.lookup(entry.first).type.get("#net_kind");
+    if(
+      (kind == ID_tri0 || kind == ID_tri1) && !inouts.count(entry.first) &&
+      !may_release.count(entry.first))
+      full.erase(entry.first);
   }
+  for(const auto &id : overlaps)
+  {
+    const auto &net = ns.lookup(id);
+    const auto base = net.symbol_expr();
+    const auto kind = net.type.get("#net_kind");
+    const bool has_default =
+      kind == ID_tri0 || kind == ID_tri1 || kind == ID_trireg;
+    std::vector<const pending_drivert *> sorted;
+    for(const auto &d : net_drivers.at(id))
+      sorted.push_back(&d);
+    std::sort(
+      sorted.begin(),
+      sorted.end(),
+      [](const auto *a, const auto *b)
+      { return a->drive.slice < b->drive.slice; });
+    mp_integer previous_end = -1;
+    for(auto it = sorted.begin(); it != sorted.end(); ++it)
+    {
+      const auto &d = (*it)->drive;
+      const bool shared =
+        d.slice.lower <= previous_end ||
+        (std::next(it) != sorted.end() &&
+         (*std::next(it))->drive.slice.lower <= d.slice.higher);
+      previous_end = std::max(previous_end, d.slice.higher);
+      if(shared)
+      {
+        std::set<irep_idt> sources;
+        if(
+          drive_sources(d.value, sources, true) ||
+          std::any_of(
+            sources.begin(),
+            sources.end(),
+            [&](const auto &s)
+            {
+              const auto k = ns.lookup(s).type.get("#net_kind");
+              return may_release.count(s) &&
+                     (inouts.count(s) ||
+                      (k != ID_tri0 && k != ID_tri1 && k != ID_trireg));
+            }))
+          full.insert(id);
+      }
+      else if(!has_default && is_verilog_net_connection(d.value))
+      {
+        // This slice still has a direct connection, even if a different
+        // bit of the vector has conflicting drivers.
+        auto lhs = extract_range(base, whole_slice(base), d.slice);
+        rtl.constraints.push_back(
+          equal_exprt{lhs, port_connection_conversion(d.value, lhs.type())});
+      }
+    }
+    if(!full.count(id))
+      rtl.binary_conflicts.insert(id);
+  }
+
+  // Preserve the existing four-state evaluation of ambiguous mux and gate
+  // controls. Their public two-state outputs need only constrain known bits.
+  auto unknown_control = [&](const exprt &value)
+  {
+    std::set<irep_idt> sources;
+    return drive_sources(value, sources) ||
+           std::any_of(
+             sources.begin(),
+             sources.end(),
+             [&](const auto &id) { return rtl.literal_nets.count(id) != 0; });
+  };
   for(const auto &id : resolved)
+  {
+    auto it = net_drivers.find(id);
+    if(it == net_drivers.end() || full.count(id) || overlaps.count(id))
+      continue;
+    for(const auto &d : it->second)
+      if(has_subexpr(
+           d.drive.value,
+           [&](const exprt &op)
+           {
+             if(op.id() == ID_if)
+               return unknown_control(to_if_expr(op).cond());
+             if(is_verilog_drive_operator(op.id()))
+               return unknown_control(op);
+             if(
+               op.id() == ID_verilog_bit_select || op.id() == ID_index ||
+               op.id() == ID_verilog_indexed_part_select_plus ||
+               op.id() == ID_verilog_indexed_part_select_minus ||
+               op.id() == ID_extractbit || op.id() == ID_extractbits)
+               return unknown_control(op.operands()[1]);
+             if(op.id() == ID_replication)
+             {
+               const auto &part = to_replication_expr(op).op();
+               return !part.is_constant() && unknown_control(part);
+             }
+             if(is_tristate_switch(op.id()))
+               return std::any_of(
+                 op.operands().begin() + 1,
+                 op.operands().end(),
+                 unknown_control);
+             return false;
+           }))
+        rtl.ambiguous_drives.insert(id);
+  }
+
+  // Only sources consumed as drives need to retain release and unknown
+  // information across aliases. A normal two-state read uses the public net.
+  std::set<irep_idt> encoded = full;
+  encoded.insert(rtl.binary_conflicts.begin(), rtl.binary_conflicts.end());
+  encoded.insert(rtl.ambiguous_drives.begin(), rtl.ambiguous_drives.end());
+  std::vector<irep_idt> pending(encoded.begin(), encoded.end());
+  while(!pending.empty())
+  {
+    const auto id = pending.back();
+    pending.pop_back();
+    for(const auto &source : dependencies[id])
+      if(resolved.count(source) && encoded.insert(source).second)
+        pending.push_back(source);
+  }
+  rtl.merging_nets = std::move(full);
+  rtl.may_release = std::move(may_release);
+  for(const auto &id : encoded)
   {
     if(rtl.identifier_map.count(id))
       throw errort{}.with_location(ns.lookup(id).location)
         << "`" << id << "' has multiple drivers";
     auto &drivers = rtl.resolved_nets[id];
     for(auto &d : net_drivers[id])
-      drivers.push_back(std::move(d.drive));
+      drivers.push_back(d.drive);
     if(ns.lookup(id).is_lvalue)
       rtl.forced.insert(id);
   }
   for(auto &entry : net_drivers)
   {
-    if(resolved.count(entry.first))
+    if(
+      rtl.merging_nets.count(entry.first) ||
+      rtl.binary_conflicts.count(entry.first) ||
+      rtl.ambiguous_drives.count(entry.first))
       continue;
+    std::size_t next_unknown = 0;
+    auto fresh = [&](const typet &type)
+    {
+      return nondet_symbol_exprt{
+        id2string(entry.first) + "::sample" + std::to_string(next_unknown++),
+        type};
+    };
     for(auto &d : entry.second)
     {
+      if(has_subexpr(
+           d.drive.value,
+           [](const exprt &op) {
+             return is_tristate_switch(op.id()) ||
+                    is_verilog_unknown_literal(op);
+           }))
+        d.drive.value = verilog_sample_drive(d.drive.value, fresh);
       if(d.constraint_lhs)
         rtl.constraints.push_back(
           equal_exprt{*d.constraint_lhs, d.drive.value});

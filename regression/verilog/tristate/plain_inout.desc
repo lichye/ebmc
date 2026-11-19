@@ -1,0 +1,10 @@
+CORE
+plain_inout.sv
+--bound 1
+^\[main\.aliases\].*: PROVED.*$
+^\[main\.agreed\].*: PROVED.*$
+^\[main\.conflict\].*: REFUTED$
+^\[main\.source\].*: PROVED.*$
+^\[main\.free_top\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

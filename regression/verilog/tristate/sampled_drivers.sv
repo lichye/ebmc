@@ -1,0 +1,35 @@
+module main(input bit a, b, clk);
+  wire [3:0] literal = {a, 2'bxz, 1'b1};
+  wire [2:0] partial;
+  assign partial[1] = a;
+  wire [3:0] alias_wire = literal;
+  wire [2:0] conflict;
+  assign conflict[2:1] = {a, a};
+  assign conflict[1:0] = {b, b};
+  wire [1:0] gap;
+  assign gap[0] = a;
+  assign gap[0] = b;
+  wire select_z = 1'bz;
+  wire [1:0] both;
+  assign both = select_z ? {1'b1, a} : {1'b1, b};
+  assign both = {1'b1, a};
+  gap_free: assert property (gap[1]);
+  known_drive: assert property (both[1]);
+  wire [2:0] replicated = {3{1'bx}};
+  wire [3:0] pattern = {2{{a, 1'bx}}};
+  pattern_known: assert property (pattern[3] == a && pattern[1] == a);
+  pattern_free: assert property (pattern[2] == pattern[0]);
+  reg valid = 0;
+  always @(posedge clk) valid <= 1;
+
+  known: assert property (literal[3] == a && literal[0] && partial[1] == a);
+  alias_sample: assert property (alias_wire == literal && (partial ^ partial) == 0);
+  free_high: assert property (literal[2]);
+  independent_bits: assert property (literal[2] == literal[1]);
+  independent_replication: assert property (replicated[0] == replicated[1]);
+  free_gap: assert property (partial[2] == partial[0]);
+  independent_frames: assert property (valid |-> $stable(literal[2]));
+  consensus: assert property ((a == b) |-> conflict[1] == a);
+  separate_slices: assert property (conflict[2] == a && conflict[0] == b);
+  disagreement: assert property ((a != b) |-> conflict[1] == a);
+endmodule
