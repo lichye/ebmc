@@ -241,6 +241,22 @@ static exprt verilog_simplifier_rec(exprt expr, const namespacet &ns)
       expr = onehot0(to_constant_expr(op), ns);
   }
 
+  if(expr.id() == ID_power)
+  {
+    const auto &power = to_power_expr(expr);
+    const auto exponent = numeric_cast<mp_integer>(power.exponent());
+    const auto base = numeric_cast<mp_integer>(power.base());
+    // IEEE 1800-2017 Table 11-4. Never pass a negative exponent to the
+    // generic integer power routine, which only operates on naturals.
+    if(base && exponent && *exponent < 0)
+    {
+      const mp_integer value = *base == 1    ? 1
+                               : *base == -1 ? (exponent->is_even() ? 1 : -1)
+                                             : 0;
+      return restore_annotations(from_integer(value, expr.type()));
+    }
+  }
+
   // We fall back to the simplifier to approximate
   // the standard's definition of 'constant expression'.
   auto simplified_expr = simplify_expr(expr, ns);

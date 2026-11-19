@@ -1,0 +1,8 @@
+CORE
+negative_integer_power.sv
+--bound 0
+^\[main\.p0\].*: PROVED.*$
+^\[main\.p1\].*: PROVED.*$
+^\[main\.p2\].*: PROVED.*$
+^EXIT=0$
+^SIGNAL=0$
