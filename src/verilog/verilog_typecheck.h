@@ -286,6 +286,12 @@ protected:
     const symbolt &symbol,
     exprt &trans);
 
+  void expand_wildcard_ports(
+    exprt::operandst &,
+    const module_typet::portst &,
+    const instance_array_dimst &dims = {},
+    const mp_integer &number_of_elements = 1);
+
   void typecheck_port_connections(
     verilog_inst_baset::instancet &,
     const symbolt &symbol);

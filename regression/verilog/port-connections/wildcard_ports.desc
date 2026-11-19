@@ -1,0 +1,7 @@
+CORE
+wildcard_ports.sv
+--bound 0
+^\[main\.p0\].*: PROVED.*$
+^\[main\.g\.p1\].*: PROVED.*$
+^EXIT=0$
+^SIGNAL=0$

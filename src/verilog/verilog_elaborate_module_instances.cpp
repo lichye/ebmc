@@ -733,16 +733,11 @@ void verilog_typecheckt::expand_instance_array(
 
   if(named)
   {
+    expand_wildcard_ports(connections, first_ports, dims, number_of_elements);
     std::set<irep_idt> assigned_ports;
 
     for(auto &connection : connections)
     {
-      if(connection.id() == ID_verilog_wildcard_port_connection)
-      {
-        throw errort{}.with_location(connection.source_location())
-          << "no support for wildcard port connections on instance arrays";
-      }
-
       if(connection.id() != ID_verilog_named_port_connection)
       {
         throw errort().with_location(instance.source_location())

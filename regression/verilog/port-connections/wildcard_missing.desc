@@ -1,0 +1,6 @@
+CORE
+wildcard_missing.sv
+--show-rtl
+wildcard port.*missing.*no matching declaration
+^EXIT=2$
+^SIGNAL=0$

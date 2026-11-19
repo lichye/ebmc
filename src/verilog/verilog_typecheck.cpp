@@ -26,7 +26,9 @@ Author: Daniel Kroening, kroening@kroening.com
 #include "verilog_expr.h"
 #include "verilog_tristate.h"
 #include "verilog_types.h"
+#include "vtype.h"
 
+#include <algorithm>
 #include <cassert>
 #include <functional>
 #include <map>
@@ -216,6 +218,99 @@ Function: verilog_typecheckt::typecheck_port_connections
 
 \*******************************************************************/
 
+static bool wildcard_types_match(const typet &formal, const typet &actual)
+{
+  if(
+    formal.get(ID_C_verilog_type) == ID_verilog_enum ||
+    actual.get(ID_C_verilog_type) == ID_verilog_enum)
+    return formal.get(ID_C_verilog_type) == actual.get(ID_C_verilog_type) &&
+           formal.get(ID_C_identifier) == actual.get(ID_C_identifier);
+  if(formal.id() == ID_array && actual.id() == ID_array)
+  {
+    const auto &a = to_verilog_array_type(formal);
+    const auto &b = to_verilog_array_type(actual);
+    return a.is_packed() == b.is_packed() && a.size_int() == b.size_int() &&
+           wildcard_types_match(a.element_type(), b.element_type());
+  }
+  const vtypet a{formal}, b{actual};
+  if(
+    (a.is_signed_integral() || a.is_unsigned_integral()) &&
+    (b.is_signed_integral() || b.is_unsigned_integral()))
+    return a.get_width() == b.get_width() &&
+           a.is_signed_integral() == b.is_signed_integral() &&
+           is_four_state_vector(formal) == is_four_state_vector(actual);
+  return formal == actual;
+}
+
+void verilog_typecheckt::expand_wildcard_ports(
+  exprt::operandst &connections,
+  const module_typet::portst &ports,
+  const instance_array_dimst &dims,
+  const mp_integer &number_of_elements)
+{
+  auto wildcard = std::find_if(
+    connections.begin(),
+    connections.end(),
+    [](const exprt &c)
+    { return c.id() == ID_verilog_wildcard_port_connection; });
+  if(wildcard == connections.end())
+    return;
+  const auto location = wildcard->source_location();
+  connections.erase(wildcard);
+
+  std::set<irep_idt> explicit_ports;
+  for(const auto &connection : connections)
+  {
+    if(connection.id() == ID_verilog_wildcard_port_connection)
+      throw errort{}.with_location(connection.source_location())
+        << "wildcard connection given more than once";
+    if(connection.id() == ID_verilog_named_port_connection)
+      explicit_ports.insert(
+        to_verilog_identifier_expr(
+          to_verilog_named_port_connection(connection).port())
+          .base_name());
+  }
+
+  for(const auto &port : ports)
+  {
+    const auto name = port.base_name();
+    if(explicit_ports.count(name))
+      continue;
+    const auto *actual = resolve(name);
+    if(!actual)
+    {
+      // The ordinary unconnected-input path supplies the port default.
+      if(port.input() && ns.lookup(port.identifier()).value.is_not_nil())
+        continue;
+      throw errort{}.with_location(location)
+        << "wildcard port `" << name << "' has no matching declaration";
+    }
+
+    auto value = actual->symbol_expr().with_source_location(location);
+    auto element =
+      dims.empty()
+        ? exprt{value}
+        : instance_array_element_connection(
+            value, port.type(), dims, number_of_elements, 0, location);
+    // Splitting a packed connection yields an unsigned slice of the
+    // original state domain, even when that slice is one bit wide.
+    if(
+      (element.id() == ID_verilog_bit_select ||
+       element.id() == ID_verilog_non_indexed_part_select) &&
+      is_four_state_vector(value.type()))
+      element.type().set(ID_C_verilog_vector_type, ID_verilog_logic);
+    const auto &element_type = element.type();
+    if(actual->is_type || !wildcard_types_match(port.type(), element_type))
+      throw errort{}.with_location(location)
+        << "wildcard port `" << name << "' of type " << to_string(port.type())
+        << " does not match actual type " << to_string(element_type);
+    connections.push_back(verilog_inst_baset::named_port_connectiont{
+      verilog_identifier_exprt{name}.with_source_location(location),
+      std::move(value)}
+                            .with_source_location(location));
+  }
+}
+
 void verilog_typecheckt::typecheck_port_connections(
   verilog_inst_baset::instancet &inst,
   const symbolt &symbol)
@@ -242,27 +337,11 @@ void verilog_typecheckt::typecheck_port_connections(
   {
     // We don't require that all ports are connected.
 
+    expand_wildcard_ports(inst.connections(), ports);
     std::set<irep_idt> assigned_ports;
-    bool wildcard = false;
 
     for(auto &connection : inst.connections())
     {
-      if(connection.id() == ID_verilog_wildcard_port_connection)
-      {
-        // .*
-        if(wildcard)
-        {
-          // .* can only be given once
-          throw errort{}.with_location(connection.source_location())
-            << "wildcard connection given more than once";
-        }
-        else
-        {
-          wildcard = true;
-          continue;
-        }
-      }
-
       if(connection.id() != ID_verilog_named_port_connection)
       {
         throw errort().with_location(inst.source_location())
@@ -273,7 +352,7 @@ void verilog_typecheckt::typecheck_port_connections(
         to_verilog_named_port_connection(connection);
 
       exprt &value = named_port_connection.value();
-      const irep_idt &base_name =
+      const irep_idt base_name =
         to_verilog_identifier_expr(named_port_connection.port()).base_name();
 
       bool found=false;
