@@ -4014,6 +4014,33 @@ Function: verilog_rtl_buildert::commit
 
 \*******************************************************************/
 
+static std::string
+driver_slice(const verilog_rtl_slicet &slice, const typet &type)
+{
+  // For vectors report the declared coordinates, including ascending ranges.
+  mp_integer left = slice.higher, right = slice.lower;
+  if(
+    type.id() == ID_signedbv || type.id() == ID_unsignedbv ||
+    is_four_valued(type))
+  {
+    auto offset = to_verilog_vector_type(type).offset();
+    if(type.get_bool(ID_C_increasing))
+    {
+      const auto last = offset + verilog_bits(type) - 1;
+      left = last - slice.higher;
+      right = last - slice.lower;
+    }
+    else
+    {
+      left += offset;
+      right += offset;
+    }
+  }
+  if(left == right)
+    return "[" + integer2string(left) + "]";
+  return "[" + integer2string(left) + ":" + integer2string(right) + "]";
+}
+
 void verilog_rtl_buildert::commit(
   const statet &state,
   kindt kind,
@@ -4054,13 +4081,17 @@ void verilog_rtl_buildert::commit(
           if(existing.first.overlaps(slice))
           {
             throw errort().with_location(source_location)
-              << "`" << identifier << "' has multiple drivers";
+              << "`" << identifier << "' has multiple drivers\n  "
+              << driver_slice(slice, ns.lookup(identifier).type) << " overlaps "
+              << driver_slice(existing.first, ns.lookup(identifier).type)
+              << " driven at " << existing.second.driver_location.as_string();
           }
         }
       }
 
       slice_map.emplace(
-        slice, verilog_rtl_definitiont{kind, slice_entry.second});
+        slice,
+        verilog_rtl_definitiont{kind, slice_entry.second, source_location});
     }
   }
 }
@@ -4541,16 +4572,7 @@ void verilog_rtlt::output_undriven(const namespacet &ns, std::ostream &out)
     {
       out << "UNDRIVEN\t" << net.display_name();
       if(range.width() != width)
-      {
-        const mp_integer offset = net.type.get_int(ID_C_offset);
-        const bool increasing = net.type.get_bool(ID_C_increasing);
-        auto index = [&](const mp_integer &n)
-        { return offset + (increasing ? width - 1 - n : n); };
-        out << '[' << index(range.higher);
-        if(range.lower != range.higher)
-          out << ':' << index(range.lower);
-        out << ']';
-      }
+        out << driver_slice(range, net.type);
       out << '\t' << net.location.get_file() << ':' << net.location.get_line()
           << '\n';
     }

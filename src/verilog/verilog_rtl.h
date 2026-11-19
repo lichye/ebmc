@@ -98,8 +98,12 @@ public:
   /// same identifier are well-founded, and are not listed.
   std::vector<verilog_rtl_slicet> cyclic_slices;
 
-  verilog_rtl_definitiont(kindt _kind, exprt _value)
-    : kind(_kind), value(std::move(_value))
+  source_locationt driver_location;
+
+  verilog_rtl_definitiont(kindt _kind, exprt _value, source_locationt _location)
+    : kind(_kind),
+      value(std::move(_value)),
+      driver_location(std::move(_location))
   {
   }
 

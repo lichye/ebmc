@@ -1,0 +1,7 @@
+CORE
+overlapping_drivers.sv
+--bound 1
+has multiple drivers$
+\[1:0\].*\[2:1\].*overlapping_drivers\.sv.*line 3
+^EXIT=2$
+^SIGNAL=0$
