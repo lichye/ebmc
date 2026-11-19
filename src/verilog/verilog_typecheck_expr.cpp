@@ -778,6 +778,11 @@ void verilog_typecheck_exprt::downwards_type_propagation(
     // The LHS is context-determined, the RHS is self-determined
     auto &binary_expr = to_binary_expr(expr);
     downwards_type_propagation(binary_expr.lhs(), type);
+    // IEEE 1800-2017 11.8.2: >>> zero-fills when its propagated type is unsigned.
+    if(
+      expr.id() == ID_ashr && type.id() != ID_signedbv &&
+      type.id() != ID_verilog_signedbv)
+      expr.id(ID_lshr);
     expr.type() = type;
     return;
   }

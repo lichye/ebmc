@@ -1,0 +1,6 @@
+CORE
+unsigned-context-ashr.sv
+--top m
+^\[m\.p\].*: PROVED .*$
+^EXIT=0$
+^SIGNAL=0$
