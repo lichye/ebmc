@@ -497,6 +497,12 @@ void verilog_typecheckt::collect_symbols(const verilog_declt &decl)
 
   const auto decl_class = decl.get_class();
 
+  if(
+    !function_or_task_name.empty() &&
+    decl.find(ID_verilog_lifetime).id() == ID_static)
+    symbol_table.get_writeable_ref(function_or_task_name)
+      .type.set("verilog_has_static_locals", true);
+
   // Typedef?
   if(decl_class == ID_typedef)
   {
@@ -927,6 +933,9 @@ void verilog_typecheckt::collect_symbols(
   symbol.pretty_name = strip_verilog_root_prefix(symbol.name);
   symbol.module = verilog_root_module_identifier();
   symbol.value = verilog_tf_sourcet{decl}; // copy the entire declaration
+  const auto lifetime = decl.find(ID_verilog_lifetime).id();
+  if(lifetime == ID_static || lifetime == ID_automatic)
+    symbol.type.set(ID_verilog_lifetime, lifetime);
 
   add_symbol(symbol);
 

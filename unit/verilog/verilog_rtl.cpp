@@ -77,6 +77,33 @@ static std::string rtl_text_of(const std::string &source)
   return rtl.as_string(namespacet{symbol_table});
 }
 
+TEST_CASE("Explicit function and local lifetimes survive elaboration", "[verilog]")
+{
+  const auto symbols = compile(R"(
+    module main;
+      function automatic bit counter();
+        begin : inner
+          static bit seen;
+          counter = seen;
+        end
+      endfunction
+      function automatic bit identity(input bit x);
+        var automatic bit copy;
+        copy = x;
+        identity = copy;
+      endfunction
+      function bit implicit_time(); implicit_time = 0; endfunction
+    endmodule)");
+  const auto &counter = symbols.lookup_ref("Verilog::$root.main.counter").type;
+  const auto &identity = symbols.lookup_ref("Verilog::$root.main.identity").type;
+  REQUIRE(counter.get(ID_verilog_lifetime) == ID_automatic);
+  REQUIRE(counter.get_bool("verilog_has_static_locals"));
+  REQUIRE(identity.get(ID_verilog_lifetime) == ID_automatic);
+  REQUIRE_FALSE(identity.get_bool("verilog_has_static_locals"));
+  REQUIRE(symbols.lookup_ref("Verilog::$root.main.implicit_time")
+            .type.get(ID_verilog_lifetime).empty());
+}
+
 SCENARIO("RTL slices")
 {
   GIVEN("two disjoint slices")
