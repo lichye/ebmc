@@ -266,6 +266,20 @@ hoat::headert hoa_parsert::parse_header()
   return header;
 }
 
+bool hoat::has_buechi_acceptance() const
+{
+  bool found = false;
+  const std::list<std::string> buechi = {"1", "Inf", "(", "0", ")"};
+  for(const auto &item : header)
+    if(item.first == "Acceptance:")
+    {
+      if(found || item.second != buechi)
+        return false;
+      found = true;
+    }
+  return found;
+}
+
 hoat::ap_mapt hoat::parse_AP() const
 {
   for(auto &item : header)

@@ -38,6 +38,10 @@ SCENARIO("Parsing a HOA from a string")
     auto hoa = hoat::from_string(hoa_string);
 
     REQUIRE(hoa.body.size() == 4);
+    REQUIRE(hoa.has_buechi_acceptance());
+    auto general = hoat::from_string(
+      "HOA: v1\nAcceptance: 2 Inf(0)&Inf(1)\n--BODY--\n--END--\n");
+    REQUIRE_FALSE(general.has_buechi_acceptance());
 
     REQUIRE(hoa.body[0].first.is_accepting());
     REQUIRE(hoa.body[1].first.is_accepting());

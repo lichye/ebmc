@@ -778,6 +778,10 @@ void verilog_typecheck_exprt::downwards_type_propagation(
     // The LHS is context-determined, the RHS is self-determined
     auto &binary_expr = to_binary_expr(expr);
     downwards_type_propagation(binary_expr.lhs(), type);
+    if(
+      expr.id() == ID_ashr && type.id() != ID_signedbv &&
+      type.id() != ID_verilog_signedbv)
+      expr.id(ID_lshr);
     expr.type() = type;
     return;
   }
@@ -1891,13 +1895,16 @@ exprt verilog_typecheck_exprt::convert_system_function(function_call_exprt expr)
   }
   else if(base_name == "$past")
   {
-    if(arguments.size() == 0 || arguments.size() >= 4)
+    if(arguments.empty() || arguments.size() > 4)
     {
       throw errort().with_location(expr.source_location())
         << "$past takes one to four arguments";
     }
+    if(arguments.size() > 2)
+      throw errort().with_location(expr.source_location())
+        << "unsupported gate or clock argument to $past";
 
-    if(arguments.size() >= 2)
+    if(arguments.size() == 2)
     {
       auto tmp = elaborate_constant_expression_check(arguments[1]);
       arguments[1] = tmp;
@@ -1916,6 +1923,9 @@ exprt verilog_typecheck_exprt::convert_system_function(function_call_exprt expr)
       throw errort().with_location(expr.source_location())
         << base_name << " takes one or two arguments";
     }
+    if(arguments.size() == 2)
+      throw errort().with_location(expr.source_location())
+        << "unsupported clock argument to " << base_name;
 
     expr.type() = bool_typet();
 

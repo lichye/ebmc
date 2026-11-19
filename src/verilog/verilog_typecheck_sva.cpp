@@ -305,8 +305,16 @@ exprt verilog_typecheck_exprt::convert_binary_sva(binary_exprt expr)
     auto &case_expr = to_sva_case_expr(expr);
     convert_expr(case_expr.case_op());
 
+    bool has_default = false;
     for(auto &case_item : case_expr.case_items())
     {
+      if(case_item.patterns().empty())
+      {
+        if(has_default)
+          throw errort().with_location(case_item.source_location())
+            << "duplicate default item in property case";
+        has_default = true;
+      }
       // same rules as case statement
       for(auto &pattern : case_item.patterns())
       {

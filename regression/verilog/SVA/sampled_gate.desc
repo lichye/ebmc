@@ -1,0 +1,6 @@
+CORE
+sampled_gate.sv
+--bound 2
+unsupported.*(gate|clock).*\$past|\$past.*(gate|clock).*unsupported
+^EXIT=2$
+^SIGNAL=0$

@@ -66,6 +66,7 @@ public:
   }
 
   intt max_state_number() const;
+  bool has_buechi_acceptance() const;
 
   // atomic propositions
   using ap_mapt = std::map<intt, std::string>;

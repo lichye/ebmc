@@ -16,6 +16,22 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <testing-utils/use_catch.h>
 #include <verilog/expr2verilog.h>
 
+SCENARIO("Verilog precedence, Boolean parity and population count")
+{
+  symbol_tablet symbol_table;
+  namespacet ns{symbol_table};
+  symbol_exprt a{"a", bool_typet{}}, b{"b", bool_typet{}}, c{"c", bool_typet{}};
+  const if_exprt branch{a, b, c};
+  REQUIRE(expr2verilog(if_exprt{branch, a, b}, ns) == "(a ? b : c) ? a : b");
+  REQUIRE(
+    expr2verilog(if_exprt{a, branch, branch}, ns) ==
+    "a ? a ? b : c : a ? b : c");
+  REQUIRE(expr2verilog(xor_exprt{a, b}, ns) == "a ^ b");
+  REQUIRE(expr2verilog(xnor_exprt{a, b}, ns) == "a ~^ b");
+  REQUIRE(expr2verilog(xnor_exprt{{a, b, c}}, ns) == "!(a ^ b ^ c)");
+  REQUIRE(expr2verilog(popcount_exprt{a}, ns) == "$countones(a)");
+}
+
 SCENARIO("Output of extractbits expressions")
 {
   symbol_tablet symbol_table;

@@ -158,6 +158,9 @@ ltl_to_buechi(const exprt &property, message_handlert &message_handler)
 
     message.debug() << hoa << messaget::eom;
 
+    if(!hoa.has_buechi_acceptance())
+      throw ebmc_errort{} << "expected HOA Buchi acceptance: 1 Inf(0)";
+
     // clean up accepting states
     hoa.buechi_acceptance_cleanup();
 

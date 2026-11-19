@@ -41,28 +41,23 @@ exprt sva_case_exprt::lower() const
 {
   auto &case_items = this->case_items();
 
-  // base case
-  if(case_items.empty())
-    return true_exprt();
+  exprt result = true_exprt{};
+  for(const auto &item : case_items)
+    if(item.patterns().empty())
+      result = item.result();
 
-  // remove one case item, then do recursive call
-  exprt::operandst disjuncts;
-  disjuncts.reserve(case_items.front().patterns().size());
-
-  for(auto &pattern : case_items.front().patterns())
+  // The first matching item takes priority, regardless of the default position.
+  for(auto it = case_items.rbegin(); it != case_items.rend(); ++it)
   {
-    disjuncts.push_back(equal_exprt{
-      typecast_exprt::conditional_cast(case_op(), pattern.type()), pattern});
+    if(it->patterns().empty())
+      continue;
+    exprt::operandst disjuncts;
+    for(const auto &pattern : it->patterns())
+      disjuncts.push_back(equal_exprt{
+        typecast_exprt::conditional_cast(case_op(), pattern.type()), pattern});
+    result = if_exprt{disjunction(disjuncts), it->result(), std::move(result)};
   }
-
-  sva_case_exprt reduced = *this;
-  reduced.case_items().erase(reduced.case_items().begin());
-
-  // rec. call
-  auto reduced_rec = reduced.lower();
-
-  return if_exprt{
-    disjunction(disjuncts), case_items.front().result(), reduced_rec};
+  return result;
 }
 
 exprt sva_sequence_repetition_plus_exprt::lower() const

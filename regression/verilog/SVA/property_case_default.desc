@@ -1,0 +1,7 @@
+CORE
+property_case_default.sv
+--bound 0
+^\[main\.p0\].*: PROVED.*$
+^\[main\.p1\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

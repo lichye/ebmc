@@ -19,6 +19,7 @@ Author: Daniel Kroening, kroening@cs.cmu.edu
 #include <util/mathematical_types.h>
 #include <util/std_expr.h>
 
+#include "verilog_expr.h"
 #include "verilog_parser.h"
 
 #define PARSER (*verilog_parser_ptr)
@@ -37,6 +38,38 @@ Author: Daniel Kroening, kroening@cs.cmu.edu
 
 int yyveriloglex();
 extern char *yyverilogtext;
+
+// In an assertion a distribution is a membership constraint (1800-2017 16.6).
+// Positive weights admit the item; zero weight excludes it for both := and :/.
+static exprt distribution_constraint(const exprt &value, const exprt &items)
+{
+  exprt result = nil_exprt{};
+  for(const auto &item : items.operands())
+  {
+    const auto &range = item.operands().front();
+    exprt member;
+    if(range.id() == ID_verilog_value_range)
+    {
+      const auto &bounds = to_verilog_value_range_expr(range);
+      member = and_exprt{
+        binary_relation_exprt{value, ID_ge, bounds.lhs()},
+        binary_relation_exprt{value, ID_le, bounds.rhs()}};
+    }
+    else
+      member = verilog_inside_exprt{value, {range}};
+
+    if(item.operands().size() == 2)
+      member = and_exprt{
+        std::move(member),
+        binary_relation_exprt{item.operands().back(), ID_gt, constant_exprt{"0", typet{}}}};
+    if(result.is_nil())
+      result = std::move(member);
+    else
+      result = or_exprt{std::move(result), std::move(member)};
+  }
+  result.add_source_location() = value.source_location();
+  return result;
+}
 
 /*******************************************************************\
 
@@ -1716,18 +1749,18 @@ constraint_expression:
         ;
 
 dist_list:
-          dist_item
-        | dist_list ',' dist_item
+          dist_item                      { init($$); mto($$, $1); }
+        | dist_list ',' dist_item        { $$ = $1; mto($$, $3); }
         ;
 
 dist_item:
-          value_range
-        | value_range dist_weight
+          value_range                    { init($$); mto($$, $1); }
+        | value_range dist_weight        { init($$); mto2($$, $1, $2); }
         ;
 
 dist_weight:
-          ":=" expression
-        | ":/" expression
+          ":=" expression                { $$ = $2; }
+        | ":/" expression                { $$ = $2; }
         ;
 
 constraint_prototype: TOK_CONSTRAINT constraint_identifier ';'
@@ -3430,7 +3463,9 @@ property_case_item:
           expression_or_dist_brace TOK_COLON property_expr ';'
                 { init($$, ID_case_item); mto($$, $1); mto($$, $3); }
         | "default" TOK_COLON property_expr ';'
-                { init($$, ID_case_item); mto($$, $3); }
+                { init($$, ID_case_item); stack_expr($$).add_to_operands(exprt{ID_default}); mto($$, $3); }
+        | "default" property_expr ';'
+                { init($$, ID_case_item); stack_expr($$).add_to_operands(exprt{ID_default}); mto($$, $2); }
         ;
 
 sequence_declaration:
@@ -3650,6 +3685,7 @@ cycle_delay_const_range_expression:
 expression_or_dist:
           expression
         | expression TOK_DIST '{' dist_list '}'
+                { init($$); stack_expr($$) = distribution_constraint(stack_expr($1), stack_expr($4)); }
         ;
 
 // System Verilog standard 1800-2017

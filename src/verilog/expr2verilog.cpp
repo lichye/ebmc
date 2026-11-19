@@ -107,27 +107,21 @@ expr2verilogt::convert_if(const if_exprt &src, verilog_precedencet precedence)
   auto op1 = convert_rec(src.op1());
   auto op2 = convert_rec(src.op2());
 
-  if(precedence > op0.p)
-    dest += '(';
-  dest += op0.s;
-  if(precedence > op0.p)
-    dest += ')';
-
-  dest+=" ? ";
-
-  if(precedence > op0.p)
-    dest += '(';
-  dest += op1.s;
-  if(precedence > op0.p)
-    dest += ')';
-
-  dest+=" : ";
-
-  if(precedence > op0.p)
-    dest += '(';
-  dest += op2.s;
-  if(precedence > op0.p)
-    dest += ')';
+  // The conditional operator associates to the right.
+  if(precedence >= op0.p)
+    dest += '(' + op0.s + ')';
+  else
+    dest += op0.s;
+  dest += " ? ";
+  if(precedence > op1.p)
+    dest += '(' + op1.s + ')';
+  else
+    dest += op1.s;
+  dest += " : ";
+  if(precedence > op2.p)
+    dest += '(' + op2.s + ')';
+  else
+    dest += op2.s;
 
   return {precedence, dest};
 }
@@ -2197,10 +2191,17 @@ expr2verilogt::resultt expr2verilogt::convert_rec(const exprt &src)
     return expr2verilog.convert_function(src.id_string(), src); } },
 
     { ID_xnor, [](expr2verilogt &expr2verilog, const exprt &src) {
-    return expr2verilog.convert_function(src.id_string(), src); } },
+    if(src.operands().size() == 2)
+      return expr2verilog.convert_binary(to_multi_ary_expr(src), "~^", verilog_precedencet::XOR);
+    return expr2verilog.convert_rec(not_exprt{xor_exprt{src.operands()}}); } },
 
     { ID_xor, [](expr2verilogt &expr2verilog, const exprt &src) {
-    return expr2verilog.convert_function(src.id_string(), src); } },
+    if(src.operands().size() == 1)
+      return expr2verilog.convert_rec(src.operands().front());
+    return expr2verilog.convert_binary(to_multi_ary_expr(src), "^", verilog_precedencet::XOR); } },
+
+    { ID_popcount, [](expr2verilogt &expr2verilog, const exprt &src) {
+    return expr2verilog.convert_function("$countones", src); } },
 
     { ID_zero_extend, [](expr2verilogt &expr2verilog, const exprt &src) { 
     return expr2verilog.convert_rec(to_zero_extend_expr(src).op()); } },
