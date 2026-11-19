@@ -192,22 +192,24 @@ void verilog_preprocessort::preprocessor()
 
   try
   {
-    // set up the initial defines
-    for(auto &define : initial_defines)
+    // Command-line definitions are active from the start of the compilation
+    // unit. An `undef or `undefineall in one file also affects later files.
+    if(!macros.initialized)
     {
-      std::size_t equal_pos = define.find('=');
-      if(equal_pos == std::string::npos)
+      for(const auto &define : initial_defines)
       {
-        defines.insert(std::pair<std::string, definet>(define, definet{}));
+        const auto equal_pos = define.find('=');
+        if(equal_pos == std::string::npos)
+          macros.defines.try_emplace(define);
+        else
+        {
+          auto key = define.substr(0, equal_pos);
+          auto tokens =
+            verilog_preprocessor_tokenize(define.substr(equal_pos + 1));
+          macros.defines.try_emplace(std::move(key), std::move(tokens));
+        }
       }
-      else
-      {
-        std::string key = define.substr(0, equal_pos);
-        std::string value = define.substr(equal_pos + 1, std::string::npos);
-        auto tokens = verilog_preprocessor_tokenize(value);
-        defines.insert(
-          std::pair<std::string, definet>(key, definet{std::move(tokens)}));
-      }
+      macros.initialized = true;
     }
 
     // the first context is the input file
@@ -669,6 +671,8 @@ Function: verilog_preprocessort::directive
 
 void verilog_preprocessort::directive()
 {
+  auto &defines = macros.defines;
+
   // After the backtick we expect:
   // 1) an identifier
   // 2) another backtick (double backtick)
@@ -795,7 +799,7 @@ void verilog_preprocessort::directive()
 
     tokenizer().skip_until_eol();
 
-    definest::iterator it=defines.find(identifier);
+    auto it = defines.find(identifier);
 
     if(it!=defines.end())
     {
@@ -1050,6 +1054,12 @@ void verilog_preprocessort::directive()
   }
   else if(text == "default_nettype")
   {
+    if(!condition)
+    {
+      tokenizer().skip_until_eol();
+      return;
+    }
+
     // pass through
     out << '`' << text;
     while(true)
@@ -1067,13 +1077,15 @@ void verilog_preprocessort::directive()
   {
     // 1800 2017 22.13
     // String literal
-    out << verilog_string_literal(context().filename_as_string());
+    if(condition)
+      out << verilog_string_literal(context().filename_as_string());
   }
   else if(text == "__LINE__")
   {
     // 1800 2017 22.13
     // decimal number
-    out << tokenizer().line_no();
+    if(condition)
+      out << tokenizer().line_no();
   }
   else
   {
@@ -1081,7 +1093,7 @@ void verilog_preprocessort::directive()
     if(!condition)
       return; // ignore
 
-    definest::const_iterator it = defines.find(text);
+    auto it = defines.find(text);
 
     if(it == defines.end())
     {
