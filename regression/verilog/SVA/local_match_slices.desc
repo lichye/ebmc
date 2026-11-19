@@ -1,6 +1,6 @@
 CORE
 local_match_slices.sv
 --bound 2
-unsupported assignment to a slice of an assertion local variable
-^EXIT=6$
+^\[main\.p\].*: PROVED.*$
+^EXIT=0$
 ^SIGNAL=0$

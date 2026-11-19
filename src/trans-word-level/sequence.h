@@ -15,11 +15,16 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <verilog/sva_expr.h>
 
 #include <map>
+#include <optional>
 
+// Each entry is a bound sva_local with its sampled value for this match.
 using sva_local_valuest = std::map<irep_idt, exprt>;
 
 /// Attach previously sampled values to local-variable references.
 exprt bind_sva_locals(exprt, const sva_local_valuest &);
+
+/// Read a captured local or a fixed selection of one in the current match.
+std::optional<exprt> read_sva_local(const exprt &);
 
 /// A potential match for an SVA sequence.
 class sequence_matcht
