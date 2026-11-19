@@ -1,0 +1,6 @@
+CORE
+local_match_slices.sv
+--show-properties
+main\.p
+^EXIT=0$
+^SIGNAL=0$

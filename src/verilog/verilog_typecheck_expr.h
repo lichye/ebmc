@@ -217,7 +217,8 @@ protected:
   [[nodiscard]] exprt convert_nullary_expr(nullary_exprt);
   [[nodiscard]] exprt convert_unary_expr(unary_exprt);
   [[nodiscard]] exprt convert_binary_expr(binary_exprt);
-  [[nodiscard]] exprt convert_trinary_expr(ternary_exprt);
+  [[nodiscard]] exprt
+    convert_trinary_expr(ternary_exprt, bool sva_match_target = false);
   [[nodiscard]] exprt convert_expr_concatenation(concatenation_exprt);
   [[nodiscard]] exprt convert_expr_function_call(function_call_exprt);
   // Reorder a list of ordered and named arguments (1800-2017 13.5.4) into
@@ -229,7 +230,9 @@ protected:
     const code_typet::parameterst &parameters,
     const source_locationt &);
   [[nodiscard]] exprt convert_system_function(function_call_exprt);
-  [[nodiscard]] exprt convert_bit_select_expr(verilog_bit_select_exprt);
+  [[nodiscard]] exprt
+    convert_bit_select_expr(verilog_bit_select_exprt, bool sva_match_target = false);
+  void convert_sva_match_target(exprt &);
   [[nodiscard]] exprt convert_interface_array_element(verilog_bit_select_exprt);
   /// The elements of an array of interface instances (1800-2017 25.4) and
   /// the blocks of a generate loop (1800-2017 27.6) are separate symbols,

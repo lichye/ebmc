@@ -3817,13 +3817,17 @@ Function: verilog_typecheck_exprt::convert_bit_select_expr
 \*******************************************************************/
 
 exprt verilog_typecheck_exprt::convert_bit_select_expr(
-  verilog_bit_select_exprt expr)
+  verilog_bit_select_exprt expr,
+  bool sva_match_target)
 {
   // Verilog's bit select expression may map onto an extractbit
   // or an array index expression, depending on the type of the first
   // operand.
   exprt &src = expr.src(), &index = expr.index();
-  convert_expr(src);
+  if(sva_match_target)
+    convert_sva_match_target(src);
+  else
+    convert_expr(src);
   convert_expr(index);
 
   if(index.type().id() == ID_verilog_real)
@@ -3870,7 +3874,9 @@ exprt verilog_typecheck_exprt::convert_bit_select_expr(
       // x for 4-state and 0 for 2-state values.
       auto index_int = index_opt.value();
 
-      if(index_int < offset || index_int >= width + offset)
+      // Keep the selector in a match-item target so the encoder can
+      // diagnose the write, as opposed to folding it like a read.
+      if(!sva_match_target && (index_int < offset || index_int >= width + offset))
         return false_exprt().with_source_location(expr);
     }
 
@@ -4626,13 +4632,18 @@ Function: verilog_typecheck_exprt::convert_trinary_expr
 
 \*******************************************************************/
 
-exprt verilog_typecheck_exprt::convert_trinary_expr(ternary_exprt expr)
+exprt verilog_typecheck_exprt::convert_trinary_expr(
+  ternary_exprt expr,
+  bool sva_match_target)
 {
   if(expr.id() == ID_verilog_non_indexed_part_select)
   {
     auto &part_select = to_verilog_non_indexed_part_select_expr(expr);
     exprt &src = part_select.src();
-    convert_expr(src);
+    if(sva_match_target)
+      convert_sva_match_target(src);
+    else
+      convert_expr(src);
 
     // A non-indexed part-select applied to an array selects a range of
     // ELEMENTS, not bits (1800-2017 7.4.5/7.4.6, 7.4.3, 11.5.1). This
@@ -4715,7 +4726,10 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(ternary_exprt expr)
   {
     auto &part_select = to_verilog_indexed_part_select_plus_or_minus_expr(expr);
     exprt &src = part_select.src();
-    convert_expr(src);
+    if(sva_match_target)
+      convert_sva_match_target(src);
+    else
+      convert_expr(src);
 
     // An indexed part-select applied to an array selects a range of
     // ELEMENTS, not bits (1800-2017 7.4.6, 11.5.1). This applies to both

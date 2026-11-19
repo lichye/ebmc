@@ -144,6 +144,13 @@ sequence_matchest instantiate_sequence_rec(
   if(expr.id() == ID_sva_sequence_match_items)
   {
     const auto &items = to_binary_expr(expr);
+    for(const auto &item : items.rhs().operands())
+    {
+      const auto &target = to_binary_expr(item).lhs();
+      if(target.id() != ID_sva_local)
+        throw ebmc_errort{}.with_location(target.source_location())
+          << "unsupported assignment to a slice of an assertion local variable";
+    }
     if(expr.get_bool(ID_initial))
     {
       sva_local_valuest initial;
