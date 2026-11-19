@@ -266,6 +266,22 @@ hoat::headert hoa_parsert::parse_header()
   return header;
 }
 
+bool hoat::has_property(const std::string &name) const
+{
+  for(const auto &entry : header)
+    if(entry.first == "properties:")
+    {
+      bool negated = false;
+      for(const auto &token : entry.second)
+      {
+        if(token == name)
+          return !negated;
+        negated = token == "!";
+      }
+    }
+  return false;
+}
+
 bool hoat::has_buechi_acceptance() const
 {
   bool found = false;

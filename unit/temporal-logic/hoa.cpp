@@ -42,6 +42,14 @@ SCENARIO("Parsing a HOA from a string")
     auto general = hoat::from_string(
       "HOA: v1\nAcceptance: 2 Inf(0)&Inf(1)\n--BODY--\n--END--\n");
     REQUIRE_FALSE(general.has_buechi_acceptance());
+    REQUIRE_FALSE(general.has_property("deterministic"));
+    auto properties = hoat::from_string(
+      "HOA: v1.1\nproperties: !deterministic complete\n--BODY--\n--END--\n");
+    REQUIRE_FALSE(properties.has_property("deterministic"));
+    REQUIRE(properties.has_property("complete"));
+    auto deterministic = hoat::from_string(
+      "HOA: v1.1\nproperties: deterministic\n--BODY--\n--END--\n");
+    REQUIRE(deterministic.has_property("deterministic"));
 
     REQUIRE(hoa.body[0].first.is_accepting());
     REQUIRE(hoa.body[1].first.is_accepting());

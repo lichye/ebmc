@@ -68,6 +68,9 @@ public:
   intt max_state_number() const;
   bool has_buechi_acceptance() const;
 
+  /// Whether the HOA header explicitly asserts this property (HOA v1.1).
+  bool has_property(const std::string &name) const;
+
   // atomic propositions
   using ap_mapt = std::map<intt, std::string>;
 
