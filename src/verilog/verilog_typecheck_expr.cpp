@@ -3060,6 +3060,24 @@ verilog_typecheck_exprt::is_constant_integer_post_convert(const exprt &expr)
   exprt tmp = expr;
 
   ns.follow_macros(tmp);
+  if(has_subexpr(tmp, ID_function_call))
+  {
+    // IEEE 1800-2017 20.6.2: $bits of a fixed-size argument depends on
+    // its type, even when the argument reads a run-time signal.
+    bool other_call = false;
+    tmp.visit_pre([&](exprt &subexpression) {
+      if(subexpression.id() != ID_function_call)
+        return;
+      const auto &call = to_function_call_expr(std::as_const(subexpression));
+      if(call.is_system_function_call() &&
+         call.function().get(ID_base_name) == "$bits")
+        subexpression = bits(call.arguments().front());
+      else
+        other_call = true;
+    });
+    if(other_call)
+      return {};
+  }
   // Verilog integer powers have defined results for negative exponents.
   tmp = has_subexpr(tmp, ID_power)
           ? verilog_constant_folding(std::move(tmp), ns)
@@ -4872,9 +4890,8 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
     // The index need not be a constant.
     exprt &index = part_select.index();
     convert_expr(index);
-    // A constant base, including genvar arithmetic or a parameter, should
-    // remain a direct slice. A function call may depend on runtime arguments.
-    if(!index.is_constant() && !has_subexpr(index, ID_function_call))
+    // Keep elaboration-time bases as direct slices.
+    if(!index.is_constant())
     {
       if(const auto base = is_constant_integer_post_convert(index))
         index =

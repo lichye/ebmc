@@ -1,0 +1,12 @@
+CORE
+indexed_part_select_bits.sv
+--bound 0
+^\[main\.static_slice\].*: PROVED up to bound 0$
+^\[main\.dynamic_slice\].*: PROVED up to bound 0$
+^\[main\.mixed_base\].*: PROVED up to bound 0$
+^\[main\.partial_logic\].*: PROVED up to bound 0$
+^\[main\.partial_bit\].*: PROVED up to bound 0$
+^\[main\.outside_logic\].*: PROVED up to bound 0$
+^\[main\.outside_bit\].*: PROVED up to bound 0$
+^EXIT=0$
+^SIGNAL=0$
