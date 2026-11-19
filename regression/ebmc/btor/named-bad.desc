@@ -1,0 +1,6 @@
+CORE
+named-bad.btor2
+--bound 1
+^\[top\.flag\] : REFUTED$
+^EXIT=10$
+^SIGNAL=0$
