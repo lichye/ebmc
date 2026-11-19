@@ -32,6 +32,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include "netlist.h"
 #include "neural_liveness.h"
 #include "output_aiger.h"
+#include "output_btor2.h"
 #include "output_smv_word_level.h"
 #include "property_checker.h"
 #include "random_traces.h"
@@ -176,7 +177,7 @@ int ebmc_parse_optionst::doit()
   try
   {
     expand_command_files(cmdline);
-    if(cmdline.isset("undriven-report"))
+    if(cmdline.isset("undriven-report") || cmdline.isset("btor2"))
       ui_message_handler.set_verbosity(messaget::M_WARNING);
     else
       log_version_and_architecture("EBMC", EBMC_VERSION);
@@ -317,6 +318,14 @@ int ebmc_parse_optionst::doit()
     if(cmdline.isset("json-properties"))
     {
       json_properties(properties, cmdline.get_value("json-properties"));
+      return 0;
+    }
+
+    if(cmdline.isset("btor2"))
+    {
+      const auto model = output_btor2(transition_system, properties);
+      output_filet output{cmdline.value_opt("outfile").value_or("-")};
+      output.stream() << model;
       return 0;
     }
 
@@ -596,6 +605,7 @@ void ebmc_parse_optionst::help()
     " {y--show-varmap}               \t show variable map\n"
     " {y--show-netlist}              \t show netlist\n"
     " {y--aiger}                     \t output netlist in AIGER format\n"
+    " {y--btor2}                     \t output word-level safety problem in BTOR2 format\n"
     " {y--show-ldg}                  \t show latch dependencies\n"
     " {y--show-formula}              \t show the formula that is generated\n"
     " {y--smv-netlist}               \t show netlist in SMV format\n"

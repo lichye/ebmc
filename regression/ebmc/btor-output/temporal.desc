@@ -1,0 +1,8 @@
+CORE
+temporal.sv
+--btor2
+BTOR2: unsupported property 'main\.p_eventual'
+^EXIT=6$
+^SIGNAL=0$
+--
+^[0-9]+ (sort|bad)
