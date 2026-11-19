@@ -15,6 +15,7 @@ Author: Daniel Kroening, dkr@amazon.com
 #include <ebmc/ebmc_language.h>
 
 #include "verilog_parse_tree.h"
+#include "verilog_undriven_report.h"
 
 #include <filesystem>
 #include <iosfwd>
@@ -36,6 +37,10 @@ public:
 
   // produce the transition system, and return it
   std::optional<transition_systemt> transition_system() override;
+
+  /// Build the transition system and report floating reads from the same RTL.
+  std::optional<transition_systemt>
+  transition_system(const verilog_undriven_reportert &);
 
   /// a Verilog parse tree forest
   using parse_treet = verilog_parse_treet;
@@ -84,8 +89,10 @@ protected:
     const std::vector<irep_idt> &top_level_modules,
     symbol_tablet &);
 
-  transition_systemt
-  create_transition_system(verilog_standardt, symbol_tablet &&);
+  transition_systemt create_transition_system(
+    verilog_standardt,
+    symbol_tablet &&,
+    const verilog_undriven_reportert &);
 
   void create_reset_logic(const std::string &, transition_systemt &);
 };

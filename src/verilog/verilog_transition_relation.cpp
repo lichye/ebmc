@@ -70,7 +70,7 @@ public:
   }
 
   // throws errort on error
-  transt convert(bool undriven_const);
+  transt convert(bool undriven_const, const verilog_undriven_reportert &);
 
 protected:
   const irep_idt module;
@@ -1174,7 +1174,9 @@ Function: verilog_transition_relationt::convert
 
 \*******************************************************************/
 
-transt verilog_transition_relationt::convert(bool undriven_const)
+transt verilog_transition_relationt::convert(
+  bool undriven_const,
+  const verilog_undriven_reportert &report_undriven)
 {
   symbolt &module_symbol = symbol_table.get_writeable_ref(module);
 
@@ -1190,7 +1192,8 @@ transt verilog_transition_relationt::convert(bool undriven_const)
     standard,
     message_handler,
     undriven_const ? verilog_undriven_modet::CONST
-                   : verilog_undriven_modet::SEQ);
+                   : verilog_undriven_modet::SEQ,
+    report_undriven);
 
   // Variables that are forced to a value, e.g. by a port
   // connection, become wires.
@@ -1252,7 +1255,8 @@ transt verilog_transition_relation(
   bool ignore_initial,
   bool initial_zero,
   message_handlert &message_handler,
-  bool undriven_const)
+  bool undriven_const,
+  const verilog_undriven_reportert &report_undriven)
 {
   const namespacet ns(symbol_table);
 
@@ -1267,7 +1271,7 @@ transt verilog_transition_relation(
 
   try
   {
-    return converter.convert(undriven_const);
+    return converter.convert(undriven_const, report_undriven);
   }
   catch(verilog_transition_relationt::errort error)
   {

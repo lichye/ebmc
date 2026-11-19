@@ -327,7 +327,8 @@ void verilog_ebmc_languaget::create_root_module(
 /// Returns the transition system.
 transition_systemt verilog_ebmc_languaget::create_transition_system(
   verilog_standardt standard,
-  symbol_tablet &&symbol_table)
+  symbol_tablet &&symbol_table,
+  const verilog_undriven_reportert &report_undriven)
 {
   auto root_identifier = verilog_module_symbol(verilog_root_module_name());
 
@@ -351,7 +352,8 @@ transition_systemt verilog_ebmc_languaget::create_transition_system(
       ignore_initial,
       initial_zero,
       message_handler,
-      cmdline.get_value("undriven") == "const");
+      cmdline.get_value("undriven") == "const",
+      report_undriven);
   }
   catch(ebmc_errort &)
   {
@@ -615,6 +617,12 @@ void verilog_ebmc_languaget::create_reset_logic(
 
 std::optional<transition_systemt> verilog_ebmc_languaget::transition_system()
 {
+  return transition_system({});
+}
+
+std::optional<transition_systemt> verilog_ebmc_languaget::transition_system(
+  const verilog_undriven_reportert &report_undriven)
+{
   messaget message(message_handler);
 
   //
@@ -712,19 +720,25 @@ std::optional<transition_systemt> verilog_ebmc_languaget::transition_system()
 
   if(cmdline.isset("undriven-report"))
   {
-    auto rtl = verilog_rtl(
+    verilog_rtl(
       symbol_table,
       verilog_module_symbol(verilog_root_module_name()),
       parse_trees.front().standard,
       message_handler,
-      verilog_undriven_modet::REPORT);
-    rtl.output_undriven(namespacet{symbol_table}, std::cout);
+      verilog_undriven_modet::SEQ,
+      [](const auto &report)
+      {
+        for(const auto &net : report)
+          std::cout << "UNDRIVEN\t" << net.name << '\t'
+                    << net.location.get_file() << ':' << net.location.get_line()
+                    << '\n';
+      });
     return {};
   }
 
   // generate the transition system from $root
   auto transition_system = create_transition_system(
-    parse_trees.front().standard, std::move(symbol_table));
+    parse_trees.front().standard, std::move(symbol_table), report_undriven);
 
   // --reset given?
   if(cmdline.isset("reset"))

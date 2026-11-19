@@ -68,7 +68,8 @@ public:
   }
 
   // throws errort on error
-  verilog_rtlt build(verilog_undriven_modet);
+  verilog_rtlt
+  build(verilog_undriven_modet, const verilog_undriven_reportert &);
 
 protected:
   const irep_idt module;
@@ -181,7 +182,7 @@ protected:
     exprt,
     const source_locationt &,
     bool constraint = false);
-  void find_undriven(bool only_reads);
+  verilog_rtlt::undriven_mapt find_undriven(bool only_reads);
   void collapse_inout_drivers();
   void finish_net_drivers();
 
@@ -4446,9 +4447,9 @@ merged_ranges(std::vector<verilog_rtl_slicet> slices)
 
 // Inspect the actual drivers before port collapse creates synthetic reads.
 // A disabled driver (including an explicit Z) is still a driver.
-void verilog_rtl_buildert::find_undriven(bool only_reads)
+verilog_rtlt::undriven_mapt verilog_rtl_buildert::find_undriven(bool only_reads)
 {
-  decltype(rtl.undriven) driven, reads;
+  verilog_rtlt::undriven_mapt driven, reads, undriven;
   const auto &ports = to_module_type(ns.lookup(module).type).ports();
   std::set<irep_idt> inputs;
   for(const auto &port : ports)
@@ -4552,31 +4553,34 @@ void verilog_rtl_buildert::find_undriven(bool only_reads)
       for(auto it = d; it != covered.end() && it->lower <= r.higher; ++it)
       {
         if(lo < it->lower)
-          rtl.undriven[id].emplace_back(lo, it->lower - 1);
+          undriven[id].emplace_back(lo, it->lower - 1);
         lo = std::max(lo, it->higher + 1);
       }
       if(lo <= r.higher)
-        rtl.undriven[id].emplace_back(lo, r.higher);
+        undriven[id].emplace_back(lo, r.higher);
     }
   }
+  return undriven;
 }
 
-void verilog_rtlt::output_undriven(const namespacet &ns, std::ostream &out)
-  const
+static std::vector<verilog_undriven_nett> describe_undriven(
+  const namespacet &ns,
+  const verilog_rtlt::undriven_mapt &undriven)
 {
+  std::vector<verilog_undriven_nett> report;
   for(const auto &[id, ranges] : undriven)
   {
     const auto &net = ns.lookup(id);
     const auto width = verilog_bits(net.type);
     for(const auto &range : ranges)
     {
-      out << "UNDRIVEN\t" << net.display_name();
+      auto name = id2string(net.display_name());
       if(range.width() != width)
-        out << driver_slice(range, net.type);
-      out << '\t' << net.location.get_file() << ':' << net.location.get_line()
-          << '\n';
+        name += driver_slice(range, net.type);
+      report.push_back({std::move(name), net.location});
     }
   }
+  return report;
 }
 
 // Resolve the drivers of a collapsed inout bit once, at a single name.
@@ -6031,18 +6035,27 @@ Function: verilog_rtl_buildert::build
 
 \*******************************************************************/
 
-verilog_rtlt verilog_rtl_buildert::build(verilog_undriven_modet undriven)
+verilog_rtlt verilog_rtl_buildert::build(
+  verilog_undriven_modet undriven,
+  const verilog_undriven_reportert &report_undriven)
 {
   const symbolt &module_symbol = ns.lookup(module);
 
   build_module(module_symbol);
-  if(undriven != verilog_undriven_modet::SEQ)
-    find_undriven(undriven == verilog_undriven_modet::REPORT);
+  // Detect floating slices before finalizing the physical net drivers.
+  std::vector<verilog_undriven_nett> report;
+  if(report_undriven)
+    report = describe_undriven(ns, find_undriven(true));
+  if(undriven == verilog_undriven_modet::CONST)
+    rtl.undriven = find_undriven(false);
 
   finish_net_drivers();
   // now that all drivers are known
   force_interface_port_connections();
   mark_self_dependent_wires();
+
+  if(report_undriven)
+    report_undriven(report);
 
   return std::move(rtl);
 }
@@ -6189,7 +6202,8 @@ verilog_rtlt verilog_rtl(
   const irep_idt &module_identifier,
   verilog_standardt standard,
   message_handlert &message_handler,
-  verilog_undriven_modet undriven)
+  verilog_undriven_modet undriven,
+  const verilog_undriven_reportert &report_undriven)
 {
   const namespacet ns(symbol_table);
 
@@ -6198,7 +6212,7 @@ verilog_rtlt verilog_rtl(
 
   try
   {
-    return builder.build(undriven);
+    return builder.build(undriven, report_undriven);
   }
   catch(verilog_rtl_buildert::errort error)
   {

@@ -12,6 +12,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <util/irep.h>
 
 #include "verilog_standard.h"
+#include "verilog_undriven_report.h"
 
 class message_handlert;
 class symbol_table_baset;
@@ -29,6 +30,7 @@ transt verilog_transition_relation(
   bool ignore_initial,
   bool initial_zero,
   message_handlert &,
-  bool undriven_const = false);
+  bool undriven_const = false,
+  const verilog_undriven_reportert & = {});
 
 #endif // CPROVER_VERILOG_VERILOG_TRANSITION_RELATION_H

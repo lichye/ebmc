@@ -14,6 +14,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <util/mp_arith.h>
 
 #include "verilog_standard.h"
+#include "verilog_undriven_report.h"
 
 #include <iosfwd>
 #include <map>
@@ -191,8 +192,7 @@ public:
 enum class verilog_undriven_modet
 {
   SEQ,
-  CONST,
-  REPORT
+  CONST
 };
 
 /// The register-transfer level (RTL) representation of a Verilog
@@ -211,8 +211,8 @@ public:
   identifier_mapt identifier_map;
 
   /// Statically undriven ranges, in least-significant-bit coordinates.
-  std::map<irep_idt, std::vector<verilog_rtl_slicet>> undriven;
-  void output_undriven(const namespacet &, std::ostream &) const;
+  using undriven_mapt = std::map<irep_idt, std::vector<verilog_rtl_slicet>>;
+  undriven_mapt undriven;
 
   struct drivert
   {
@@ -269,6 +269,7 @@ verilog_rtlt verilog_rtl(
   const irep_idt &module_identifier,
   verilog_standardt,
   message_handlert &,
-  verilog_undriven_modet = verilog_undriven_modet::SEQ);
+  verilog_undriven_modet = verilog_undriven_modet::SEQ,
+  const verilog_undriven_reportert & = {});
 
 #endif // CPROVER_VERILOG_VERILOG_RTL_H
