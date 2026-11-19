@@ -137,6 +137,29 @@ std::list<exprt> verilog_typecheckt::get_parameter_values(
     }
   }
 
+  // Type arguments are written in the instantiating scope (1800-2017
+  // 6.20.3). Keep a typedef bound to that scope when the child is copied.
+  for(auto &value : parameter_values)
+  {
+    if(value.id() != ID_type)
+      continue;
+    auto *type = &value.type();
+    while(type->has_subtype())
+      type = &to_type_with_subtype(*type).subtype();
+    if(type->id() == ID_typedef_type)
+    {
+      auto &name = to_verilog_typedef_type(*type);
+      if(name.import().empty())
+      {
+        const auto *symbol = resolve(name.base_name());
+        if(!symbol || !symbol->is_type)
+          throw errort{}.with_location(value.source_location())
+            << "type symbol " << name.base_name() << " not found";
+        name.import_package(strip_verilog_prefix(symbol->name));
+      }
+    }
+  }
+
   return parameter_values;
 }
 
