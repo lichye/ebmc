@@ -22,7 +22,8 @@ Author: Daniel Kroening, dkr@amazon.com
 static std::string preprocess(
   const std::string &source,
   const std::string &file_name = "test.v",
-  const std::list<std::string> &initial_defines = {})
+  const std::list<std::string> &initial_defines = {},
+  verilog_macro_tablet *macros = nullptr)
 {
   std::istringstream in(source);
   std::ostringstream out;
@@ -30,7 +31,13 @@ static std::string preprocess(
   const std::list<std::string> include_paths;
 
   verilog_preprocessort preprocessor(
-    in, out, message_handler, file_name, include_paths, initial_defines);
+    in,
+    out,
+    message_handler,
+    file_name,
+    include_paths,
+    initial_defines,
+    macros);
 
   preprocessor.preprocessor();
 
@@ -343,6 +350,25 @@ SCENARIO("Verilog preprocessor command-line defines")
       REQUIRE(out.find("B") == std::string::npos);
     }
   }
+}
+
+TEST_CASE("Retaining source macros between preprocessing commands")
+{
+  verilog_macro_tablet macros;
+  preprocess(
+    "`define OVERRIDE source_value\n`define KEEP kept_value\n`undef OLD\n",
+    "first.v",
+    {"LOCAL", "OLD=old_value", "OVERRIDE=initial"},
+    &macros);
+  macros.clear_initial_defines();
+  auto out = preprocess(
+    "`ifdef LOCAL\nleaked_local\n`endif\n`ifdef OLD\nleaked_old\n`endif\n"
+    "`OVERRIDE `KEEP `NEW\n",
+    "next.v",
+    {"NEW=new_value", "OVERRIDE=second"},
+    &macros);
+  REQUIRE(out.find("leaked") == std::string::npos);
+  REQUIRE(out.find("source_value kept_value new_value") != std::string::npos);
 }
 
 SCENARIO("Verilog preprocessor error handling")

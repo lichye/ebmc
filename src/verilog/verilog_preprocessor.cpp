@@ -186,6 +186,16 @@ Function: verilog_preprocessort::preprocessor
 
 \*******************************************************************/
 
+void verilog_macro_tablet::clear_initial_defines()
+{
+  for(auto it = defines.begin(); it != defines.end();)
+    if(it->second.predefined)
+      it = defines.erase(it);
+    else
+      ++it;
+  initialized = false;
+}
+
 void verilog_preprocessort::preprocessor()
 {
   bool error_found = false;
@@ -199,15 +209,12 @@ void verilog_preprocessort::preprocessor()
       for(const auto &define : initial_defines)
       {
         const auto equal_pos = define.find('=');
-        if(equal_pos == std::string::npos)
-          macros.defines.try_emplace(define);
-        else
-        {
-          auto key = define.substr(0, equal_pos);
-          auto tokens =
-            verilog_preprocessor_tokenize(define.substr(equal_pos + 1));
-          macros.defines.try_emplace(std::move(key), std::move(tokens));
-        }
+        auto tokens =
+          equal_pos == std::string::npos
+            ? std::vector<tokent>{}
+            : verilog_preprocessor_tokenize(define.substr(equal_pos + 1));
+        macros.defines.try_emplace(
+          define.substr(0, equal_pos), std::move(tokens));
       }
       macros.initialized = true;
     }

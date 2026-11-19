@@ -32,8 +32,10 @@ class verilog_macro_tablet
     using parameterst = std::vector<parametert>;
     parameterst parameters;
     std::vector<tokent> tokens;
+    bool predefined = false;
     definet() = default;
-    explicit definet(std::vector<tokent> _tokens) : tokens(std::move(_tokens))
+    explicit definet(std::vector<tokent> _tokens)
+      : tokens(std::move(_tokens)), predefined(true)
     {
     }
   };
@@ -41,6 +43,12 @@ class verilog_macro_tablet
   using definest = std::unordered_map<std::string, definet, string_hash>;
   definest defines;
   bool initialized = false;
+
+public:
+  /// Keep source definitions and allow the next preprocessor to supply a new
+  /// set of initial definitions. A source redefinition is retained even if
+  /// its name originally came from the command line.
+  void clear_initial_defines();
 };
 
 class verilog_preprocessort:public preprocessort
