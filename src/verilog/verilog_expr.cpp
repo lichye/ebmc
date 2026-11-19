@@ -15,6 +15,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <util/mathematical_types.h>
 #include <util/prefix.h>
 
+#include "aval_bval_encoding.h"
 #include "verilog_initializer.h"
 #include "verilog_typecheck_base.h"
 #include "verilog_types.h"
@@ -182,7 +183,7 @@ static mp_integer part_select_src_width(const typet &t)
     return 1;
 
   if(
-    t.id() == ID_unsignedbv || t.id() == ID_signedbv ||
+    t.id() == ID_bv || t.id() == ID_unsignedbv || t.id() == ID_signedbv ||
     t.id() == ID_verilog_signedbv || t.id() == ID_verilog_unsignedbv)
   {
     return to_bitvector_type(t).get_width();
@@ -276,110 +277,171 @@ exprt verilog_non_indexed_part_select_exprt::lower() const
   return ::lower(*this);
 }
 
+static exprt encoded_vector(exprt value)
+{
+  if(is_four_valued(value))
+  {
+    if(value.is_constant())
+      return lower_to_aval_bval(to_constant_expr(value));
+    value.type() = lower_to_aval_bval(value.type());
+  }
+  else if(value.type().id() == ID_bool)
+    return typecast_exprt{std::move(value), unsignedbv_typet{1}};
+  return value;
+}
+
+/// Run the same zero-padded selection on value bits and on the complement
+/// of the unknown-bit plane. A padded bit then has (aval, bval) = (0, 1).
+template <typename Select>
+static exprt select_vector(
+  const exprt &src,
+  const typet &type,
+  Select select,
+  bool in_bounds = false)
+{
+  if(!is_four_valued(type))
+    return select(is_aval_bval(src) ? aval(src) : src, type);
+
+  const auto plane_type = bv_typet{to_bitvector_type(type).get_width()};
+  exprt value = select(aval(src), plane_type);
+  exprt unknown;
+  if(in_bounds)
+    unknown = is_aval_bval(src) ? select(bval(src), plane_type)
+                                : exprt{plane_type.all_zeros_expr()};
+  else
+    unknown = bitnot_exprt{select(bitnot_exprt{bval(src)}, plane_type)};
+  return concatenation_exprt{
+    {std::move(unknown), std::move(value)}, lower_to_aval_bval(type)};
+}
+
 static exprt
 lower(const verilog_indexed_part_select_plus_or_minus_exprt &part_select)
 {
-  auto get_width = part_select_src_width;
+  const auto &raw_src = part_select.src();
+  auto src = encoded_vector(raw_src);
+  const mp_integer src_width = is_aval_bval(src)
+                                 ? aval_bval_width(src.type())
+                                 : part_select_src_width(src.type());
+  const auto &src_vector_type = to_verilog_vector_type(raw_src.type());
+  const auto src_offset =
+    part_select.get(ID_C_offset).empty()
+      ? src_vector_type.offset()
+      : string2integer(part_select.get_string(ID_C_offset));
+  const bool increasing =
+    part_select.get_bool(ID_C_increasing) || src_vector_type.increasing();
+  const bool plus = part_select.id() == ID_verilog_indexed_part_select_plus;
+  const auto &type = part_select.type();
+  const auto width = part_select_src_width(type);
+  const auto index = encoded_vector(part_select.index());
 
-  PRECONDITION(
-    part_select.id() == ID_verilog_indexed_part_select_plus ||
-    part_select.id() == ID_verilog_indexed_part_select_minus);
-
-  const exprt &src = part_select.src();
-
-  mp_integer src_width = get_width(src.type());
-  auto &src_vector_type = to_verilog_vector_type(src.type());
-  auto src_offset = src_vector_type.offset();
-  bool increasing = src_vector_type.increasing();
-
-  // The width of the indexed part select must be an
-  // elaboration-time constant.
-  auto width =
-    numeric_cast_v<mp_integer>(to_constant_expr(part_select.width()));
-
-  // The index need not be a constant.
-  const exprt &index = part_select.index();
-
-  // A `+:' select covers the declared range index..index+width-1, a `-:'
-  // select covers index-width+1..index. For a decreasing range the declared
-  // index i maps to internal (extractbits) bit i-offset; for an increasing
-  // range it maps to (src_width-1)-(i-offset) (1800-2017 7.4.1, 11.5.1), so
-  // the lowest internal bit corresponds to the largest declared index in the
-  // selection.
+  // Map the SystemVerilog base to the lowest internal bit of the slice.
+  mp_integer bias = src_offset;
+  if(increasing)
+    bias += plus ? src_width - width : src_width - 1;
+  else if(!plus)
+    bias += width - 1;
 
   if(index.is_constant())
   {
-    auto index_int = numeric_cast_v<mp_integer>(to_constant_expr(index));
-
-    // Construct the extractbits expression
-    mp_integer bottom;
-
-    if(part_select.id() == ID_verilog_indexed_part_select_plus)
+    const auto &constant = to_constant_expr(index);
+    auto missing = [&]() -> exprt
     {
-      if(increasing)
-        bottom = (src_width - 1) - (index_int - src_offset) - (width - 1);
-      else
-        bottom = index_int - src_offset;
-    }
-    else // ID_verilog_indexed_part_select_minus
-    {
-      if(increasing)
-        bottom = (src_width - 1) - (index_int - src_offset);
-      else
-        bottom = index_int - src_offset - width + 1;
-    }
-
-    // Construct the extractbits expression; bits outside the range of
-    // src are padded.
-    return part_select_extract(
-      src, bottom, part_select.type(), part_select.source_location());
+      if(is_four_valued(type))
+        return lower_to_aval_bval(constant_exprt{
+          std::string(numeric_cast_v<std::size_t>(width), 'x'), type});
+      return from_integer(0, type);
+    };
+    if(is_aval_bval(index) && aval_bval_has_xz(constant))
+      return missing();
+    const auto base =
+      is_aval_bval(index)
+        ? bvrep2integer(
+            constant.get_value(),
+            aval_bval_width(index.type()),
+            aval_bval_underlying(index.type()).id() == ID_signedbv)
+        : numeric_cast_v<mp_integer>(constant);
+    const mp_integer bottom = increasing ? bias - base : base - bias;
+    if(bottom >= src_width || bottom + width <= 0)
+      return missing();
+    return select_vector(
+      src,
+      type,
+      [&](exprt plane, const typet &plane_type)
+      {
+        return part_select_extract(
+          std::move(plane), bottom, plane_type, part_select.source_location());
+      },
+      bottom >= 0 && bottom + width <= src_width);
   }
-  else
+
+  exprt numeric_index =
+    is_aval_bval(index)
+      ? typecast_exprt{aval(index), aval_bval_underlying(index.type())}
+      : index;
+  // Bits below internal index zero need at most width-1 bits of padding.
+  // Omit the low padding when the adjusted index is always nonnegative.
+  const bool unbounded_index = numeric_index.type().id() == ID_integer;
+  const mp_integer low_padding = increasing || bias > 0 ||
+                                     numeric_index.type().id() == ID_signedbv ||
+                                     unbounded_index
+                                   ? width - 1
+                                   : mp_integer{0};
+  const mp_integer extended_width = src_width + low_padding;
+  const mp_integer padded_width = std::max(extended_width, width);
+  const mp_integer adjustment =
+    increasing ? bias + low_padding : low_padding - bias;
+  const mp_integer bound =
+    padded_width + (adjustment < 0 ? -adjustment : adjustment);
+  typet distance_type = integer_typet{};
+  if(!unbounded_index)
   {
-    // Index not constant.
-    // Use logical right-shift followed by (constant) extractbits.
-    // The shift amount equals the lowest internal bit of the selection.
-    exprt index_adjusted;
-
-    if(part_select.id() == ID_verilog_indexed_part_select_plus)
-    {
-      if(increasing)
-      {
-        //   (src_width - 1) - (index - src_offset) - (width - 1)
-        // = (src_width - 1) - (width - 1) + src_offset - index
-        // = src_width - width + src_offset - index
-        index_adjusted = minus_exprt{
-          from_integer(src_width - width + src_offset, index.type()), index};
-      }
-      else
-      {
-        index_adjusted =
-          minus_exprt{index, from_integer(src_offset, index.type())};
-      }
-    }
-    else // ID_verilog_indexed_part_select_minus
-    {
-      if(increasing)
-      {
-        // (src_width - 1) - (index - offset)
-        index_adjusted = minus_exprt{
-          from_integer(src_width - 1 + src_offset, index.type()), index};
-      }
-      else
-      {
-        index_adjusted = minus_exprt{
-          index, from_integer(src_offset + width - 1, index.type())};
-      }
-    }
-
-    auto src_shifted = lshr_exprt(src, index_adjusted);
-
-    return extractbits_exprt{
-      std::move(src_shifted),
-      from_integer(0, integer_typet{}),
-      part_select.type()}
-      .with_source_location(part_select);
+    const auto index_width =
+      to_bitvector_type(numeric_index.type()).get_width();
+    distance_type = signedbv_typet{std::max(
+      index_width + 2, numeric_cast_v<std::size_t>(address_bits(bound)) + 2)};
   }
+  auto wide_index =
+    typecast_exprt::conditional_cast(std::move(numeric_index), distance_type);
+  auto delta = from_integer(adjustment, distance_type);
+  exprt distance = increasing ? exprt{minus_exprt{delta, wide_index}}
+                              : plus_exprt{wide_index, delta};
+  auto in_range = and_exprt{
+    greater_than_or_equal_exprt{distance, from_integer(0, distance_type)},
+    less_than_exprt{distance, from_integer(padded_width, distance_type)}};
+  auto known_in_range =
+    and_exprt{not_exprt{has_xz(index)}, std::move(in_range)};
+  const auto padded_bits = numeric_cast_v<std::size_t>(padded_width);
+  const unsignedbv_typet shift_type{
+    numeric_cast_v<std::size_t>(address_bits(padded_width))};
+  const auto shift_distance = typecast_exprt{distance, shift_type};
+
+  return select_vector(
+    src,
+    type,
+    [&](exprt plane, const typet &plane_type)
+    {
+      if(low_padding != 0)
+      {
+        const bv_typet pad{numeric_cast_v<std::size_t>(low_padding)};
+        plane = concatenation_exprt{
+          {std::move(plane), pad.all_zeros_expr()},
+          bv_typet{numeric_cast_v<std::size_t>(extended_width)}};
+      }
+      if(extended_width < padded_width)
+      {
+        const bv_typet pad{
+          numeric_cast_v<std::size_t>(padded_width - extended_width)};
+        plane = concatenation_exprt{
+          {pad.all_zeros_expr(), std::move(plane)}, bv_typet{padded_bits}};
+      }
+
+      auto selected = extractbits_exprt{
+        lshr_exprt{std::move(plane), shift_distance}, 0, plane_type};
+      auto fill = bv_typet{numeric_cast_v<std::size_t>(width)}.all_zeros_expr();
+      fill.type() = plane_type;
+      return if_exprt{known_in_range, std::move(selected), std::move(fill)}
+        .with_source_location(part_select.source_location());
+    });
 }
 
 exprt verilog_indexed_part_select_plus_or_minus_exprt::lower() const

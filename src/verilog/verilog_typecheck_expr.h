@@ -205,7 +205,17 @@ protected:
   }
 
 protected:
-  [[nodiscard]] exprt convert_expr_rec(exprt expr);
+  // A select on an assignment target denotes storage. Only a read can
+  // introduce x bits when its index is out of range.
+  void convert_expr(exprt &expr, bool as_lvalue)
+  {
+    if(as_lvalue)
+      expr = convert_expr_rec(std::move(expr), true);
+    else
+      convert_expr(expr);
+  }
+
+  [[nodiscard]] exprt convert_expr_rec(exprt expr, bool as_lvalue = false);
   [[nodiscard]] exprt convert_constant(constant_exprt);
   [[nodiscard]] const symbolt *resolve(irep_idt base_name);
   [[nodiscard]] exprt convert_verilog_identifier(
@@ -215,9 +225,10 @@ protected:
     convert_hierarchical_identifier(class hierarchical_identifier_exprt);
   [[nodiscard]] exprt convert_nullary_expr(nullary_exprt);
   [[nodiscard]] exprt convert_unary_expr(unary_exprt);
-  [[nodiscard]] exprt convert_binary_expr(binary_exprt);
-  [[nodiscard]] exprt convert_trinary_expr(ternary_exprt);
-  [[nodiscard]] exprt convert_expr_concatenation(concatenation_exprt);
+  [[nodiscard]] exprt convert_binary_expr(binary_exprt, bool as_lvalue);
+  [[nodiscard]] exprt convert_trinary_expr(ternary_exprt, bool as_lvalue);
+  [[nodiscard]] exprt
+  convert_expr_concatenation(concatenation_exprt, bool as_lvalue);
   [[nodiscard]] exprt convert_expr_function_call(function_call_exprt);
   // Reorder a list of ordered and named arguments (1800-2017 13.5.4) into
   // positional order, matching the names to the given formal parameters.
@@ -226,7 +237,8 @@ protected:
     const code_typet::parameterst &parameters,
     const source_locationt &);
   [[nodiscard]] exprt convert_system_function(function_call_exprt);
-  [[nodiscard]] exprt convert_bit_select_expr(verilog_bit_select_exprt);
+  [[nodiscard]] exprt
+  convert_bit_select_expr(verilog_bit_select_exprt, bool as_lvalue);
   [[nodiscard]] exprt convert_interface_array_element(verilog_bit_select_exprt);
   /// The elements of an array of interface instances (1800-2017 25.4) and
   /// the blocks of a generate loop (1800-2017 27.6) are separate symbols,

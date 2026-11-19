@@ -926,7 +926,8 @@ Function: verilog_typecheck_exprt::convert_expr_concatenation
 \*******************************************************************/
 
 exprt verilog_typecheck_exprt::convert_expr_concatenation(
-  concatenation_exprt expr)
+  concatenation_exprt expr,
+  bool as_lvalue)
 {
   if(expr.operands().size() == 0)
   {
@@ -946,7 +947,7 @@ exprt verilog_typecheck_exprt::convert_expr_concatenation(
       *it = convert_replication_expr(to_replication_expr(std::move(*it)), true);
     }
     else
-      convert_expr(*it);
+      convert_expr(*it, as_lvalue);
 
     // check if there's an unsized literal (1800-2017 11.4.12)
     if(
@@ -1021,7 +1022,7 @@ Function: verilog_typecheck_exprt::convert_expr_rec
 
 \*******************************************************************/
 
-exprt verilog_typecheck_exprt::convert_expr_rec(exprt expr)
+exprt verilog_typecheck_exprt::convert_expr_rec(exprt expr, bool as_lvalue)
 {
   // variable number of operands
 
@@ -1036,7 +1037,7 @@ exprt verilog_typecheck_exprt::convert_expr_rec(exprt expr)
   }
   else if(expr.id() == ID_concatenation)
   {
-    return convert_expr_concatenation(to_concatenation_expr(expr));
+    return convert_expr_concatenation(to_concatenation_expr(expr), as_lvalue);
   }
   else if(expr.id()==ID_function_call)
   {
@@ -1085,8 +1086,8 @@ exprt verilog_typecheck_exprt::convert_expr_rec(exprt expr)
     // clang-format off
     case 0: return convert_nullary_expr(static_cast<const nullary_exprt &>(expr));
     case 1: return convert_unary_expr  (to_unary_expr(expr));
-    case 2: return convert_binary_expr (to_binary_expr(expr));
-    case 3: return convert_trinary_expr(to_ternary_expr(expr));
+    case 2: return convert_binary_expr (to_binary_expr(expr), as_lvalue);
+    case 3: return convert_trinary_expr(to_ternary_expr(expr), as_lvalue);
     // clang-format on
     default:
       throw errort().with_location(expr.source_location())
@@ -3786,13 +3787,14 @@ Function: verilog_typecheck_exprt::convert_bit_select_expr
 \*******************************************************************/
 
 exprt verilog_typecheck_exprt::convert_bit_select_expr(
-  verilog_bit_select_exprt expr)
+  verilog_bit_select_exprt expr,
+  bool as_lvalue)
 {
   // Verilog's bit select expression may map onto an extractbit
   // or an array index expression, depending on the type of the first
   // operand.
   exprt &src = expr.src(), &index = expr.index();
-  convert_expr(src);
+  convert_expr(src, as_lvalue);
   convert_expr(index);
 
   if(index.type().id() == ID_verilog_real)
@@ -4079,10 +4081,12 @@ Function: verilog_typecheck_exprt::convert_binary_expr
 
 \*******************************************************************/
 
-exprt verilog_typecheck_exprt::convert_binary_expr(binary_exprt expr)
+exprt verilog_typecheck_exprt::convert_binary_expr(
+  binary_exprt expr,
+  bool as_lvalue)
 {
   if(expr.id() == ID_verilog_bit_select)
-    return convert_bit_select_expr(to_verilog_bit_select_expr(expr));
+    return convert_bit_select_expr(to_verilog_bit_select_expr(expr), as_lvalue);
   else if(expr.id() == ID_verilog_package_scope)
   {
     auto location = expr.source_location();
@@ -4585,13 +4589,15 @@ Function: verilog_typecheck_exprt::convert_trinary_expr
 
 \*******************************************************************/
 
-exprt verilog_typecheck_exprt::convert_trinary_expr(ternary_exprt expr)
+exprt verilog_typecheck_exprt::convert_trinary_expr(
+  ternary_exprt expr,
+  bool as_lvalue)
 {
   if(expr.id() == ID_verilog_non_indexed_part_select)
   {
     auto &part_select = to_verilog_non_indexed_part_select_expr(expr);
     exprt &src = part_select.src();
-    convert_expr(src);
+    convert_expr(src, as_lvalue);
 
     // A non-indexed part-select applied to an array selects a range of
     // ELEMENTS, not bits (1800-2017 7.4.5/7.4.6, 7.4.3, 11.5.1). This
@@ -4674,7 +4680,7 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(ternary_exprt expr)
   {
     auto &part_select = to_verilog_indexed_part_select_plus_or_minus_expr(expr);
     exprt &src = part_select.src();
-    convert_expr(src);
+    convert_expr(src, as_lvalue);
 
     // An indexed part-select applied to an array selects a range of
     // ELEMENTS, not bits (1800-2017 7.4.6, 11.5.1). This applies to both
@@ -4747,10 +4753,24 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(ternary_exprt expr)
 
     mp_integer src_width = get_width(src.type());
     mp_integer src_offset = to_verilog_vector_type(src.type()).offset();
+    // Lowering a parameter or a four-state value can replace the source
+    // with a plain bit vector. Keep its declared coordinates for the read.
+    if(src_offset != 0)
+      expr.set(ID_C_offset, integer2string(src_offset));
+    if(to_verilog_vector_type(src.type()).increasing())
+      expr.set(ID_C_increasing, true);
 
     // The index need not be a constant.
     exprt &index = part_select.index();
     convert_expr(index);
+    // A constant base, including genvar arithmetic or a parameter, should
+    // remain a direct slice. A function call may depend on runtime arguments.
+    if(!index.is_constant() && !has_subexpr(index, ID_function_call))
+    {
+      if(const auto base = is_constant_integer_post_convert(index))
+        index =
+          from_integer(*base, integer_typet{}).with_source_location(index);
+    }
 
     // The width of the indexed part select must be an
     // elaboration-time constant.
@@ -4765,9 +4785,31 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(ternary_exprt expr)
 
     part_select.width() = from_integer(width, integer_typet());
 
-    // Part-select expressions are unsigned, even if the
-    // entire expression is selected!
-    expr.type() = unsignedbv_typet{numeric_cast_v<std::size_t>(width)};
+    // Indexed part-selects are unsigned and retain the source's state
+    // domain. The declaration kind records four-state packed vectors
+    // whose ordinary values are represented by two-valued bit vectors.
+    const auto result_width = numeric_cast_v<std::size_t>(width);
+    const bool declared_four_state = is_four_state_vector(src.type());
+    bool may_read_outside = !as_lvalue && declared_four_state;
+    if(may_read_outside && index.is_constant())
+    {
+      if(const auto base = numeric_cast<mp_integer>(to_constant_expr(index)))
+      {
+        const mp_integer low = expr.id() == ID_verilog_indexed_part_select_plus
+                                 ? *base
+                                 : *base - width + 1;
+        may_read_outside =
+          low < src_offset || low + width > src_offset + src_width;
+      }
+    }
+    if(is_four_valued(src.type()) || may_read_outside)
+      expr.type() = verilog_unsignedbv_typet{result_width};
+    else
+    {
+      expr.type() = unsignedbv_typet{result_width};
+      if(declared_four_state)
+        expr.type().set(ID_C_verilog_vector_type, ID_verilog_logic);
+    }
 
     return std::move(expr);
   }

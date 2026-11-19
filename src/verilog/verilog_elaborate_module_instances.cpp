@@ -728,7 +728,7 @@ void verilog_typecheckt::expand_instance_array(
         to_verilog_identifier_expr(op), bool_typet{});
     }
     else
-      convert_expr(op);
+      convert_expr(op, port.output());
   };
 
   if(named)
@@ -1096,7 +1096,7 @@ void verilog_typecheckt::parameterize_instantiated_modules(
   for(auto &instance : inst.instances())
   {
     const bool tristate = is_tristate_switch(inst_module);
-    typecheck_builtin_port_connections(instance, tristate);
+    typecheck_builtin_port_connections(instance, inst_module);
 
     // check built-in ones
     if(tristate)

@@ -24,6 +24,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include "verilog_bind.h"
 #include "verilog_bits.h"
 #include "verilog_expr.h"
+#include "verilog_tristate.h"
 #include "verilog_types.h"
 
 #include <cassert>
@@ -164,7 +165,7 @@ void verilog_typecheckt::typecheck_port_connection(
     }
     else
     {
-      convert_expr(op);
+      convert_expr(op, symbol.is_output);
     }
 
     // 1800-2017 6.5: "Variables cannot be connected to either side of an
@@ -343,8 +344,10 @@ Function: verilog_typecheckt::typecheck_builtin_port_connections
 
 void verilog_typecheckt::typecheck_builtin_port_connections(
   verilog_inst_baset::instancet &inst,
-  bool tristate_switch)
+  const irep_idt &primitive)
 {
+  const bool tristate_switch = is_tristate_switch(primitive);
+  const bool multiple_outputs = primitive == ID_buf || primitive == ID_not;
   exprt &range_expr = static_cast<exprt &>(inst.add(ID_range));
 
   ranget range;
@@ -382,7 +385,10 @@ void verilog_typecheckt::typecheck_builtin_port_connections(
     }
     else
     {
-      convert_expr(connection);
+      const bool output = multiple_outputs
+                            ? &connection != &inst.connections().back()
+                            : &connection == &inst.connections().front();
+      convert_expr(connection, output);
     }
 
     if(tristate_switch)
@@ -946,7 +952,7 @@ void verilog_typecheckt::convert_procedural_continuous_assign(
     exprt &lhs = to_binary_expr(assignment).lhs();
     exprt &rhs = to_binary_expr(assignment).rhs();
 
-    convert_expr(lhs);
+    convert_expr(lhs, true);
     convert_expr(rhs);
 
     assignment_conversion(rhs, lhs.type());
@@ -1019,10 +1025,10 @@ void verilog_typecheckt::convert_continuous_assign(
 
       declare_implicit_nets(lhs);
 
-      convert_expr(lhs);
+      convert_expr(lhs, true);
     }
     else
-      convert_expr(lhs);
+      convert_expr(lhs, true);
 
     convert_expr(rhs);
 
@@ -1155,7 +1161,7 @@ void verilog_typecheckt::convert_force(verilog_forcet &statement)
   exprt &lhs=statement.lhs();
   exprt &rhs=statement.rhs();
 
-  convert_expr(lhs);
+  convert_expr(lhs, true);
   convert_expr(rhs);
 
   assignment_conversion(rhs, lhs.type());
@@ -1215,7 +1221,7 @@ void verilog_typecheckt::convert_assign(
   else
     convert_expr(rhs);
 
-  convert_expr(lhs);
+  convert_expr(lhs, true);
   check_lhs(lhs, blocking?A_BLOCKING:A_NON_BLOCKING);
   assignment_conversion(rhs, lhs.type());
 }

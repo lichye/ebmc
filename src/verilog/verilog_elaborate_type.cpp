@@ -170,7 +170,12 @@ typet verilog_typecheck_exprt::convert_packed_array_type(
     else
       element_type = subtype.id();
 
-    if(
+    if(element_type.empty() || element_type == ID_nil)
+    {
+      // An implicit packed element type is four-state (1800-2017 6.10).
+      dest.set(ID_C_implicit, true);
+    }
+    else if(
       element_type == ID_verilog_logic || element_type == ID_reg ||
       element_type == ID_wire)
     {

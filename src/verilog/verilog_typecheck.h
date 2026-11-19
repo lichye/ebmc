@@ -292,7 +292,7 @@ protected:
 
   void typecheck_builtin_port_connections(
     verilog_inst_baset::instancet &,
-    bool tristate_switch);
+    const irep_idt &primitive);
 
   void typecheck_port_connection(exprt &op, const module_typet::portt &);
   void

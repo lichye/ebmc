@@ -105,6 +105,18 @@ bool is_unbounded_array_type(const typet &type)
   return false;
 }
 
+bool is_four_state_vector(const typet &type)
+{
+  const auto element = type.get(ID_C_verilog_vector_type);
+  const auto declared = type.get(ID_C_verilog_type);
+  return type.id() == ID_verilog_signedbv ||
+         type.id() == ID_verilog_unsignedbv || type.get_bool(ID_C_implicit) ||
+         element == ID_verilog_logic || element == ID_reg ||
+         element == ID_wire || declared == ID_verilog_logic ||
+         declared == ID_wire || declared == ID_integer ||
+         declared == ID_verilog_time;
+}
+
 typet make_two_valued(typet src)
 {
   if(src.id() == ID_verilog_unsignedbv)
