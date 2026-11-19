@@ -1934,6 +1934,7 @@ net_declaration:
           net_type drive_strength_opt vectored_scalared_opt data_type_or_implicit delay3_opt list_of_net_decl_assignments ';'
                 { init($$, ID_decl);
                   addswap($$, ID_class, $1);
+                  if(stack_expr($2).is_not_nil()) stack_expr($$).set("explicit_strength", true);
                   addswap($$, ID_type, $4);
                   swapop($$, $6); }
         | TOK_INTERCONNECT delay3_opt list_of_net_decl_assignments ';'
@@ -2229,11 +2230,16 @@ net_type_opt:
 net_port_type:
           net_type_opt signing_opt packed_dimension_brace
         {
+          auto net_kind = stack_expr($1).id();
+          if(net_kind != ID_nil && net_kind != ID_wire)
+            stack_expr($1).id(ID_wire);
           // The net type is a subtype of the signing.
           add_as_subtype(stack_type($2), stack_type($1));
           // That becomes a subtype of the packed dimension.
           add_as_subtype(stack_type($3), stack_type($2));
           $$ = $3;
+          if(net_kind != ID_nil && net_kind != ID_wire)
+            stack_type($$).set("#net_kind", net_kind);
         }
         | TOK_INTERCONNECT
         {
@@ -2304,45 +2310,25 @@ type_reference:
 
 drive_strength_opt:
           /* Optional */ { make_nil($$); }
-//      | drive_strength
+        | explicit_strength
         ;
 
-/*
-drive_strength:
-          '(' strength0 ',' strength1 ')'
-        | '(' strength1 ',' strength0 ')'
-        | '(' strength0 ',' TOK_HIGHZ1  ')'
-        | '(' strength1 ',' TOK_HIGHZ0  ')'
-        | '(' TOK_HIGHZ0  ',' strength1 ')'
-        | '(' TOK_HIGHZ1  ',' strength0 ')'
+explicit_strength:
+          '(' strength0 ',' strength1 ')' { init($$); }
+        | '(' strength1 ',' strength0 ')' { init($$); }
+        | '(' strength0 ',' TOK_HIGHZ1 ')' { init($$); }
+        | '(' strength1 ',' TOK_HIGHZ0 ')' { init($$); }
+        | '(' TOK_HIGHZ0 ',' strength1 ')' { init($$); }
+        | '(' TOK_HIGHZ1 ',' strength0 ')' { init($$); }
+        | '(' strength0 ')' { init($$); }
+        | '(' strength1 ')' { init($$); }
+        | '(' TOK_SMALL ')' { init($$); }
+        | '(' TOK_MEDIUM ')' { init($$); }
+        | '(' TOK_LARGE ')' { init($$); }
         ;
 
-strength0:
-          TOK_SUPPLY0
-        | TOK_STRONG0
-        | TOK_PULL0
-        | TOK_WEAK0
-        ;
-
-strength1:
-          TOK_SUPPLY1
-        | TOK_STRONG1
-        | TOK_PULL1
-        | TOK_WEAK1
-        ;
-*/
-
-charge_strength:
-          '(' TOK_SMALL ')'
-        | '(' TOK_MEDIUM ')'
-        | '(' TOK_LARGE ')'
-        ;
-
-charge_strength_opt:
-          /* Optional */
-                { make_nil($$); }
-        | charge_strength
-        ;
+strength0: TOK_SUPPLY0 | TOK_STRONG0 | TOK_PULL0 | TOK_WEAK0 ;
+strength1: TOK_SUPPLY1 | TOK_STRONG1 | TOK_PULL1 | TOK_WEAK1 ;
 
 // System Verilog standard 1800-2017
 // A.2.2.3 Delays
@@ -3772,54 +3758,25 @@ let_formal_type:
 // A.3.1 Primitive instantiation and instances
 
 gate_instantiation:
-          cmos_switchtype delay3_opt gate_instance_brace ';'
-                { init($$, ID_inst_builtin); addswap($$, ID_module, $1); swapop($$, $3); }
-        | enable_gatetype drive_strength_opt delay3_opt gate_instance_brace ';'
-                { init($$, ID_inst_builtin); addswap($$, ID_module, $1); swapop($$, $4); }
-        | mos_switchtype delay3_opt gate_instance_brace ';'
-                { init($$, ID_inst_builtin); addswap($$, ID_module, $1); swapop($$, $3); }
-        | n_input_gatetype drive_strength_opt delay3_opt gate_instance_brace ';'
-                { init($$, ID_inst_builtin); addswap($$, ID_module, $1); swapop($$, $4); }
-        | n_output_gatetype drive_strength_opt delay3_opt gate_instance_brace ';'
-                { init($$, ID_inst_builtin); addswap($$, ID_module, $1); swapop($$, $4); }
-        | pass_en_switchtype delay3_opt gate_instance_brace ';'
-                { init($$, ID_inst_builtin); addswap($$, ID_module, $1); swapop($$, $3); }
-        | pass_switchtype gate_instance_brace ';'
-                { init($$, ID_inst_builtin); addswap($$, ID_module, $1); swapop($$, $2); }
-        | TOK_PULLDOWN pulldown_strength_opt gate_instance_brace ';'
-                { init($$, ID_inst_builtin); stack_expr($$).set(ID_module, ID_pulldown); swapop($$, $3); }
-        | TOK_PULLUP   pullup_strength_opt   gate_instance_brace ';'
-                { init($$, ID_inst_builtin); stack_expr($$).set(ID_module, ID_pullup);   swapop($$, $3); }
+          gate_type gate_instances ';'
+                { init($$, ID_inst_builtin); addswap($$, ID_module, $1);
+                  if(stack_expr($2).get_bool("explicit_strength")) stack_expr($$).set("explicit_strength", true);
+                  swapop($$, $2); }
         ;
 
-// System Verilog standard 1800-2017
-// A.3.2 Primitive strengths
-
-pulldown_strength_opt:
-          /* Optional */ { make_nil($$); }
-//      | pulldown_strength
+gate_type:
+          cmos_switchtype | enable_gatetype | mos_switchtype
+        | n_input_gatetype | n_output_gatetype | pass_switchtype | pass_en_switchtype
+        | TOK_PULLDOWN { init($$, ID_pulldown); }
+        | TOK_PULLUP { init($$, ID_pullup); }
         ;
 
-/*
-pulldown_strength:
-          '(' strength0 ',' strength1 ')'
-        | '(' strength1 ',' strength0 ')'
-        | '(' strength0 ')'
+gate_instances:
+          gate_instance_brace
+        | delay3 gate_instance_brace { $$ = $2; }
+        | explicit_strength delay3_opt gate_instance_brace
+                { $$ = $3; stack_expr($$).set("explicit_strength", true); }
         ;
-*/
-
-pullup_strength_opt:
-          /* Optional */ { make_nil($$); }
-//      | pullup_strength
-        ;
-
-/*
-pullup_strength:
-          '(' strength0 ',' strength1 ')'
-        | '(' strength1 ',' strength0 ')'
-        | '(' strength1 ')'
-        ;
-*/
 
 // System Verilog standard 1800-2017
 // A.3.4 Primitive gate and switch types
@@ -3858,15 +3815,15 @@ n_output_gatetype:
         ;
 
 pass_en_switchtype:
-          TOK_RTRAN    { init($$, "rtran"); }
-        | TOK_RTRANIF0 { init($$, "rtranif0"); }
-        | TOK_RTRANIF1 { init($$, "rtranif0"); }
-        | TOK_TRAN     { init($$, "rtranif1"); }
+          TOK_RTRANIF0 { init($$, "rtranif0"); }
+        | TOK_RTRANIF1 { init($$, "rtranif1"); }
+        | TOK_TRANIF0  { init($$, "tranif0"); }
+        | TOK_TRANIF1  { init($$, "tranif1"); }
         ;
 
 pass_switchtype:
-          TOK_TRANIF0  { init($$, "tranif0"); }
-        | TOK_TRANIF1  { init($$, "tranif1"); }
+          TOK_RTRAN { init($$, "rtran"); }
+        | TOK_TRAN  { init($$, "tran"); }
         ;
 
 gate_instance_brace:
@@ -3877,17 +3834,12 @@ gate_instance_brace:
         ;
 
 gate_instance:
-          name_of_gate_instance_opt '(' list_of_module_connections_opt ')'
-                { $$ = $1;
-                  swapop($$, $3);
-                }
-        ;
-
-name_of_gate_instance_opt:
-          /* Optional */
+          name_of_gate_instance '(' list_of_module_connections_opt ')'
+                { $$ = $1; swapop($$, $3); }
+        | '(' list_of_module_connections_opt ')'
                 { init($$, ID_inst);
-                  stack_expr($$).set(ID_base_name, "$_&#ANON" + PARSER.get_next_id()); }
-        | name_of_gate_instance
+                  stack_expr($$).set(ID_base_name, "$_&#ANON" + PARSER.get_next_id());
+                  swapop($$, $2); }
         ;
 
 name_of_gate_instance:
@@ -4384,6 +4336,8 @@ edge_symbol:
 continuous_assign:
           TOK_ASSIGN delay3_opt list_of_net_assignments ';'
                 { init($$, ID_continuous_assign); swapop($$, $3); }
+        | TOK_ASSIGN explicit_strength delay3_opt list_of_net_assignments ';'
+                { init($$, ID_continuous_assign); stack_expr($$).set("explicit_strength", true); swapop($$, $4); }
         ;
 
 list_of_net_assignments:

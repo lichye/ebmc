@@ -30,6 +30,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include "verilog_initializer.h"
 #include "verilog_lowering.h"
 #include "verilog_rtl.h"
+#include "verilog_tristate.h"
 #include "verilog_typecheck_base.h"
 #include "verilog_typecheck_expr.h"
 
@@ -1199,6 +1200,12 @@ transt verilog_transition_relationt::convert()
     conjunction({}),
     module_symbol.type};
 
+  verilog_resolve_nets(
+    rtl,
+    symbol_table,
+    module,
+    trans,
+    [this](exprt e) { return lower(std::move(e)); });
   convert_definitions(rtl, trans);
   convert_initial_values(rtl, trans);
   convert_constraints(rtl, trans);

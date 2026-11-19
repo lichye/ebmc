@@ -290,7 +290,9 @@ protected:
     verilog_inst_baset::instancet &,
     const symbolt &symbol);
 
-  void typecheck_builtin_port_connections(verilog_inst_baset::instancet &);
+  void typecheck_builtin_port_connections(
+    verilog_inst_baset::instancet &,
+    bool tristate_switch);
 
   void typecheck_port_connection(exprt &op, const module_typet::portt &);
   void

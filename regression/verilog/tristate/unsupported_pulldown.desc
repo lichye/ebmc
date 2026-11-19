@@ -1,0 +1,6 @@
+CORE
+unsupported.sv
+-DPULL=pulldown
+^file .*unsupported\.sv line 7: .*unsupported primitive pulldown.*$
+^EXIT=2$
+^SIGNAL=0$

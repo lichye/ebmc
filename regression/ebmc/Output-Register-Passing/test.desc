@@ -1,6 +1,10 @@
 CORE
 main.v
 --module main --bound 5
-^EXIT=0$
+^\[main\.property\.property1\].*: REFUTED$
+^\[main\.property\.property2\].*: REFUTED$
+^EXIT=10$
 ^SIGNAL=0$
 --
+--
+A1 and the feedback through A2 can drive opposing bits on o1, so the resolved x can refute either equality.

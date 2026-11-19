@@ -1,0 +1,15 @@
+CORE
+switches.sv
+--bound 3
+^\[main\.high\].*: PROVED up to bound 3$
+^\[main\.low\].*: PROVED up to bound 3$
+^\[main\.transmission\].*: PROVED up to bound 3$
+^\[main\.release_bus\].*: PROVED up to bound 3$
+^\[main\.released_mos\].*: PROVED up to bound 3$
+^\[main\.unknown_can_be_zero\].*: REFUTED$
+^\[main\.unknown_can_be_one\].*: REFUTED$
+^\[main\.broadcast_inputs\].*: PROVED up to bound 3$
+^\[main\.broadcast_output\].*: PROVED up to bound 3$
+^\[main\.array_conflict\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

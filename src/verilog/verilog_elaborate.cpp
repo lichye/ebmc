@@ -13,6 +13,7 @@ Author: Daniel Kroening, kroening@kroening.com
 
 #include "aval_bval_encoding.h"
 #include "verilog_bind.h"
+#include "verilog_tristate.h"
 #include "verilog_typecheck.h"
 #include "verilog_types.h"
 
@@ -77,6 +78,27 @@ static void set_verilog_net_kind(typet &type, const irep_idt &kind)
   }
 }
 
+static void record_net_kind(
+  typet &type,
+  const irep_idt &kind,
+  const source_locationt &location)
+{
+  if(kind == ID_wand || kind == ID_wor || kind == ID_triand || kind == ID_trior)
+    throw verilog_typecheck_baset::errort{}.with_location(location)
+      << "unsupported net type " << kind;
+  if(
+    kind == ID_tri || kind == ID_tri0 || kind == ID_tri1 || kind == ID_trireg ||
+    kind == ID_uwire)
+  {
+    if(
+      (kind == ID_tri0 || kind == ID_tri1 || kind == ID_trireg) &&
+      !is_tristate_net_type(type))
+      throw verilog_typecheck_baset::errort{}.with_location(location)
+        << "unsupported data type for " << kind;
+    type.set("#net_kind", kind);
+  }
+}
+
 void verilog_typecheckt::collect_port_symbols(const verilog_declt &decl)
 {
   DATA_INVARIANT(decl.id() == ID_decl, "port declaration id");
@@ -107,6 +129,7 @@ void verilog_typecheckt::collect_port_symbols(const verilog_declt &decl)
     typet type =
       make_two_valued(elaborate_type(declarator.merged_type(decl.type())));
 
+    record_net_kind(type, decl.type().get("#net_kind"), decl.source_location());
     symbolt new_symbol{identifier, type, mode};
 
     if(port_class == ID_input)
@@ -460,6 +483,10 @@ static bool is_two_valued_type(const typet &type)
 
 void verilog_typecheckt::collect_symbols(const verilog_declt &decl)
 {
+  if(decl.get_bool("explicit_strength"))
+    throw errort{}.with_location(decl.source_location())
+      << "unsupported explicit net strength";
+
   // There may be symbols in the type (say an enum).
   collect_symbols(decl.type());
 
@@ -533,6 +560,9 @@ void verilog_typecheckt::collect_symbols(const verilog_declt &decl)
         symbol.location = declarator.source_location();
         symbol.type =
           make_two_valued(elaborate_type(declarator.merged_type(decl.type())));
+
+        record_net_kind(
+          symbol.type, decl.type().get("#net_kind"), decl.source_location());
 
         if(symbol.base_name.empty())
         {
@@ -694,7 +724,7 @@ void verilog_typecheckt::collect_symbols(const verilog_declt &decl)
     }
   }
   else if(
-    decl_class == ID_wire || decl_class == ID_supply0 ||
+    decl_class == ID_tri || decl_class == ID_supply0 ||
     decl_class == ID_supply1 || decl_class == ID_triand ||
     decl_class == ID_trior || decl_class == ID_trireg ||
     decl_class == ID_tri0 || decl_class == ID_tri1 || decl_class == ID_uwire ||
@@ -722,6 +752,7 @@ void verilog_typecheckt::collect_symbols(const verilog_declt &decl)
       symbol.type =
         make_two_valued(elaborate_type(declarator.merged_type(decl.type())));
       set_verilog_net_kind(symbol.type, ID_wire);
+      record_net_kind(symbol.type, decl_class, decl.source_location());
 
       if(symbol.base_name.empty())
       {
@@ -747,6 +778,7 @@ void verilog_typecheckt::collect_symbols(const verilog_declt &decl)
 
         if(osymbol.is_input || osymbol.is_output)
         {
+          record_net_kind(osymbol.type, decl_class, decl.source_location());
           // wire + input is ok
           // wire + output is ok
         }

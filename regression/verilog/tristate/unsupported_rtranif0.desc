@@ -1,0 +1,6 @@
+CORE
+unsupported.sv
+-DBIDIRECTIONAL=rtranif0
+^file .*unsupported\.sv line 3: .*unsupported primitive rtranif0.*$
+^EXIT=2$
+^SIGNAL=0$

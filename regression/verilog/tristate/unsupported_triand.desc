@@ -1,0 +1,7 @@
+CORE
+unsupported.sv
+-DNET=triand
+^file .*unsupported\.sv line 5: .*unsupported net type triand.*$
+^CONVERSION ERROR$
+^EXIT=2$
+^SIGNAL=0$

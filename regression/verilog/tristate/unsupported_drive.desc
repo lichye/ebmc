@@ -1,0 +1,6 @@
+CORE
+unsupported.sv
+-DDRIVE
+^file .*unsupported\.sv line 9: .*unsupported .*strength.*$
+^EXIT=2$
+^SIGNAL=0$

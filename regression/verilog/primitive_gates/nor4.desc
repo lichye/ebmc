@@ -1,8 +1,11 @@
 CORE
 nor4.sv
 
-^EXIT=0$
+^\[main\.nor_x1_ok\].*: REFUTED$
+^\[main\.nor_x2_ok\].*: REFUTED$
+^EXIT=10$
 ^SIGNAL=0$
 --
 ^warning: ignoring
 --
+The two gates can drive opposing values on the same wire, so each equality has a counterexample when the resolved value is x.

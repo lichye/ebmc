@@ -1,0 +1,6 @@
+CORE
+unsupported.sv
+-DCHARGE
+^file .*unsupported\.sv line 13: .*unsupported .*strength.*$
+^EXIT=2$
+^SIGNAL=0$

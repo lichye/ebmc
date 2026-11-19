@@ -33,6 +33,7 @@ SRC = aval_bval_encoding.cpp \
       verilog_standard.cpp \
       verilog_symbol_table.cpp \
       verilog_transition_relation.cpp \
+      verilog_tristate.cpp \
       verilog_typecheck.cpp \
       verilog_typecheck_base.cpp \
       verilog_typecheck_expr.cpp \

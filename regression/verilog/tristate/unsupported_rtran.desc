@@ -1,0 +1,6 @@
+CORE
+unsupported.sv
+-DPASS=rtran
+^file .*unsupported\.sv line 17: .*unsupported primitive rtran.*$
+^EXIT=2$
+^SIGNAL=0$

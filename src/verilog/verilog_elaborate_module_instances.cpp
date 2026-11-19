@@ -11,6 +11,7 @@ Author: Daniel Kroening, dkr@amazon.com
 #include <util/std_expr.h>
 
 #include "verilog_lowering.h"
+#include "verilog_tristate.h"
 #include "verilog_typecheck.h"
 #include "verilog_types.h"
 
@@ -1088,21 +1089,24 @@ void verilog_typecheckt::parameterize_instantiated_modules(
   verilog_inst_builtint &inst)
 {
   const irep_idt &inst_module = inst.module_base_name();
+  if(inst.get_bool("explicit_strength"))
+    throw errort{}.with_location(inst.source_location())
+      << "unsupported explicit primitive strength";
 
   for(auto &instance : inst.instances())
   {
-    typecheck_builtin_port_connections(instance);
+    const bool tristate = is_tristate_switch(inst_module);
+    typecheck_builtin_port_connections(instance, tristate);
 
     // check built-in ones
-    if(
-      inst_module == ID_bufif0 || inst_module == ID_bufif1 ||
-      inst_module == ID_notif0 || inst_module == ID_notif1)
+    if(tristate)
     {
-    }
-    else if(
-      inst_module == ID_nmos || inst_module == ID_pmos ||
-      inst_module == ID_rnmos || inst_module == ID_rpmos)
-    {
+      const std::size_t count =
+        inst_module == ID_cmos || inst_module == ID_rcmos ? 4 : 3;
+      if(instance.connections().size() != count)
+        throw errort{}.with_location(inst.source_location())
+          << "primitive " << inst_module << " expects " << count
+          << " terminals";
     }
     else if(
       inst_module == ID_and || inst_module == ID_nand || inst_module == ID_or ||
@@ -1124,18 +1128,10 @@ void verilog_typecheckt::parameterize_instantiated_modules(
           << " expects at least two operands";
       }
     }
-    else if(
-      inst_module == "tranif0" || inst_module == "tranif1" ||
-      inst_module == "rtranif1" || inst_module == "rtranif0")
-    {
-    }
-    else if(inst_module == "tran" || inst_module == "rtran")
-    {
-    }
     else
     {
       throw errort().with_location(inst.source_location())
-        << "Unknown primitive Verilog module " << inst_module;
+        << "unsupported primitive " << inst_module;
     }
   }
 }

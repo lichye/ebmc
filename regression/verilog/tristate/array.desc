@@ -1,0 +1,10 @@
+CORE
+array.sv
+--bound 3
+^\[main\.transparent\].*: PROVED up to bound 3$
+^\[main\.held\].*: PROVED up to bound 3$
+^\[main\.untouched\].*: PROVED up to bound 3$
+^\[main\.released\].*: PROVED up to bound 3$
+^\[main\.driven\].*: PROVED up to bound 3$
+^EXIT=0$
+^SIGNAL=0$

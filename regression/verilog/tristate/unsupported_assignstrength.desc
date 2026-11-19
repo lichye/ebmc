@@ -1,0 +1,6 @@
+CORE
+unsupported.sv
+-DASSIGNSTRENGTH
+^file .*unsupported\.sv line 15: .*unsupported .*strength.*$
+^EXIT=2$
+^SIGNAL=0$

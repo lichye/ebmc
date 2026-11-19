@@ -1,0 +1,12 @@
+CORE
+charge.sv
+--bound 3
+^\[main\.transparent\].*: PROVED up to bound 3$
+^\[main\.held\].*: PROVED up to bound 3$
+^\[main\.initial_held\].*: PROVED up to bound 3$
+^\[main\.initial_free0\].*: REFUTED$
+^\[main\.initial_free1\].*: REFUTED$
+^\[main\.conflict_zero\].*: REFUTED$
+^\[main\.conflict_one\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
