@@ -1,0 +1,8 @@
+CORE
+default_nested.sv
+--bound 2
+^\[main\.fields\].*: PROVED.*$
+^\[main\.wrong\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--

@@ -83,6 +83,7 @@ protected:
   void make_boolean(exprt &expr);
 
   void assignment_conversion(exprt &expr, const typet &type);
+  exprt assignment_pattern_default(const exprt &key, const typet &type);
   static bool unpacked_array_assignment_compatible(
     const typet &lhs_type,
     const typet &rhs_type);
