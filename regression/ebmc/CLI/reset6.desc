@@ -1,0 +1,10 @@
+CORE
+reset6.sv
+--top top --reset top.rst_n==0 --bound 3
+^\[top\.p\] always top\.q == 0: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+--reset with an active-low reset, word-level BMC.

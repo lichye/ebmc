@@ -14,12 +14,15 @@ Author: Daniel Kroening, dkr@amazon.com
 #include <util/cmdline.h>
 #include <util/get_module.h>
 #include <util/output_file.h>
+#include <util/std_expr.h>
+#include <util/symbol.h>
 #include <util/unicode.h>
 
 #include <ebmc/ebmc_error.h>
 #include <ebmc/show_modules.h>
 #include <ebmc/transition_system.h>
 #include <langapi/mode.h>
+#include <trans-word-level/next_symbol.h>
 #include <trans-word-level/show_module_hierarchy.h>
 
 #include "top_level_modules.h"
@@ -359,15 +362,6 @@ transition_systemt verilog_ebmc_languaget::create_transition_system(
   return transition_system;
 }
 
-static void make_next_state(exprt &expr)
-{
-  for(auto &sub_expression : expr.operands())
-    make_next_state(sub_expression);
-
-  if(expr.id() == ID_symbol)
-    expr.id(ID_next_symbol);
-}
-
 /// extract the list of modules from the Verilog parse trees
 static show_modulest
 show_modules(const verilog_ebmc_languaget::parse_treest &parse_trees)
@@ -589,17 +583,45 @@ void verilog_ebmc_languaget::create_reset_logic(
   auto reset_constraint_lowered = verilog_lowering(
     typecast_exprt::conditional_cast(reset_constraint, bool_typet{}));
 
-  // true in initial state
+  // The reset holds in the initial state, and not in any later state.
+  // The reset signal is typically an input, whose next-state value is
+  // not part of the state; a netlist cannot constrain it. Hence an
+  // auxiliary state variable records whether the initial state has been
+  // left, and the reset is constrained in each state by an invariant.
+  // The initial state constraint does not mention the reset, since some
+  // engines do not relate inputs in the initial state constraint to the
+  // inputs of the first transition.
+  const symbolt &main_symbol = *transition_system.main_symbol;
+
+  auxiliary_symbolt reset_done_symbol{
+    id2string(main_symbol.name) + "::reset_done",
+    bool_typet{},
+    main_symbol.mode};
+  reset_done_symbol.module = main_symbol.name;
+  reset_done_symbol.is_state_var = true;
+
+  const auto reset_done = reset_done_symbol.symbol_expr();
+
+  if(transition_system.symbol_table.add(std::move(reset_done_symbol)))
+    throw ebmc_errort{} << "symbol " << reset_done.get_identifier()
+                        << " exists already";
+
   transt new_trans_expr = transition_system.trans_expr;
+
+  // the initial state has not been left yet
   new_trans_expr.init() =
-    and_exprt(new_trans_expr.init(), reset_constraint_lowered);
+    and_exprt{new_trans_expr.init(), not_exprt{reset_done}};
 
-  // and not anymore afterwards
-  exprt reset_next_state = reset_constraint_lowered;
-  make_next_state(reset_next_state);
+  // all later states have left the initial state
+  new_trans_expr.trans() = and_exprt{
+    new_trans_expr.trans(),
+    equal_exprt{next_symbol_exprt{reset_done}, true_exprt{}}};
 
-  new_trans_expr.trans() =
-    and_exprt(new_trans_expr.trans(), not_exprt(reset_next_state));
+  // the reset holds exactly until the initial state has been left
+  new_trans_expr.invar() = and_exprt{
+    new_trans_expr.invar(),
+    equal_exprt{reset_constraint_lowered, not_exprt{reset_done}}};
+
   transition_system.trans_expr = new_trans_expr;
 }
 
