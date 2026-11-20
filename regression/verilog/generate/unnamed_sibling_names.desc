@@ -1,0 +1,8 @@
+CORE
+unnamed_sibling_loops.sv
+--show-symbol-table
+^  Verilog::\$root\.main\.genblk02\[1\]\.genblk1\[1\]\.value$
+^  Verilog::\$root\.main\.genblk02\[1\]\.genblk2\[1\]\.value$
+^EXIT=0$
+^SIGNAL=0$
+--

@@ -110,6 +110,7 @@ protected:
     module_itemst &dest);
 
   verilog_module_exprt elaborate(const verilog_module_sourcet &);
+  static module_itemst name_generate_blocks(const verilog_module_sourcet &);
   module_itemst elaborate_level(const module_itemst &);
   void elaborate_symbol_rec(irep_idt) override;
   static std::pair<typet, exprt>
