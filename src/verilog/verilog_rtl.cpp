@@ -2987,7 +2987,32 @@ void verilog_rtl_buildert::build_if(
   if(if_statement.has_else_case())
     build_statement(if_statement.else_case(), else_state, frames);
 
-  merge(cond, then_state, else_state, state);
+  // A branch that has been terminated by a break, continue or return
+  // statement does not reach the end of the if statement; what it
+  // assigned is carried by the state recorded with that statement,
+  // which is merged in at the end of the loop body, the loop or the
+  // subroutine (1800-2017 12.8). The values after the if statement are
+  // hence those of the other branch. Selecting between the branches
+  // would refer to the previous value of a variable twice, e.g., in
+  // 'if(c) break; else x++;', and the expression for x would then
+  // double in size with every iteration of an unrolled loop.
+  const bool then_dead = is_dead(then_state);
+  const bool else_dead = is_dead(else_state);
+
+  if(then_dead && !else_dead)
+  {
+    state.values = std::move(else_state.values);
+    state.blocking_values = std::move(else_state.blocking_values);
+    state.nonblocking_values = std::move(else_state.nonblocking_values);
+  }
+  else if(else_dead && !then_dead)
+  {
+    state.values = std::move(then_state.values);
+    state.blocking_values = std::move(then_state.blocking_values);
+    state.nonblocking_values = std::move(then_state.nonblocking_values);
+  }
+  else
+    merge(cond, then_state, else_state, state);
 
   // The path condition after the if statement is the disjunction of
   // the path conditions of the two branches. These differ from the
