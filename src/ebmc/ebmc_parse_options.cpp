@@ -331,7 +331,11 @@ int ebmc_parse_optionst::doit()
 
     // LTL/SVA to Buechi?
     if(cmdline.isset("buechi"))
-      instrument_buechi(transition_system, properties, ui_message_handler);
+      instrument_buechi(
+        transition_system,
+        properties,
+        cmdline.isset("new-ic3"),
+        ui_message_handler);
 
     // possibly apply liveness-to-safety
     if(cmdline.isset("liveness-to-safety"))

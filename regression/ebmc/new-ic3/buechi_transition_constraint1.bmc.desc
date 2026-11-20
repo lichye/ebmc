@@ -1,0 +1,7 @@
+CORE
+buechi_transition_constraint1.sv
+--bound 10
+^\[main\.p_hold\].*: PROVED up to bound 10$
+^\[main\.p_fail\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

@@ -1,5 +1,3 @@
-// The Buechi automaton for the negation of p is nondeterministic, and
-// its transition relation is a transition constraint of the netlist.
 module main(input clk, input a);
 
   reg a1, a2;
@@ -10,6 +8,7 @@ module main(input clk, input a);
   end
 
   // holds: a2 follows a by two cycles
-  p: assert property (@(posedge clk) a |-> ##[1:3] a2);
+  p_hold: assert property (@(posedge clk) a |-> ##[1:3] a2);
 
+  p_fail: assert property (@(posedge clk) a |-> ##1 a2);
 endmodule

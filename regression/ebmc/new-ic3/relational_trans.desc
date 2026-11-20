@@ -1,0 +1,6 @@
+CORE buechi
+relational_trans.smv
+--buechi --new-ic3
+^\[spec1\].*: UNSUPPORTED: transition constraints not supported by new IC3 engine$
+^EXIT=10$
+^SIGNAL=0$

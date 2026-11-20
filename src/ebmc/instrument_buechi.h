@@ -20,6 +20,7 @@ Author: Daniel Kroening, dkr@amazon.com
 void instrument_buechi(
   transition_systemt &,
   ebmc_propertiest &,
+  bool functional_assertions,
   message_handlert &);
 
 #endif // EBMC_BUECHI_AUTOMATON_INSTRUMENTATION_H

@@ -19,6 +19,7 @@ Author: Daniel Kroening, dkr@amazon.com
 void instrument_buechi(
   transition_systemt &transition_system,
   ebmc_propertiest &properties,
+  bool functional_assertions,
   message_handlert &message_handler)
 {
   for(auto &property : properties.properties)
@@ -51,7 +52,7 @@ void instrument_buechi(
     {
       // make the automaton for the negation of the property
       auto buechi = ltl_to_buechi(
-        not_exprt{property.normalized_expr}, assumed, message_handler);
+        not_exprt{formula}, assumed || functional_assertions, message_handler);
 
       // An existential choice of monitor run could hide a bad prefix. The
       // HOA must certify determinism and every accepting cycle must already

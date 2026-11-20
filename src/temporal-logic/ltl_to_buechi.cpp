@@ -168,7 +168,16 @@ buechi_transt ltl_to_buechi(
 
     auto max_state_number = hoa.max_state_number();
     auto ap_map = hoa.parse_AP();
-    auto state_type = integer_range_typet{0, max_state_number};
+    const bool deterministic = hoa.has_property("deterministic");
+    // Ordinary assertion engines use the original relation. In particular,
+    // k-induction exploits its restriction to actual automaton source states
+    // even in an induction step starting from an arbitrary bit pattern.
+    const bool functional = request_deterministic && deterministic;
+    // A missing edge rejects the word. Give a deterministic run a private,
+    // nonaccepting sink so it never restricts the design or another monitor.
+    const bool needs_sink = functional && !hoa.has_property("complete");
+    const auto last_state = needs_sink ? max_state_number + 1 : max_state_number;
+    auto state_type = integer_range_typet{0, last_state};
     const auto buechi_state = symbol_exprt{"buechi::state", state_type};
     const auto buechi_next_state =
       next_symbol_exprt{"buechi::state", state_type};
@@ -186,6 +195,8 @@ buechi_transt ltl_to_buechi(
           equal_exprt{buechi_state, from_integer(state_number, state_type)});
       }
 
+    if(functional && init_disjuncts.size() != 1)
+      throw ebmc_errort{} << "expected one deterministic HOA initial state";
     auto init = disjunction(init_disjuncts);
 
     message.debug() << "Buechi initial state: " << format(init)
@@ -222,26 +233,49 @@ buechi_transt ltl_to_buechi(
     // is accepting with an unconditional self-loop.
     std::vector<exprt> error_disjuncts;
 
-    std::map<hoat::intt, std::pair<hoat::state_namet, hoat::edgest>> state_map;
-    for(auto &state : hoa.body)
-      state_map[state.first.number] = state;
+    std::map<hoat::intt, bool> error_states;
+    for(const auto &state : hoa.body)
+      error_states.emplace(state.first.number, is_error_state(state));
+
+    exprt::operandst trans_disjuncts;
+    // A complete automaton already has a successor for every letter. Map
+    // unused state encodings back into the automaton (important during an
+    // induction step, which starts without an initial-state constraint).
+    const auto fallback = functional && !needs_sink
+                            ? to_equal_expr(init_disjuncts.front()).rhs()
+                            : from_integer(last_state, state_type);
+    exprt next_state = fallback;
 
     for(auto &state : hoa.body)
     {
-      for(auto &edge : state.second)
+      auto pre =
+        equal_exprt{buechi_state, from_integer(state.first.number, state_type)};
+      exprt successor = fallback;
+      for(const auto &edge : state.second)
       {
         if(edge.dest_states.size() != 1)
-          throw ebmc_errort() << "edge must have one destination state";
-        auto dest_state_it = state_map.find(edge.dest_states.front());
-        CHECK_RETURN(dest_state_it != state_map.end());
-        if(is_error_state(dest_state_it->second))
-        {
-          auto pre = equal_exprt{
-            buechi_state, from_integer(state.first.number, state_type)};
-          auto cond = hoa_label_to_expr(edge.label, ltl_sva_to_string, ap_map);
+          throw ebmc_errort{} << "edge must have one destination state";
+        const auto destination = edge.dest_states.front();
+        auto cond = hoa_label_to_expr(edge.label, ltl_sva_to_string, ap_map);
+        auto it = error_states.find(destination);
+        CHECK_RETURN(it != error_states.end());
+        if(it->second)
           error_disjuncts.push_back(and_exprt{pre, cond});
+
+        auto dest = from_integer(destination, state_type);
+        if(functional)
+        {
+          if(cond.is_true())
+            successor = std::move(dest);
+          else
+            successor = if_exprt{cond, dest, std::move(successor)};
         }
+        else
+          trans_disjuncts.push_back(
+            and_exprt{pre, cond, equal_exprt{buechi_next_state, dest}});
       }
+      if(functional)
+        next_state = if_exprt{pre, std::move(successor), std::move(next_state)};
     }
 
     auto error_signal = disjunction(error_disjuncts);
@@ -249,26 +283,9 @@ buechi_transt ltl_to_buechi(
     message.debug() << "Buechi error signal: " << format(error_signal)
                     << messaget::eom;
 
-    // construct the transition relation
-    std::vector<exprt> trans_disjuncts;
-
-    for(auto &state : hoa.body)
-    {
-      auto pre =
-        equal_exprt{buechi_state, from_integer(state.first.number, state_type)};
-      for(auto &edge : state.second)
-      {
-        if(edge.dest_states.size() != 1)
-          throw ebmc_errort() << "edge must have one destination state";
-        auto cond = hoa_label_to_expr(edge.label, ltl_sva_to_string, ap_map);
-        auto post = equal_exprt{
-          buechi_next_state,
-          from_integer(edge.dest_states.front(), state_type)};
-        trans_disjuncts.push_back(and_exprt{pre, cond, post});
-      }
-    }
-
-    auto trans = disjunction(trans_disjuncts);
+    auto trans = functional
+                   ? exprt{equal_exprt{buechi_next_state, std::move(next_state)}}
+                   : disjunction(trans_disjuncts);
 
     message.debug() << "Buechi transition constraint: " << format(trans)
                     << messaget::eom;
@@ -279,7 +296,7 @@ buechi_transt ltl_to_buechi(
       std::move(trans),
       std::move(error_signal),
       std::move(liveness_signal),
-      hoa.has_property("deterministic")};
+      deterministic};
   }
   catch(ltl_sva_to_string_unsupportedt error)
   {
