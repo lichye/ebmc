@@ -1,0 +1,11 @@
+CORE
+auxiliary_wire4.sv
+--bound 0
+^\[main\.p0\] always main\.y != 200: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+Reads of a variable in its own combinational definition are
+non-deterministic, also when they are in an auxiliary wire.

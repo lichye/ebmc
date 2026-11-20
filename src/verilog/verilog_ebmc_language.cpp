@@ -207,7 +207,12 @@ void verilog_ebmc_languaget::elaborate_module(
       module.parse_tree.standard,
       message_handler);
 
-    const namespacet ns(symbol_table);
+    // the auxiliary wires of the RTL representation
+    symbol_tablet auxiliary_symbol_table;
+    for(auto &symbol : rtl.auxiliary_symbols)
+      auxiliary_symbol_table.add(symbol);
+
+    const namespacet ns(symbol_table, auxiliary_symbol_table);
     rtl.output(ns, std::cout);
   }
 

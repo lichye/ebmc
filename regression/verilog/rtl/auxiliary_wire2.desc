@@ -1,0 +1,12 @@
+CORE
+auxiliary_wire2.sv
+--bound 1
+^\[main\.p0\] .*: PROVED up to bound 1$
+^EXIT=0$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+A masked write with a non-constant address, with one mask bit per
+data bit, in a loop of 12 iterations, compared with the same write
+without a loop. auxiliary_wire5 has the size used in PLENA.

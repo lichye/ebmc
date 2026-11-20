@@ -17,6 +17,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <util/namespace.h>
 #include <util/simplify_expr.h>
 #include <util/std_expr.h>
+#include <util/symbol_table.h>
 #include <util/symbol_table_base.h>
 #include <util/union_find.h>
 
@@ -37,6 +38,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <algorithm>
 #include <ostream>
 #include <set>
+#include <unordered_map>
 
 /*******************************************************************\
 
@@ -53,13 +55,15 @@ public:
   verilog_rtl_buildert(
     verilog_standardt _standard,
     const symbol_table_baset &_symbol_table,
+    symbol_table_baset &_auxiliary_symbol_table,
     const namespacet &_ns,
     const irep_idt &_module,
     message_handlert &_message_handler)
     : verilog_typecheck_baset(_standard, _ns, _message_handler),
       module(_module),
       symbol_table(_symbol_table),
-      message_handler(_message_handler)
+      message_handler(_message_handler),
+      auxiliary_symbol_table(_auxiliary_symbol_table)
   {
   }
 
@@ -76,6 +80,34 @@ protected:
   const symbol_table_baset &symbol_table;
   message_handlert &message_handler;
   verilog_rtlt rtl;
+
+  /// The symbols of the auxiliary wires introduced by bind_value.
+  /// The namespace \ref ns includes this table.
+  symbol_table_baset &auxiliary_symbol_table;
+
+  /// Procedural code can make the expression for a variable grow
+  /// exponentially in the number of statements, e.g., a conditional
+  /// increment 'if(c) n++;' in an unrolled loop yields c ? n+1 : n,
+  /// which refers to the previous value of n twice, and a write with a
+  /// non-constant index refers to the previous value of the array both
+  /// as the array that is updated and as the element that is modified.
+  /// The expression is shared in memory, but many passes, here and in
+  /// the engines, traverse it as a tree. Hence a value whose tree has
+  /// more than this many nodes is bound to an auxiliary wire, which is
+  /// defined by the value; later expressions refer to the wire.
+  static constexpr std::size_t auxiliary_wire_threshold = 1000;
+
+  /// values are bound to auxiliary wires while the statements of an
+  /// always construct are built
+  bool bind_values = false;
+
+  /// the auxiliary wires, per value, to share a wire between the
+  /// identical values that are merged in the maps of a state
+  std::unordered_map<exprt, symbol_exprt, irep_hash> auxiliary_wires;
+
+  /// Returns a symbol of an auxiliary wire for the given value of the
+  /// given identifier if the value is large, and the value otherwise.
+  exprt bind_value(exprt value, const irep_idt &identifier);
 
   /// the context in which properties are recorded
   verilog_rtl_propertyt::contextt property_context =
@@ -447,12 +479,14 @@ protected:
   /// is any part of the given fragment assigned in the given map?
   static bool covers(const statet::slice_valuest &, const verilog_rtl_slicet &);
 
-  /// merge the values assigned in the two branches
+  /// merge the values assigned in the two branches; with \p bind,
+  /// large merged values are bound to auxiliary wires
   void merge_maps(
     const exprt &cond,
     const statet::value_mapt &then_map,
     const statet::value_mapt &else_map,
-    statet::value_mapt &dest_map);
+    statet::value_mapt &dest_map,
+    bool bind);
 
   /// merge the slice values assigned to one identifier
   /// in the two branches
@@ -461,7 +495,8 @@ protected:
     const statet::slice_valuest &then_map,
     const statet::slice_valuest &else_map,
     const symbol_exprt &,
-    statet::slice_valuest &dest_map);
+    statet::slice_valuest &dest_map,
+    bool bind);
 
   /// Decompose an lvalue into its base symbol and the slice selected.
   /// Returns {} if the lvalue does not correspond to a constant slice.
@@ -478,12 +513,16 @@ protected:
   /// The slices of the given identifier that the given expression reads.
   /// Selects with constant indices yield the bits they read; any other
   /// read of the identifier, including one that cannot be resolved,
-  /// yields the whole slice given.
+  /// yields the whole slice given. Given \p auxiliary_visited, the reads
+  /// in the definitions of the auxiliary wires that the expression reads
+  /// are included, as if the definitions were written in place; the set
+  /// holds the auxiliary wires that have been visited.
   void collect_reads(
     const exprt &,
     const irep_idt &,
     const verilog_rtl_slicet &whole,
-    std::vector<verilog_rtl_slicet> &dest);
+    std::vector<verilog_rtl_slicet> &dest,
+    std::set<irep_idt> *auxiliary_visited = nullptr);
 
   /// mark the wire slices that depend on themselves
   void mark_self_dependent_wires();
@@ -701,6 +740,114 @@ exprt verilog_rtl_buildert::fold_and_simplify(exprt expr) const
     return result;
   else
     return folded;
+}
+
+/*******************************************************************\
+
+Function: tree_size_exceeds
+
+  Inputs:
+
+ Outputs:
+
+ Purpose: Does the given expression, written out as a tree, have
+          more than the given number of nodes? A shared subexpression
+          counts once per occurrence. The cost is linear in the number
+          of distinct nodes.
+
+\*******************************************************************/
+
+static bool tree_size_exceeds(const exprt &expr, std::size_t limit)
+{
+  // the size of the tree below each distinct node, saturated at limit+1
+  std::unordered_map<const void *, std::size_t> sizes;
+
+  std::function<std::size_t(const exprt &)> size =
+    [&](const exprt &e) -> std::size_t
+  {
+    auto entry = sizes.find(&e.read());
+    if(entry != sizes.end())
+      return entry->second;
+
+    std::size_t result = 1;
+    for(auto &op : e.operands())
+    {
+      result += size(op);
+      if(result > limit)
+      {
+        result = limit + 1;
+        break;
+      }
+    }
+
+    sizes.emplace(&e.read(), result);
+    return result;
+  };
+
+  return size(expr) > limit;
+}
+
+/*******************************************************************\
+
+Function: verilog_rtl_buildert::bind_value
+
+  Inputs:
+
+ Outputs:
+
+ Purpose: See the declaration. The auxiliary wire is combinational: it
+          is defined by the value in every state, and the value is a
+          function of the values of the current state, as are all
+          values of procedural assignments.
+
+\*******************************************************************/
+
+exprt verilog_rtl_buildert::bind_value(exprt value, const irep_idt &identifier)
+{
+  if(!bind_values || value.id() == ID_symbol || value.is_constant())
+    return value;
+
+  if(!tree_size_exceeds(value, auxiliary_wire_threshold))
+    return value;
+
+  auto existing = auxiliary_wires.find(value);
+  if(existing != auxiliary_wires.end())
+    return existing->second;
+
+  // types without a fixed number of bits are not bound
+  auto bits_opt = verilog_bits_opt(value.type());
+  if(!bits_opt.has_value() || *bits_opt < 1)
+    return value;
+
+  const symbolt &variable = ns.lookup(identifier);
+  const auto suffix = "value" + std::to_string(auxiliary_wires.size() + 1);
+
+  symbolt symbol{
+    id2string(variable.name) + "::" + suffix, value.type(), variable.mode};
+  symbol.base_name = id2string(variable.base_name) + "::" + suffix;
+  symbol.pretty_name = id2string(variable.display_name()) + "::" + suffix;
+  symbol.module = variable.module;
+  symbol.location = variable.location;
+  symbol.is_auxiliary = true;
+  symbol.is_lvalue = false;
+  symbol.is_state_var = false;
+
+  auto symbol_expr = symbol.symbol_expr();
+
+  if(auxiliary_symbol_table.add(symbol))
+  {
+    throw errort().with_location(variable.location)
+      << "auxiliary wire `" << symbol.name << "' exists already";
+  }
+
+  rtl.auxiliary_wires.insert(symbol.name);
+  rtl.identifier_map[symbol.name].emplace(
+    verilog_rtl_slicet{0, *bits_opt - 1},
+    verilog_rtl_definitiont{kindt::WIRE, value, variable.location});
+
+  auxiliary_wires.emplace(std::move(value), symbol_expr);
+
+  return std::move(symbol_expr);
 }
 
 /*******************************************************************\
@@ -2570,6 +2717,8 @@ void verilog_rtl_buildert::record_assignment(
 {
   auto &identifier = symbol.get_identifier();
 
+  value = bind_value(std::move(value), identifier);
+
   if(blocking)
   {
     // A blocking assignment that directly targets a slice contributes
@@ -2720,7 +2869,8 @@ void verilog_rtl_buildert::merge_slices(
   const statet::slice_valuest &then_map,
   const statet::slice_valuest &else_map,
   const symbol_exprt &symbol_expr,
-  statet::slice_valuest &dest_map)
+  statet::slice_valuest &dest_map,
+  bool bind)
 {
   std::set<mp_integer> cut_points;
 
@@ -2762,6 +2912,9 @@ void verilog_rtl_buildert::merge_slices(
         cond,
         then_value,
         typecast_exprt::conditional_cast(else_value, then_value.type())};
+
+      if(bind)
+        merged = bind_value(std::move(merged), symbol_expr.get_identifier());
     }
 
     write_slice(dest_map, fragment, std::move(merged));
@@ -2784,7 +2937,8 @@ void verilog_rtl_buildert::merge_maps(
   const exprt &cond,
   const statet::value_mapt &then_map,
   const statet::value_mapt &else_map,
-  statet::value_mapt &dest_map)
+  statet::value_mapt &dest_map,
+  bool bind)
 {
   std::set<irep_idt> identifiers;
 
@@ -2806,7 +2960,8 @@ void verilog_rtl_buildert::merge_maps(
       slice_values_of(then_map, identifier),
       slice_values_of(else_map, identifier),
       symbol_expr,
-      dest_map[identifier]);
+      dest_map[identifier],
+      bind);
   }
 }
 
@@ -2828,23 +2983,26 @@ void verilog_rtl_buildert::merge(
   const statet &else_state,
   statet &dest)
 {
-  merge_maps(cond, then_state.values, else_state.values, dest.values);
+  merge_maps(cond, then_state.values, else_state.values, dest.values, true);
 
   merge_maps(
     cond,
     then_state.blocking_values,
     else_state.blocking_values,
-    dest.blocking_values);
+    dest.blocking_values,
+    true);
 
   // The nonblocking_values map is only used to detect which bits have
   // been written by a nonblocking assignment, so that a subsequent
   // blocking write does not overwrite them in the committed next state.
   // A bit written in either branch is conservatively considered written.
+  // Its values are not used, hence they are not bound to wires.
   merge_maps(
     cond,
     then_state.nonblocking_values,
     else_state.nonblocking_values,
-    dest.nonblocking_values);
+    dest.nonblocking_values,
+    false);
 }
 
 /*******************************************************************\
@@ -4264,11 +4422,18 @@ void verilog_rtl_buildert::mark_self_dependent_wires()
     auto &identifier = identifier_entry.first;
     auto &slice_map = identifier_entry.second;
 
-    if(std::none_of(
-         slice_map.begin(),
-         slice_map.end(),
-         [](const auto &entry) { return entry.second.is_wire(); }))
+    // only wires are affected; auxiliary wires do not depend on
+    // themselves, since they are defined by values computed before
+    // they were introduced
+    if(
+      std::none_of(
+        slice_map.begin(),
+        slice_map.end(),
+        [](const auto &entry) { return entry.second.is_wire(); }) ||
+      rtl.auxiliary_wires.count(identifier) != 0)
+    {
       continue;
+    }
 
     const symbolt *symbol;
     if(ns.lookup(identifier, symbol))
@@ -4288,8 +4453,13 @@ void verilog_rtl_buildert::mark_self_dependent_wires()
       // element of the same unpacked array is a wire.
       if(!entry.second.is_wire())
         continue;
+
+      // The reads include those via auxiliary wires, which stand for
+      // their definitions.
       std::vector<verilog_rtl_slicet> reads;
-      collect_reads(entry.second.value, identifier, whole, reads);
+      std::set<irep_idt> auxiliary_visited;
+      collect_reads(
+        entry.second.value, identifier, whole, reads, &auxiliary_visited);
 
       auto &dest = successors[&entry.first];
 
@@ -4370,8 +4540,27 @@ void verilog_rtl_buildert::collect_reads(
   const exprt &expr,
   const irep_idt &identifier,
   const verilog_rtl_slicet &whole,
-  std::vector<verilog_rtl_slicet> &dest)
+  std::vector<verilog_rtl_slicet> &dest,
+  std::set<irep_idt> *auxiliary_visited)
 {
+  // the reads in the definition of an auxiliary wire, once per wire
+  auto through_auxiliary = [&](const irep_idt &read_identifier)
+  {
+    if(
+      auxiliary_visited != nullptr &&
+      rtl.auxiliary_wires.count(read_identifier) != 0 &&
+      auxiliary_visited->insert(read_identifier).second)
+    {
+      for(auto &definition : rtl.identifier_map.at(read_identifier))
+        collect_reads(
+          definition.second.value,
+          identifier,
+          whole,
+          dest,
+          auxiliary_visited);
+    }
+  };
+
   if(
     expr.id() == ID_symbol || expr.id() == ID_verilog_bit_select ||
     expr.id() == ID_verilog_non_indexed_part_select ||
@@ -4404,6 +4593,8 @@ void verilog_rtl_buildert::collect_reads(
         if(lower <= higher)
           dest.emplace_back(lower, higher);
       }
+      else
+        through_auxiliary(read_opt->symbol.get_identifier());
 
       return;
     }
@@ -4414,11 +4605,13 @@ void verilog_rtl_buildert::collect_reads(
   {
     if(to_symbol_expr(expr).get_identifier() == identifier)
       dest.push_back(whole);
+    else
+      through_auxiliary(to_symbol_expr(expr).get_identifier());
     return;
   }
 
   for(auto &op : expr.operands())
-    collect_reads(op, identifier, whole, dest);
+    collect_reads(op, identifier, whole, dest, auxiliary_visited);
 }
 
 /*******************************************************************\
@@ -4488,8 +4681,14 @@ void verilog_rtl_buildert::build_always(const verilog_always_baset &always)
   auto old_context = property_context;
   property_context = verilog_rtl_propertyt::contextt::ALWAYS;
 
+  // Large values are bound to auxiliary wires, see bind_value. This is
+  // not done in initial constructs and continuous assignments, whose
+  // values are post-processed (initial values, net drivers).
+  bind_values = true;
+
   build_statement(*body, state, framest{});
 
+  bind_values = false;
   property_context = old_context;
 
   commit(
@@ -6372,14 +6571,27 @@ verilog_rtlt verilog_rtl(
   verilog_undriven_modet undriven,
   const verilog_undriven_reportert &report_undriven)
 {
-  const namespacet ns(symbol_table);
+  // the auxiliary wires introduced by the builder
+  symbol_tablet auxiliary_symbol_table;
+  const namespacet ns(symbol_table, auxiliary_symbol_table);
 
   verilog_rtl_buildert builder(
-    standard, symbol_table, ns, module_identifier, message_handler);
+    standard,
+    symbol_table,
+    auxiliary_symbol_table,
+    ns,
+    module_identifier,
+    message_handler);
 
   try
   {
-    return builder.build(undriven, report_undriven);
+    auto rtl = builder.build(undriven, report_undriven);
+
+    for(auto &identifier : rtl.auxiliary_wires)
+      rtl.auxiliary_symbols.push_back(
+        auxiliary_symbol_table.lookup_ref(identifier));
+
+    return rtl;
   }
   catch(verilog_rtl_buildert::errort error)
   {

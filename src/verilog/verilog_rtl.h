@@ -12,6 +12,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <util/expr.h>
 #include <util/invariant.h>
 #include <util/mp_arith.h>
+#include <util/symbol.h>
 
 #include "verilog_standard.h"
 #include "verilog_undriven_report.h"
@@ -257,6 +258,14 @@ public:
 
   /// the properties, in the order in which they appear in the module
   std::vector<verilog_rtl_propertyt> properties;
+
+  /// Auxiliary wires that hold large values of procedural assignments,
+  /// which would otherwise be written out in each place they are used.
+  /// Their definitions are in \ref identifier_map. Their symbols are
+  /// not in the symbol table that the representation was built from,
+  /// and are given in \ref auxiliary_symbols, in the same order.
+  std::set<irep_idt> auxiliary_wires;
+  std::vector<symbolt> auxiliary_symbols;
 
   void output(const namespacet &, std::ostream &) const;
   std::string as_string(const namespacet &) const;

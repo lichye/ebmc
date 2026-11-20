@@ -1,0 +1,11 @@
+CORE
+auxiliary_wire1.sv
+--bound 0
+^\[main\.p0\] always main\.n == \$countones\(main\.x\): PROVED up to bound 0$
+^EXIT=0$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+A conditional increment in an unrolled loop of 32 iterations (popcount). Without the auxiliary
+wires, the tree of the expression has about 2^32 nodes.

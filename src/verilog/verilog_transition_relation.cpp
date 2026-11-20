@@ -164,6 +164,45 @@ protected:
   static void
   replace_symbol(const irep_idt &identifier, const exprt &replacement, exprt &);
 
+  /// The copies of the auxiliary wires of the RTL representation with
+  /// the reads of a wire replaced: per auxiliary wire, the copy, or {}
+  /// if the auxiliary wire does not read the wire; and per auxiliary
+  /// wire, whether it reads the wire.
+  struct auxiliary_copiest
+  {
+    std::map<irep_idt, std::optional<exprt>> copies;
+    std::map<irep_idt, bool> reads;
+  };
+
+  /// the number of copies of auxiliary wires, for their names
+  std::size_t auxiliary_copy_count = 0;
+
+  /// Replace the reads of the given wire in the given expression by the
+  /// given replacement, as \ref replace_symbol does, and do the same in
+  /// the auxiliary wires that the expression reads. An auxiliary wire
+  /// stands for its definition (see verilog_rtlt::auxiliary_wires);
+  /// one that reads the wire, directly or via other auxiliary wires, is
+  /// replaced by a copy whose definition has the reads replaced. The
+  /// copies are added to the symbol table and to the invariant.
+  void replace_symbol_through_auxiliary(
+    const verilog_rtlt &,
+    const irep_idt &identifier,
+    const exprt &replacement,
+    exprt &,
+    auxiliary_copiest &,
+    transt &);
+
+  /// does the given expression read the given identifier, directly or
+  /// via auxiliary wires?
+  static bool reads_through_auxiliary(
+    const verilog_rtlt &,
+    const irep_idt &identifier,
+    const exprt &,
+    std::map<irep_idt, bool> &auxiliary_reads);
+
+  /// add the invariant that the given wire is equal to the given value
+  void define_wire(const symbolt &, exprt value, transt &);
+
   static void set_default_sequence_semantics(exprt &, bool strong);
 };
 
@@ -546,6 +585,176 @@ void verilog_transition_relationt::replace_symbol(
 
 /*******************************************************************\
 
+Function: verilog_transition_relationt::reads_through_auxiliary
+
+  Inputs:
+
+ Outputs:
+
+ Purpose:
+
+\*******************************************************************/
+
+bool verilog_transition_relationt::reads_through_auxiliary(
+  const verilog_rtlt &rtl,
+  const irep_idt &identifier,
+  const exprt &expr,
+  std::map<irep_idt, bool> &auxiliary_reads)
+{
+  if(expr.id() == ID_symbol)
+  {
+    auto &symbol_identifier = to_symbol_expr(expr).get_identifier();
+
+    if(symbol_identifier == identifier)
+      return true;
+
+    if(rtl.auxiliary_wires.count(symbol_identifier) == 0)
+      return false;
+
+    auto entry = auxiliary_reads.find(symbol_identifier);
+    if(entry != auxiliary_reads.end())
+      return entry->second;
+
+    bool result = false;
+    for(auto &definition : rtl.identifier_map.at(symbol_identifier))
+      if(reads_through_auxiliary(
+           rtl, identifier, definition.second.value, auxiliary_reads))
+      {
+        result = true;
+      }
+
+    auxiliary_reads[symbol_identifier] = result;
+    return result;
+  }
+
+  for(auto &op : expr.operands())
+    if(reads_through_auxiliary(rtl, identifier, op, auxiliary_reads))
+      return true;
+
+  return false;
+}
+
+/*******************************************************************\
+
+Function: verilog_transition_relationt::replace_symbol_through_auxiliary
+
+  Inputs:
+
+ Outputs:
+
+ Purpose:
+
+\*******************************************************************/
+
+void verilog_transition_relationt::replace_symbol_through_auxiliary(
+  const verilog_rtlt &rtl,
+  const irep_idt &identifier,
+  const exprt &replacement,
+  exprt &expr,
+  auxiliary_copiest &copies,
+  transt &trans)
+{
+  if(expr.id() == ID_symbol)
+  {
+    auto &symbol_identifier = to_symbol_expr(expr).get_identifier();
+
+    if(symbol_identifier == identifier)
+    {
+      // preserve the type, including its attributes
+      auto type = expr.type();
+      expr = replacement;
+      expr.type() = std::move(type);
+    }
+    else if(rtl.auxiliary_wires.count(symbol_identifier) != 0)
+    {
+      auto copy = copies.copies.find(symbol_identifier);
+
+      if(copy == copies.copies.end())
+      {
+        // The auxiliary wires form no cycle, since each is defined by
+        // a value computed before the wire was introduced.
+        std::optional<exprt> copy_expr;
+
+        if(reads_through_auxiliary(rtl, identifier, expr, copies.reads))
+        {
+          const symbolt &auxiliary = ns.lookup(symbol_identifier);
+          const auto suffix =
+            "copy" + std::to_string(++auxiliary_copy_count);
+
+          symbolt copy_symbol = auxiliary;
+          copy_symbol.name = id2string(auxiliary.name) + "::" + suffix;
+          copy_symbol.base_name =
+            id2string(auxiliary.base_name) + "::" + suffix;
+          copy_symbol.pretty_name =
+            id2string(auxiliary.display_name()) + "::" + suffix;
+
+          auto &definitions = rtl.identifier_map.at(symbol_identifier);
+          DATA_INVARIANT(
+            definitions.size() == 1,
+            "auxiliary wire has a single definition");
+          exprt value = definitions.begin()->second.value;
+
+          replace_symbol_through_auxiliary(
+            rtl, identifier, replacement, value, copies, trans);
+
+          if(symbol_table.add(copy_symbol))
+          {
+            throw errort().with_location(auxiliary.location)
+              << "auxiliary wire `" << copy_symbol.name << "' exists already";
+          }
+
+          define_wire(copy_symbol, std::move(value), trans);
+          copy_expr = copy_symbol.symbol_expr();
+        }
+
+        copy = copies.copies.emplace(symbol_identifier, std::move(copy_expr))
+                 .first;
+      }
+
+      if(copy->second.has_value())
+      {
+        auto type = expr.type();
+        expr = *copy->second;
+        expr.type() = std::move(type);
+      }
+    }
+
+    return;
+  }
+
+  for(auto &op : expr.operands())
+    replace_symbol_through_auxiliary(
+      rtl, identifier, replacement, op, copies, trans);
+}
+
+/*******************************************************************\
+
+Function: verilog_transition_relationt::define_wire
+
+  Inputs:
+
+ Outputs:
+
+ Purpose:
+
+\*******************************************************************/
+
+void verilog_transition_relationt::define_wire(
+  const symbolt &symbol,
+  exprt value,
+  transt &trans)
+{
+  const auto lowered_type = verilog_lowering(symbol.type);
+
+  auto lowered_value =
+    typecast_exprt::conditional_cast(lower(std::move(value)), lowered_type);
+
+  trans.invar().add_to_operands(
+    equal_exprt{symbol_expr(symbol, false), std::move(lowered_value)});
+}
+
+/*******************************************************************\
+
 Function: verilog_transition_relationt::initial_nondet
 
   Inputs:
@@ -824,7 +1033,11 @@ void verilog_transition_relationt::convert_definitions(
             [&symbol_expr_raw, &whole](const verilog_rtl_slicet &fragment)
             { return extract_range(symbol_expr_raw, whole, fragment); });
 
-          replace_symbol(identifier, replacement, slice_value);
+          // Auxiliary wires stand for their definitions; the reads in
+          // them are replaced as well.
+          auxiliary_copiest copies;
+          replace_symbol_through_auxiliary(
+            rtl, identifier, replacement, slice_value, copies, trans);
         }
 
         slice_values.emplace(slice_entry.first, std::move(slice_value));
@@ -1278,6 +1491,16 @@ transt verilog_transition_relationt::convert(
     undriven_const ? verilog_undriven_modet::CONST
                    : verilog_undriven_modet::SEQ,
     report_undriven);
+
+  // the auxiliary wires that hold large values of procedural assignments
+  for(auto &symbol : rtl.auxiliary_symbols)
+  {
+    if(symbol_table.add(symbol))
+    {
+      throw errort().with_location(symbol.location)
+        << "auxiliary wire `" << symbol.name << "' exists already";
+    }
+  }
 
   // Variables that are forced to a value, e.g. by a port
   // connection, become wires.
