@@ -56,6 +56,7 @@ public:
   }
 
   mp_integer convert_integer_constant_expression(exprt);
+  mp_integer integer_constant_post_convert(const exprt &);
 
   exprt elaborate_constant_system_function_call(function_call_exprt);
 

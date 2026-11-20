@@ -1,0 +1,7 @@
+CORE
+constant_block_index.sv
+
+^\[main\.correct\].*: PROVED
+^EXIT=0$
+^SIGNAL=0$
+--

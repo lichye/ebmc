@@ -2598,8 +2598,13 @@ mp_integer
 verilog_typecheck_exprt::convert_integer_constant_expression(exprt expr)
 {
   convert_expr(expr);
+  return integer_constant_post_convert(expr);
+}
 
-  // copy the source location, we will modify 'expr'
+mp_integer
+verilog_typecheck_exprt::integer_constant_post_convert(const exprt &expr)
+{
+  // Keep the location of the source expression for diagnostics.
   auto source_location = expr.source_location();
 
   exprt tmp = elaborate_constant_expression_check(expr);
@@ -3850,7 +3855,7 @@ exprt verilog_typecheck_exprt::convert_bit_select_expr(
     // generate blocks, the individual blocks being named block_name[0],
     // block_name[1], and so on.  The parser has read the brackets as a bit
     // select.  The index must be an elaboration-time constant.
-    auto index = convert_integer_constant_expression(expr.index());
+    auto index = integer_constant_post_convert(expr.index());
     return convert_array_element_symbol(
       std::move(expr), index, "generate block");
   }
@@ -3900,7 +3905,7 @@ exprt verilog_typecheck_exprt::convert_interface_array_element(
   // must be an elaboration-time constant, and the expression resolves to
   // the symbol for that element.
   auto &array_type = to_verilog_array_type(expr.src().type());
-  auto index = convert_integer_constant_expression(expr.index());
+  auto index = integer_constant_post_convert(expr.index());
 
   auto size = array_type.size_int();
   auto offset = array_type.offset();
