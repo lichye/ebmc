@@ -526,10 +526,20 @@ exprt to_bitvector(const exprt &src)
     bool is_packed =
       array_type.get(ID_C_verilog_type) == ID_verilog_packed_array;
 
+    // The element indices have the index type of the Verilog array, which
+    // is the type of non-constant indices and of the positions of array
+    // updates. An index of type integer would make the simplification of
+    // (a WITH [i:=v])[j] compare an integer-typed cast of i with j, which
+    // the bit-level flattening cannot convert.
+    const typet index_type =
+      array_type.find(ID_offset).is_nil()
+        ? typet{integer_typet{}}
+        : to_verilog_array_type(array_type).index_type();
+
     // An array constructor: use its operands, rather than index
     // expressions on the constructor, which would replicate the entire
     // constructor once per element.
-    auto element = [&src](std::size_t index) -> exprt
+    auto element = [&src, &index_type](std::size_t index) -> exprt
     {
       if(src.id() == ID_array)
       {
@@ -539,7 +549,7 @@ exprt to_bitvector(const exprt &src)
         return src.operands()[index];
       }
       else
-        return index_exprt{src, from_integer(index, integer_typet{})};
+        return index_exprt{src, from_integer(index, index_type)};
     };
 
     if(is_packed && array_type.get_bool(ID_C_increasing))

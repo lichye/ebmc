@@ -1820,13 +1820,19 @@ extract_bits(const exprt &value, const mp_integer &offset, std::size_t width)
       array_type.get(ID_C_verilog_type) == ID_verilog_packed_array &&
       array_type.get_bool(ID_C_increasing);
 
+    // the index type of the Verilog array, as in to_bitvector
+    const typet index_type =
+      array_type.find(ID_offset).is_nil()
+        ? typet{integer_typet{}}
+        : to_verilog_array_type(array_type).index_type();
+
     for(std::size_t i = 0; i < size; i++)
     {
       auto index = element_zero_first ? i : size - 1 - i;
       exprt part =
         value.id() == ID_array
           ? value.operands()[index]
-          : exprt{index_exprt{value, from_integer(index, integer_typet{})}};
+          : exprt{index_exprt{value, from_integer(index, index_type)}};
       add_part(std::move(part), array_type.element_type());
     }
   }

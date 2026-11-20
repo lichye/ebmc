@@ -1,0 +1,10 @@
+CORE
+array_write_variable_index_netlist1.sv
+--k-induction --bound 2
+^\[main\.p\] .*: PROVED$
+^EXIT=0$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+Word-level k-induction.

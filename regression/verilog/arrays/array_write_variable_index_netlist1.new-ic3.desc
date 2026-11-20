@@ -1,0 +1,11 @@
+CORE
+array_write_variable_index_netlist1.sv
+--new-ic3
+^\[main\.p\] .*: PROVED$
+^EXIT=0$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+The new IC3 engine uses the netlist. It refuted p when an index of
+the flattened array had type integer, which the netlist cannot convert.

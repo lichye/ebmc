@@ -1,0 +1,11 @@
+KNOWNBUG
+array_write_variable_index_netlist1.sv
+--bdd
+^\[main\.p\] .*: PROVED$
+^EXIT=0$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+The BDD engine fails an invariant: bdd_engine.cpp, build_BDDs,
+"non-AND BDD already done".
