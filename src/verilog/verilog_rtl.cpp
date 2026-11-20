@@ -5021,7 +5021,10 @@ void verilog_rtl_buildert::finish_net_drivers()
         d.drive.value = verilog_sample_drive(d.drive.value, fresh);
       if(d.constraint_lhs)
         rtl.constraints.push_back(
-          equal_exprt{*d.constraint_lhs, d.drive.value});
+          equal_exprt{
+            *d.constraint_lhs,
+            port_connection_conversion(
+              std::move(d.drive.value), d.constraint_lhs->type())});
       else
       {
         statet state;

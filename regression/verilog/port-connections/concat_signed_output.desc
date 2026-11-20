@@ -1,0 +1,8 @@
+CORE
+concat_signed_output.sv
+
+^\[main\.hi_ok\].*: PROVED.*$
+^\[main\.lo_ok\].*: PROVED.*$
+^EXIT=0$
+^SIGNAL=0$
+--
