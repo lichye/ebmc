@@ -1,0 +1,11 @@
+CORE
+reset7.sv
+--reset !main.rst_n --bdd
+^\[main\.p_once\] .*: PROVED$
+^\[main\.p_count\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+An active-low reset with BDDs, which use the netlist.

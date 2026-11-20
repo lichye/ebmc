@@ -1,0 +1,11 @@
+CORE
+reset6.sv
+--reset main.rst --bound 10 --aig
+^\[main\.p_once\] .*: PROVED up to bound 10$
+^\[main\.p_count\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+An active-high reset with BMC on the netlist.

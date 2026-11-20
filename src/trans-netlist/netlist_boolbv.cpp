@@ -87,6 +87,21 @@ bvt netlist_boolbvt::convert_bitvector(const exprt &expr)
       return SUB::convert_bitvector(expr);
     }
 
+    // Only latches have a next-state value in the netlist. The next-state
+    // value of an input, a wire or an output belongs to the next time
+    // frame, which a transition of the netlist does not contain.
+    if(next)
+    {
+      auto var_it = var_map.map.find(identifier);
+      if(var_it != var_map.map.end() && !var_it->second.is_latch())
+      {
+        throw ebmc_errort().with_location(expr.source_location())
+          << "the next-state value of `" << identifier
+          << "' is not supported by the netlist, since it is not a state "
+             "variable";
+      }
+    }
+
     if(width != 0)
     {
       bvt bv;
