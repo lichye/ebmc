@@ -28,6 +28,8 @@ Author: Daniel Kroening, dkr@amazon.com
 
 #include "ic3_solver.h"
 
+#include <algorithm>
+
 static bool new_ic3_supports_property(const exprt &expr)
 {
   if(!is_temporal_operator(expr))
@@ -139,6 +141,34 @@ property_checker_resultt new_ic3_engine(
   message.statistics() << "Latches: " << netlist.var_map.latches.size()
                        << ", nodes: " << netlist.number_of_nodes()
                        << messaget::eom;
+
+  // The engine assumes that the transition relation is given by the
+  // next-state functions of the latches (see ic3_solvert). Transition
+  // constraints, e.g., from the transition relation of a nondeterministic
+  // Buechi automaton (--buechi), make it report spurious counterexamples.
+  // Hence models with transition constraints are not supported.
+  bool have_transition_constraints = std::any_of(
+    netlist.transition.begin(),
+    netlist.transition.end(),
+    [](literalt l) { return !l.is_true(); });
+
+  if(have_transition_constraints)
+  {
+    message.error() << "transition constraints are not supported by new IC3 "
+                       "engine"
+                    << messaget::eom;
+
+    for(auto &property : properties.properties)
+    {
+      if(property.is_disabled() || !property.is_unknown())
+        continue;
+
+      property.unsupported(
+        "transition constraints not supported by new IC3 engine");
+    }
+
+    return property_checker_resultt{properties};
+  }
 
   // Convert invariant assumptions to netlist constraints.
   for(auto &property : properties.properties)

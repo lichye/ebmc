@@ -1,0 +1,13 @@
+CORE buechi
+buechi_transition_constraint1.sv
+--buechi --new-ic3
+^\[main\.p\] .*: UNSUPPORTED: transition constraints not supported by new IC3 engine$
+^EXIT=10$
+^SIGNAL=0$
+--
+^\[main\.p\] .*: REFUTED$
+--
+The new IC3 engine assumes that the transition relation is given by the
+next-state functions of the latches. With a transition constraint, it
+reported a spurious counterexample for p, which holds (word-level BMC,
+k-induction and BDDs with --buechi prove it).
