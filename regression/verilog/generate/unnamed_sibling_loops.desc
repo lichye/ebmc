@@ -1,0 +1,7 @@
+CORE
+unnamed_sibling_loops.sv
+
+^\[main\.scopes\].*: PROVED.*$
+^EXIT=0$
+^SIGNAL=0$
+--

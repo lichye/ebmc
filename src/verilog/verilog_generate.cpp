@@ -11,6 +11,111 @@ Author: Daniel Kroening, kroening@kroening.com
 #include "verilog_expr.h"
 #include "verilog_typecheck.h"
 
+namespace
+{
+using generate_itemst = verilog_module_exprt::module_itemst;
+using generate_namest = std::set<irep_idt>;
+
+// Directly nested conditionals share the outer alternatives' scope (27.5.3).
+void generate_bodies(exprt &construct, std::vector<exprt *> &bodies)
+{
+  const auto add = [&](exprt &body)
+  {
+    if(body.id() == ID_generate_if || body.id() == ID_verilog_case_generate)
+      generate_bodies(body, bodies);
+    else
+      bodies.push_back(&body);
+  };
+  if(construct.id() == ID_generate_for)
+    bodies.push_back(&construct.operands()[3]);
+  else if(construct.id() == ID_generate_if)
+  {
+    for(std::size_t i = 1; i < construct.operands().size(); ++i)
+      add(construct.operands()[i]);
+  }
+  else
+    for(auto &item : to_verilog_case_generate(construct).items())
+      add(item.block());
+}
+
+void collect_generate_constructs(
+  generate_itemst &items,
+  std::vector<std::vector<exprt *>> &constructs,
+  generate_namest &names)
+{
+  for(auto &item : items)
+  {
+    if(item.id() == ID_generate_block)
+    {
+      // Explicit generate/endgenerate regions do not introduce a scope.
+      collect_generate_constructs(
+        to_verilog_generate_block(item).module_items(), constructs, names);
+    }
+    else if(
+      item.id() == ID_generate_for || item.id() == ID_generate_if ||
+      item.id() == ID_verilog_case_generate)
+    {
+      auto &bodies = constructs.emplace_back();
+      generate_bodies(item, bodies);
+      for(const auto *body : bodies)
+        if(body->id() == ID_generate_block)
+          names.insert(body->get(ID_base_name));
+    }
+    else
+    {
+      names.insert(item.get(ID_base_name));
+      for(const auto &op : std::as_const(item).operands())
+        names.insert(op.get(ID_base_name));
+    }
+  }
+}
+
+void name_generate_scope(generate_itemst &items, generate_namest names = {})
+{
+  // Number the syntax before evaluating conditions or unrolling loops. All
+  // iterations of a loop then use the same name for each nested construct.
+  std::vector<std::vector<exprt *>> constructs;
+  collect_generate_constructs(items, constructs, names);
+  for(std::size_t i = 0; i < constructs.size(); ++i)
+  {
+    auto number = std::to_string(i + 1);
+    while(names.count("genblk" + number))
+      number.insert(0, 1, '0');
+    const irep_idt implicit_name{"genblk" + number};
+    for(auto *body : constructs[i])
+    {
+      if(body->id() != ID_generate_block)
+      {
+        auto location = body->source_location();
+        *body = verilog_generate_blockt{
+          implicit_name, {static_cast<const verilog_module_itemt &>(*body)}};
+        body->add_source_location() = location;
+      }
+      auto &block = to_verilog_generate_block(*body);
+      if(!block.is_named())
+        block.base_name(implicit_name);
+      name_generate_scope(block.module_items());
+    }
+  }
+}
+} // namespace
+
+verilog_typecheckt::module_itemst
+verilog_typecheckt::name_generate_blocks(const verilog_module_sourcet &source)
+{
+  generate_namest names;
+  for(const auto &decl : source.parameter_port_decls())
+    for(const auto &d : decl.declarators())
+      names.insert(d.base_name());
+  for(const auto &decl : source.ports())
+    for(const auto &d : decl.declarators())
+      names.insert(d.base_name());
+
+  auto items = source.module_items();
+  name_generate_scope(items, std::move(names));
+  return items;
+}
+
 /*******************************************************************\
 
 Function: verilog_typecheckt::elaborate_generate_block

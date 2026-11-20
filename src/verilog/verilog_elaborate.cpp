@@ -1600,7 +1600,8 @@ verilog_typecheckt::elaborate(const verilog_module_sourcet &module_source)
     collect_port_symbols(port_decl);
 
   // Now elaborate the top level of the module.
-  auto elaborated_module_items = elaborate_level(module_source.module_items());
+  auto elaborated_module_items =
+    elaborate_level(name_generate_blocks(module_source));
 
   // Create verilog_module expression from the elaborated
   // module items.
