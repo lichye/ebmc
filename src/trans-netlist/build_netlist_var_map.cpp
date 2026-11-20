@@ -41,6 +41,8 @@ build_netlist_var_map(symbol_table_baset &symbol_table, const irep_idt &module)
 
     if(symbol.is_property)
       return; // ignore properties
+    else if(symbol.is_macro)
+      return; // elaboration-time constants, including string parameters
     else if(
       symbol.type.id() == ID_verilog_sva_named_sequence ||
       symbol.type.id() == ID_verilog_sva_named_property)

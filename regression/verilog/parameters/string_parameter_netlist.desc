@@ -1,0 +1,8 @@
+CORE
+string_parameter_netlist.sv
+--new-ic3
+^\[main\.disabled_stays_low\] .*: PROVED$
+^\[main\.enabled_rises\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
