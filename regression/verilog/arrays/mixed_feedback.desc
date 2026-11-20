@@ -1,0 +1,11 @@
+CORE
+mixed_feedback.sv
+--bound 3
+^\[main\.comb\].*: PROVED
+^\[main\.reset_value\].*: PROVED
+^\[main\.toggles\].*: PROVED
+^\[main\.holds\].*: PROVED
+^\[main\.before_init\].*: REFUTED
+^EXIT=10$
+^SIGNAL=0$
+--

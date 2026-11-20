@@ -1,0 +1,9 @@
+CORE
+mixed_initial_zero.sv
+--bound 1 --initial-zero
+^\[main\.checks\.reg_zero\].*: PROVED
+^\[main\.checks\.still_live\].*: PROVED
+^\[main\.checks\.input_free\].*: REFUTED
+^EXIT=10$
+^SIGNAL=0$
+--

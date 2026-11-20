@@ -4264,8 +4264,10 @@ void verilog_rtl_buildert::mark_self_dependent_wires()
     auto &identifier = identifier_entry.first;
     auto &slice_map = identifier_entry.second;
 
-    // only wires are affected
-    if(!slice_map.begin()->second.is_wire())
+    if(std::none_of(
+         slice_map.begin(),
+         slice_map.end(),
+         [](const auto &entry) { return entry.second.is_wire(); }))
       continue;
 
     const symbolt *symbol;
@@ -4282,18 +4284,26 @@ void verilog_rtl_buildert::mark_self_dependent_wires()
 
     for(auto &entry : slice_map)
     {
+      // A register breaks combinational feedback, even when another
+      // element of the same unpacked array is a wire.
+      if(!entry.second.is_wire())
+        continue;
       std::vector<verilog_rtl_slicet> reads;
       collect_reads(entry.second.value, identifier, whole, reads);
 
       auto &dest = successors[&entry.first];
 
       for(auto &other : slice_map)
+      {
+        if(!other.second.is_wire())
+          continue;
         for(auto &read : reads)
           if(read.overlaps(other.first))
           {
             dest.push_back(&other.first);
             break;
           }
+      }
     }
 
     // the slices reachable from a slice
@@ -4317,14 +4327,16 @@ void verilog_rtl_buildert::mark_self_dependent_wires()
 
     std::map<slice_ptrt, std::set<slice_ptrt>> reachable_map;
 
-    for(auto &entry : slice_map)
-      reachable_map[&entry.first] = reachable(&entry.first);
+    for(const auto &entry : successors)
+      reachable_map[entry.first] = reachable(entry.first);
 
     // A slice depends on itself if it can reach itself. The slices in
     // the cycle are those that it reaches and that reach it.
     for(auto &entry : slice_map)
     {
-      auto &from_slice = reachable_map[&entry.first];
+      if(!entry.second.is_wire())
+        continue;
+      auto &from_slice = reachable_map.at(&entry.first);
 
       if(from_slice.find(&entry.first) == from_slice.end())
         continue; // not self-dependent

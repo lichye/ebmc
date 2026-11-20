@@ -82,6 +82,13 @@ protected:
 
   using kindt = verilog_rtl_definitiont::kindt;
 
+  struct mixed_arrayt
+  {
+    symbol_exprt storage;
+    exprt initial_read;
+  };
+  std::map<irep_idt, mixed_arrayt> mixed_arrays;
+  void split_mixed_arrays(verilog_rtlt &);
   void convert_definitions(const verilog_rtlt &, transt &);
   void convert_initial_values(const verilog_rtlt &, transt &);
 
@@ -556,8 +563,15 @@ void verilog_transition_relationt::initial_nondet(exprt &expr)
 
   if(expr.id() == ID_symbol)
   {
+    const auto &id = to_symbol_expr(expr).get_identifier();
+    auto mixed = mixed_arrays.find(id);
+    if(mixed != mixed_arrays.end())
+    {
+      expr = mixed->second.initial_read;
+      return;
+    }
     const symbolt *symbol;
-    if(!ns.lookup(to_symbol_expr(expr).get_identifier(), symbol))
+    if(!ns.lookup(id, symbol))
     {
       if(symbol->is_lvalue)
       {
@@ -629,6 +643,79 @@ void verilog_transition_relationt::post_process_initial(exprt &constraints)
   }
 }
 
+// IEEE 1800-2017 6.5: disjoint static elements of an unpacked variable
+// can have independent continuous and procedural drivers. Keep the public
+// array combinational and put its registered elements in a private state
+// array. References on every RHS still denote the public, current value.
+void verilog_transition_relationt::split_mixed_arrays(verilog_rtlt &rtl)
+{
+  for(auto &[id, definitions] : rtl.identifier_map)
+  {
+    const auto &array = ns.lookup(id);
+    if(
+      array.type.id() != ID_array ||
+      !to_verilog_array_type(array.type).is_unpacked())
+      continue;
+    const auto is_wire = [](const auto &entry)
+    { return entry.second.is_wire(); };
+    if(
+      std::none_of(definitions.begin(), definitions.end(), is_wire) ||
+      std::all_of(definitions.begin(), definitions.end(), is_wire))
+      continue;
+    if(!array.is_lvalue)
+      throw errort().with_location(array.location)
+        << "clocked assignment to non-variable `" << array.display_name()
+        << "'";
+
+    const auto prefix = id2string(id) + "::clocked";
+    const auto suffix =
+      std::to_string(symbol_table.next_unused_suffix(prefix, 0));
+    symbolt storage{prefix + suffix, array.type, array.mode};
+    storage.module = module;
+    storage.base_name = id2string(array.base_name) + "::clocked" + suffix;
+    storage.pretty_name =
+      id2string(array.display_name()) + "::clocked" + suffix;
+    storage.location = array.location;
+    storage.is_lvalue = true;
+    storage.is_auxiliary = true;
+    CHECK_RETURN(!symbol_table.add(storage));
+
+    auto &registered = rtl.identifier_map[storage.name];
+    verilog_rtlt::slice_value_mapt wire_reads;
+    const auto whole = whole_slice(array.type);
+    const auto visible = array.symbol_expr();
+    for(auto it = definitions.begin(); it != definitions.end();)
+    {
+      if(it->second.is_state_holding())
+        registered.insert(definitions.extract(it++));
+      else
+      {
+        wire_reads.emplace(it->first, extract_range(visible, whole, it->first));
+        ++it;
+      }
+    }
+    rtl.variables.insert(storage.name);
+    auto initial = rtl.initial_values.extract(id);
+    if(!initial.empty())
+    {
+      initial.key() = storage.name;
+      rtl.initial_values.insert(std::move(initial));
+    }
+    // An initial RHS sees the pre-initial value of the registered elements.
+    // Combinational elements still read their invariant in the initial frame.
+    exprt before = storage.symbol_expr();
+    before.id(ID_nondet_symbol);
+    before.set("initial_value", true);
+    auto initial_read = compose_values(
+      wire_reads,
+      visible,
+      [&](const verilog_rtl_slicet &s)
+      { return extract_range(before, whole, s); });
+    mixed_arrays.emplace(
+      id, mixed_arrayt{storage.symbol_expr(), lower(std::move(initial_read))});
+  }
+}
+
 /*******************************************************************\
 
 Function: verilog_transition_relationt::convert_definitions
@@ -661,13 +748,6 @@ void verilog_transition_relationt::convert_definitions(
     {
       if(slice_entry.second.is_state_holding() != state_holding)
       {
-        if(
-          symbol.type.id() == ID_array &&
-          to_verilog_array_type(symbol.type).is_unpacked())
-          throw errort().with_location(symbol.location)
-            << "conflicting assignment types for `" << symbol.display_name()
-            << "': unpacked array elements may have independent drivers, but "
-               "mixing clocked and combinational elements is not supported";
         throw errort().with_location(symbol.location)
           << "conflicting assignment types for `" << symbol.display_name()
           << "'";
@@ -750,11 +830,15 @@ void verilog_transition_relationt::convert_definitions(
         slice_values.emplace(slice_entry.first, std::move(slice_value));
       }
 
+      // Registered and untouched elements of a mixed variable read storage.
+      auto mixed = mixed_arrays.find(identifier);
+      const exprt &fallback =
+        mixed == mixed_arrays.end() ? nondet : mixed->second.storage;
       auto value = compose_values(
         slice_values,
         symbol_expr_raw,
-        [&nondet, &whole](const verilog_rtl_slicet &fragment)
-        { return extract_range(nondet, whole, fragment); });
+        [&fallback, &whole](const verilog_rtl_slicet &fragment)
+        { return extract_range(fallback, whole, fragment); });
 
       auto lowered_value =
         typecast_exprt::conditional_cast(lower(std::move(value)), lowered_type);
@@ -1222,6 +1306,7 @@ transt verilog_transition_relationt::convert(
     module,
     trans,
     [this](exprt e) { return lower(std::move(e)); });
+  split_mixed_arrays(rtl);
   convert_definitions(rtl, trans);
   convert_initial_values(rtl, trans);
   convert_constraints(rtl, trans);

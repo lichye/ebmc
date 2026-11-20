@@ -1,0 +1,12 @@
+CORE
+mixed_drivers.sv
+--bound 3
+^\[main\.live\].*: PROVED
+^\[main\.stage1\].*: PROVED
+^\[main\.stage2\].*: PROVED
+^\[main\.indexed\].*: PROVED
+^\[main\.init_value\].*: PROVED
+^\[main\.not_a_wire\].*: REFUTED
+^EXIT=10$
+^SIGNAL=0$
+--
