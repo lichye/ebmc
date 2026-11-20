@@ -604,7 +604,20 @@ protected:
     const verilog_rtl_slicet &,
     const symbol_exprt &);
 
-  void commit(const statet &, kindt, const source_locationt &);
+  // Dynamic, whole-word nonblocking writes made by this clocked process.
+  std::map<irep_idt, exprt> process_word_updates;
+  struct ram_portt
+  {
+    exprt clock, enable, address;
+  };
+  std::map<irep_idt, ram_portt> first_ram_ports;
+  bool
+  commit_ram_port(const irep_idt &, const exprt &value, const exprt &clock);
+  void commit(
+    const statet &,
+    kindt,
+    const source_locationt &,
+    const exprt *clock = nullptr);
 
   /// The width of the entire identifier as a slice. Types without
   /// a fixed number of bits, e.g. chandles, are treated as a single
@@ -2518,6 +2531,13 @@ void verilog_rtl_buildert::assign_to(
       throw errort{}.with_location(lhs.source_location())
         << "unsupported non-constant select of a net lvalue";
     }
+    if(
+      !blocking && !continuous && lhs.id() == ID_verilog_bit_select &&
+      to_verilog_bit_select_expr(lhs).src().id() == ID_symbol &&
+      lowered.symbol.type().id() == ID_array &&
+      to_verilog_array_type(lowered.symbol.type()).is_unpacked())
+      process_word_updates[lowered.symbol.get_identifier()] = lowered.value;
+
     record_assignment(
       lowered.symbol,
       whole_slice(lowered.symbol),
@@ -4088,10 +4108,80 @@ driver_slice(const verilog_rtl_slicet &slice, const typet &type)
   return "[" + integer2string(left) + ":" + integer2string(right) + "]";
 }
 
+// A guarded nonblocking word write selects either its with-expression or
+// the original memory. Keep the address, data and enables sampled before
+// the clock edge (1800-2017 4.9.4), even when another port also writes.
+// Returns true if this port was combined with an existing definition.
+bool verilog_rtl_buildert::commit_ram_port(
+  const irep_idt &id,
+  const exprt &value,
+  const exprt &clock)
+{
+  const auto update = process_word_updates.find(id);
+  if(update == process_word_updates.end())
+    return false;
+  const auto memory = ns.lookup(id).symbol_expr();
+  const exprt *write = &value;
+  exprt::operandst guards;
+  while(write->id() == ID_if)
+  {
+    const auto &branch = to_if_expr(*write);
+    if(branch.false_case() == memory)
+    {
+      guards.push_back(branch.cond());
+      write = &branch.true_case();
+    }
+    else if(branch.true_case() == memory)
+    {
+      guards.push_back(not_exprt{branch.cond()});
+      write = &branch.false_case();
+    }
+    else
+      return false;
+  }
+  if(
+    *write != update->second || write->id() != ID_with ||
+    to_with_expr(*write).old() != memory)
+    return false;
+
+  const auto &store = to_with_expr(*write);
+  auto enable = conjunction(guards);
+  auto &definitions = rtl.identifier_map[id];
+  if(definitions.empty())
+  {
+    first_ram_ports.emplace(
+      id, ram_portt{clock, std::move(enable), store.where()});
+    return false;
+  }
+  auto first = first_ram_ports.find(id);
+  if(
+    first == first_ram_ports.end() || first->second.clock != clock ||
+    definitions.size() != 1)
+    return false;
+
+  // Different enabled addresses both commit. An enabled collision admits
+  // either complete word, since separate processes have no defined NBA
+  // order (1800-2017 4.6, 4.7). Unwritten words keep their old contents.
+  nondet_symbol_exprt second_wins{
+    id2string(id) + "::write_order", bool_typet{}};
+  auto allowed = and_exprt{
+    enable,
+    or_exprt{
+      not_exprt{first->second.enable},
+      notequal_exprt{first->second.address, store.where()},
+      second_wins}};
+  auto &previous = definitions.begin()->second.value;
+  previous = if_exprt{
+    allowed, with_exprt{previous, store.where(), store.new_value()}, previous};
+  first_ram_ports.erase(first);
+  return true;
+}
+
 void verilog_rtl_buildert::commit(
   const statet &state,
   kindt kind,
-  const source_locationt &source_location)
+  const source_locationt &source_location,
+  const exprt *clock)
 {
   for(auto &value_entry : state.values)
   {
@@ -4120,6 +4210,11 @@ void verilog_rtl_buildert::commit(
     for(auto &slice_entry : value_entry.second)
     {
       auto &slice = slice_entry.first;
+
+      if(
+        clock && state.blocking_values.count(identifier) == 0 &&
+        commit_ram_port(identifier, slice_entry.second, *clock))
+        continue;
 
       if(!is_integer)
       {
@@ -4330,6 +4425,8 @@ void verilog_rtl_buildert::build_always(const verilog_always_baset &always)
 {
   const verilog_statementt *body = &always.statement();
   bool clocked = false;
+  const exprt *ram_clock = nullptr;
+  process_word_updates.clear();
 
   if(always.id() == ID_verilog_always_latch)
   {
@@ -4344,12 +4441,20 @@ void verilog_rtl_buildert::build_always(const verilog_always_baset &always)
 
     // any edge in the guard makes this a clocked process
     if(guard.id() == ID_posedge || guard.id() == ID_negedge)
+    {
       clocked = true;
+      if(always.id() == ID_verilog_always)
+        ram_clock = &guard;
+    }
     else
     {
       for(auto &op : guard.operands())
         if(op.id() == ID_posedge || op.id() == ID_negedge)
+        {
           clocked = true;
+          if(always.id() == ID_verilog_always && guard.operands().size() == 1)
+            ram_clock = &op;
+        }
     }
 
     body = &event_guard.body();
@@ -4378,7 +4483,8 @@ void verilog_rtl_buildert::build_always(const verilog_always_baset &always)
   commit(
     state,
     clocked ? kindt::STATE_HOLDING : kindt::WIRE,
-    always.source_location());
+    always.source_location(),
+    ram_clock);
 }
 
 void verilog_rtl_buildert::net_assignment(

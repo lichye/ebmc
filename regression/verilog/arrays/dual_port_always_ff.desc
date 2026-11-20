@@ -1,0 +1,7 @@
+CORE
+dual_port_always_ff.sv
+
+has multiple drivers
+^EXIT=2$
+^SIGNAL=0$
+--

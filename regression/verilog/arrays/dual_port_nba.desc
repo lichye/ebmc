@@ -1,0 +1,14 @@
+CORE
+dual_port_nba.sv
+
+^\[main\.port_a\].*: PROVED
+^\[main\.port_b\].*: PROVED
+^\[main\.hold0\].*: PROVED
+^\[main\.hold1\].*: PROVED
+^\[main\.atomic_word\].*: PROVED
+^\[main\.before_write\].*: PROVED
+^\[main\.only_a\].*: REFUTED
+^\[main\.only_b\].*: REFUTED
+^EXIT=10$
+^SIGNAL=0$
+--
