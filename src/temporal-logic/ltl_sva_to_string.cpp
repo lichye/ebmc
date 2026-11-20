@@ -81,10 +81,92 @@ ltl_sva_to_stringt::infix(std::string s, const exprt &expr, modet mode)
   return resultt{precedencet::INFIX, result};
 }
 
+// IEEE 1800-2017 16.12: an abort discharges an active attempt. It
+// cannot rescue a failure after its deadline or start a new attempt.
+static exprt push_accept_on(const exprt &reset, const exprt &property)
+{
+  if(!has_temporal_operator(property))
+    return or_exprt{reset, property};
+
+  if(property.id() == ID_implies)
+  {
+    const auto &implication = to_implies_expr(property);
+    if(!has_temporal_operator(implication.lhs()))
+      return implies_exprt{
+        implication.lhs(), push_accept_on(reset, implication.rhs())};
+  }
+  else if(property.id() == ID_and || property.id() == ID_or)
+  {
+    auto result = property;
+    for(auto &op : result.operands())
+      op = push_accept_on(reset, op);
+    return result;
+  }
+  else if(property.id() == ID_X)
+    return or_exprt{
+      reset, X_exprt{push_accept_on(reset, to_X_expr(property).op())}};
+  else if(
+    property.id() == ID_sva_ranged_always || property.id() == ID_sva_s_always)
+  {
+    // Each due obligation must hold unless reset has occurred by its tick.
+    const auto &range = to_sva_ranged_predicate_exprt(property);
+    if(!range.is_unbounded())
+    {
+      auto first = numeric_cast_v<mp_integer>(range.from());
+      auto last = range.is_range()
+                    ? numeric_cast_v<mp_integer>(to_constant_expr(range.to()))
+                    : first;
+      const auto due = push_accept_on(reset, range.op());
+      auto result = due;
+      for(auto t = last; t > 0; --t)
+      {
+        exprt waiting = X_exprt{std::move(result)};
+        if(t > first)
+          waiting = and_exprt{due, std::move(waiting)};
+        result = or_exprt{reset, std::move(waiting)};
+      }
+      return result;
+    }
+  }
+  else if(
+    property.id() == ID_sva_weak || property.id() == ID_sva_implicit_weak ||
+    property.id() == ID_sva_strong || property.id() == ID_sva_implicit_strong)
+  {
+    const auto &seq = to_sva_sequence_property_expr_base(property).sequence();
+    if(seq.id() == ID_sva_cycle_delay)
+    {
+      const auto &delay = to_sva_cycle_delay_expr(seq);
+      if(
+        !delay.is_unbounded() && delay.lhs().is_nil() &&
+        delay.rhs().id() == ID_sva_boolean)
+      {
+        // ##[l:u] b can still match through tick u. Either it matches,
+        // or an abort occurs in [0:u], including before its first possible match.
+        const auto &last = delay.is_range() ? delay.to() : delay.from();
+        auto abort_in_window = sva_ranged_predicate_exprt{
+          ID_sva_eventually,
+          natural_typet{}.zero_expr(),
+          last,
+          reset,
+          bool_typet{}};
+        return or_exprt{std::move(abort_in_window), property};
+      }
+    }
+  }
+
+  throw ltl_sva_to_string_unsupportedt{property};
+}
+
 ltl_sva_to_stringt::resultt
 ltl_sva_to_stringt::rec(const exprt &expr, modet mode)
 {
-  if(expr.id() == ID_and)
+  if(expr.id() == ID_sva_accept_on)
+  {
+    PRECONDITION(mode == PROPERTY);
+    const auto &abort = to_sva_abort_expr(expr);
+    return rec(push_accept_on(abort.condition(), abort.property()), mode);
+  }
+  else if(expr.id() == ID_and)
   {
     return infix("&", expr, mode);
   }

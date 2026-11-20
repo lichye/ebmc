@@ -1,0 +1,6 @@
+CORE buechi
+abort_unbounded.sv
+--buechi --bound 6
+^\[main\.p\].*: UNSUPPORTED: .* not convertible to Buechi$
+^EXIT=10$
+^SIGNAL=0$

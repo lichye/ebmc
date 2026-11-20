@@ -1,0 +1,10 @@
+CORE buechi
+abort_window.sv
+--buechi --bound 6
+^\[main\.p_reply\].*: PROVED up to bound 6$
+^\[main\.p_mid\].*: PROVED up to bound 6$
+^\[main\.p_trigger\].*: PROVED up to bound 6$
+^\[main\.p_missing\].*: REFUTED$
+^\[main\.p_late\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
