@@ -95,7 +95,7 @@ exprt hoa_label_to_expr(
   }
 }
 
-// a nonaccepting state with an unconditional self-loop
+// An accepting state with an unconditional self-loop.
 bool is_error_state(const std::pair<hoat::state_namet, hoat::edgest> &state)
 {
   if(!state.first.is_accepting())
@@ -123,8 +123,10 @@ bool is_safety_only(const hoat &hoa)
   return true;
 }
 
-buechi_transt
-ltl_to_buechi(const exprt &property, message_handlert &message_handler)
+buechi_transt ltl_to_buechi(
+  const exprt &property,
+  bool request_deterministic,
+  message_handlert &message_handler)
 {
   ltl_sva_to_stringt ltl_sva_to_string;
 
@@ -144,12 +146,12 @@ ltl_to_buechi(const exprt &property, message_handlert &message_handler)
     // acceptance.
     // Use --complete to be able to have multiple properties in one
     // model.
-    auto run_result = run(
-      "ltl2tgba",
-      {"ltl2tgba", "--sba", "--complete", "--hoaf=1.1", string},
-      "",
-      hoa_stream,
-      "");
+    std::vector<std::string> argv{
+      "ltl2tgba", "--sba", "--complete", "--hoaf=1.1"};
+    if(request_deterministic)
+      argv.emplace_back("-D");
+    argv.push_back(std::move(string));
+    auto run_result = run("ltl2tgba", argv, "", hoa_stream, "");
 
     if(run_result != 0)
       throw ebmc_errort{} << "failed to run ltl2tgba";
@@ -217,7 +219,7 @@ ltl_to_buechi(const exprt &property, message_handlert &message_handler)
     }
 
     // construct the error signal -- true when the next automaton state
-    // is nonaccepting with an unconditional self-loop.
+    // is accepting with an unconditional self-loop.
     std::vector<exprt> error_disjuncts;
 
     std::map<hoat::intt, std::pair<hoat::state_namet, hoat::edgest>> state_map;

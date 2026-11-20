@@ -1,0 +1,7 @@
+CORE buechi
+stall_monitor.sv
+--buechi --k-induction --bound 5
+^\[main\.p_reset\].*: PROVED$
+^\[main\.p_other\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

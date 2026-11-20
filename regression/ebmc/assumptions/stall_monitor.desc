@@ -1,0 +1,7 @@
+CORE
+stall_monitor.sv
+--bound 5
+^\[main\.p_reset\].*: PROVED up to bound 5$
+^\[main\.p_other\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

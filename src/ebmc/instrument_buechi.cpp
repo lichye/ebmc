@@ -8,6 +8,8 @@ Author: Daniel Kroening, dkr@amazon.com
 
 #include "instrument_buechi.h"
 
+#include "ebmc_error.h"
+
 #include <util/format_expr.h>
 
 #include <temporal-logic/ctl.h>
@@ -21,12 +23,22 @@ void instrument_buechi(
 {
   for(auto &property : properties.properties)
   {
-    if(!property.is_unknown())
+    const bool assumed = property.is_assumed();
+    if(!property.is_unknown() && !assumed)
       continue;
+
+    const auto &formula = property.normalized_expr;
+    if(assumed &&
+       (formula.id() == ID_sva_always || formula.id() == ID_G ||
+        formula.id() == ID_AG) &&
+       !has_temporal_operator(to_unary_expr(formula).op()))
+      continue; // already an invariant assumption
 
     // This is for LTL and some fragment of SVA only.
     if(!is_LTL(property.normalized_expr) && !is_SVA(property.normalized_expr))
     {
+      if(assumed)
+        throw ebmc_errort{} << "unsupported Buechi assumption " << property.name;
       property.unsupported("not convertible to Buechi");
       continue;
     }
@@ -38,8 +50,15 @@ void instrument_buechi(
     try
     {
       // make the automaton for the negation of the property
-      auto buechi =
-        ltl_to_buechi(not_exprt{property.normalized_expr}, message_handler);
+      auto buechi = ltl_to_buechi(
+        not_exprt{property.normalized_expr}, assumed, message_handler);
+
+      // An existential choice of monitor run could hide a bad prefix. The
+      // HOA must certify determinism and every accepting cycle must already
+      // be accounted for by an irrevocable error state.
+      if(assumed && (!buechi.deterministic || !buechi.liveness_signal.is_false()))
+        throw ebmc_errort{} << "unsupported Buechi assumption " << property.name
+                            << ": expected a deterministic safety monitor";
 
       // make a fresh symbol for the state of the automaton
       namespacet ns(transition_system.symbol_table);
@@ -63,6 +82,12 @@ void instrument_buechi(
 
       transition_system.trans_expr.trans() =
         and_exprt{transition_system.trans_expr.trans(), buechi.trans};
+
+      if(assumed)
+      {
+        property.normalized_expr = AG_exprt{not_exprt{buechi.error_signal}};
+        continue;
+      }
 
       // Replace the normalized property expression
       // by the Buechi acceptance condition.
@@ -100,8 +125,11 @@ void instrument_buechi(
       message.debug() << "New property: " << format(property.normalized_expr)
                       << messaget::eom;
     }
-    catch(ltl_to_buechi_unsupportedt error)
+    catch(const ltl_to_buechi_unsupportedt &error)
     {
+      if(assumed)
+        throw ebmc_errort{} << "unsupported Buechi assumption " << property.name
+                            << ": " << error.expr.id();
       property.unsupported(
         error.expr.id_string() + " not convertible to Buechi");
       continue;

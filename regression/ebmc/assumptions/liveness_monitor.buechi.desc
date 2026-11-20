@@ -1,0 +1,9 @@
+CORE buechi
+liveness_monitor.sv
+--buechi --bound 5
+unsupported Buechi assumption main.a_live: expected a deterministic safety monitor
+^EXIT=6$
+^SIGNAL=0$
+--
+^\[main\.p_false\].*: REFUTED$
+--

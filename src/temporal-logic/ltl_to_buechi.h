@@ -52,6 +52,9 @@ public:
 
 class message_handlert;
 
-buechi_transt ltl_to_buechi(const exprt &formula, message_handlert &);
+buechi_transt ltl_to_buechi(
+  const exprt &formula,
+  bool request_deterministic,
+  message_handlert &);
 
 #endif
