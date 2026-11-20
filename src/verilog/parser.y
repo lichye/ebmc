@@ -4861,46 +4861,27 @@ member_pattern_list:
 assignment_pattern:
           '\'' '{' expression_brace '}'
                 { init($$, ID_verilog_assignment_pattern); swapop($$, $3); }
-        | '\'' '{' structure_pattern_key_brace '}'
-                { init($$, ID_verilog_assignment_pattern); swapop($$, $3); }
-        | '\'' '{' array_pattern_key_brace '}'
+        | '\'' '{' pattern_key_list '}'
                 { init($$, ID_verilog_assignment_pattern); swapop($$, $3); }
         ;
 
-structure_pattern_key_and_expression:
-          structure_pattern_key TOK_COLON expression
-                { $$ = $1; mto($$, $3); }
-        ;
-
-structure_pattern_key_brace:
-          structure_pattern_key_and_expression
+pattern_key_list:
+          pattern_key_value
                 { init($$); mto($$, $1); }
-        | structure_pattern_key_brace ',' structure_pattern_key_and_expression
+        | pattern_key_list ',' pattern_key_value
                 { $$ = $1; mto($$, $3); }
         ;
 
-structure_pattern_key:
+pattern_key_value:
+          pattern_key TOK_COLON expression
+                { $$ = $1; mto($$, $3); }
+        ;
+
+pattern_key:
           member_identifier
-                {
-                  init($$, ID_member_initializer);
-                  stack_expr($$).set(ID_member_name, stack_expr($1).get(ID_base_name));
-                }
-        ;
-
-array_pattern_key_and_expression:
-          array_pattern_key TOK_COLON expression
-                { $$ = $1; mto($$, $3); }
-        ;
-
-array_pattern_key_brace:
-          array_pattern_key_and_expression
-                { init($$); mto($$, $1); }
-        | array_pattern_key_brace ',' array_pattern_key_and_expression
-                { $$ = $1; mto($$, $3); }
-        ;
-
-array_pattern_key:
-          number
+                { init($$, ID_member_initializer);
+                  stack_expr($$).set(ID_member_name, stack_expr($1).get(ID_base_name)); }
+        | number
                 {
                   init($$, ID_verilog_assignment_pattern_index);
                   mto($$, $1);

@@ -114,6 +114,20 @@ void verilog_typecheck_exprt::enter_named_block(const irep_idt &name)
   }
 }
 
+exprt verilog_typecheck_exprt::assignment_pattern_default(
+  const exprt &key,
+  const typet &type)
+{
+  exprt value = to_unary_expr(key).op();
+  // 1800-2017 10.9.1-2: descend into an aggregate when the default
+  // does not itself have the member's type.
+  if((type.id() == ID_struct || type.id() == ID_array) && type != value.type())
+    value = unary_exprt{
+      ID_verilog_assignment_pattern, key, typet{ID_verilog_assignment_pattern}};
+  assignment_conversion(value, type);
+  return value;
+}
+
 /*******************************************************************\
 
 Function: verilog_typecheck_exprt::assignment_conversion
@@ -184,13 +198,26 @@ void verilog_typecheck_exprt::assignment_conversion(
 
       if(
         !rhs.operands().empty() &&
-        rhs.operands().front().id() == ID_member_initializer)
+        (rhs.operands().front().id() == ID_member_initializer ||
+         rhs.operands().front().id() == ID_verilog_assignment_pattern_default ||
+         rhs.operands().front().id() == ID_verilog_assignment_pattern_index))
       {
+        const exprt *default_key = nullptr;
         exprt::operandst initializers{components.size(), nil_exprt{}};
 
         for(auto &op : rhs.operands())
         {
-          PRECONDITION(op.id() == ID_member_initializer);
+          if(op.id() == ID_verilog_assignment_pattern_default)
+          {
+            if(default_key)
+              throw errort{}.with_location(op.source_location())
+                << "duplicate default value in assignment pattern";
+            default_key = &op;
+            continue;
+          }
+          if(op.id() != ID_member_initializer)
+            throw errort{}.with_location(op.source_location())
+              << "expected a structure member name in assignment pattern";
           auto member_name = op.get(ID_member_name);
           if(!struct_type.has_component(member_name))
           {
@@ -208,6 +235,12 @@ void verilog_typecheck_exprt::assignment_conversion(
         for(std::size_t i = 0; i < components.size(); i++)
           if(initializers[i].is_nil())
           {
+            if(default_key)
+            {
+              initializers[i] =
+                assignment_pattern_default(*default_key, components[i].type());
+              continue;
+            }
             throw errort().with_location(rhs.source_location())
               << "assignment pattern does not assign member `"
               << components[i].get_name() << "'";
@@ -273,6 +306,7 @@ void verilog_typecheck_exprt::assignment_conversion(
       if(
         !rhs.operands().empty() &&
         (rhs.operands().front().id() == ID_verilog_assignment_pattern_index ||
+         rhs.operands().front().id() == ID_member_initializer ||
          rhs.operands().front().id() == ID_verilog_assignment_pattern_default))
       {
         // 1800-2017 10.9.2 -- index-keyed assignment pattern
@@ -290,9 +324,11 @@ void verilog_typecheck_exprt::assignment_conversion(
               throw errort().with_location(op.source_location())
                 << "duplicate default value in assignment pattern";
             }
-            default_value = to_unary_expr(op).op();
-            assignment_conversion(*default_value, element_type);
+            default_value = assignment_pattern_default(op, element_type);
           }
+          else if(op.id() != ID_verilog_assignment_pattern_index)
+            throw errort{}.with_location(op.source_location())
+              << "expected an array index in assignment pattern";
         }
 
         // Apply indexed entries.
