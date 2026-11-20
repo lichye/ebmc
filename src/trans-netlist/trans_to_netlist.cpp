@@ -1049,6 +1049,13 @@ void convert_trans_to_netlistt::add_equality_rec(
 {
   PRECONDITION(lhs_from <= lhs_to);
 
+  // Port connections can leave constant arithmetic in the selected index.
+  auto read_index = [this](const exprt &index, mp_integer &value)
+  {
+    return !to_integer_non_constant(index, value) ||
+           !to_integer_non_constant(simplify_expr(index, ns), value);
+  };
+
   if(lhs.id()==ID_next_symbol ||
      lhs.id()==ID_symbol)
   {
@@ -1086,8 +1093,11 @@ void convert_trans_to_netlistt::add_equality_rec(
     PRECONDITION(lhs_to == lhs_from);
 
     mp_integer i;
-    if(to_integer_non_constant(to_extractbit_expr(lhs).index(), i))
-      PRECONDITION(false);
+    if(!read_index(to_extractbit_expr(lhs).index(), i))
+    {
+      constraint_list.push_back(src);
+      return;
+    }
 
     lhs_from = lhs_from + i.to_ulong();
     add_equality_rec(
@@ -1097,8 +1107,11 @@ void convert_trans_to_netlistt::add_equality_rec(
   {
     mp_integer index;
 
-    if(to_integer_non_constant(to_extractbits_expr(lhs).index(), index))
-      throw std::string("failed to convert extractbits index");
+    if(!read_index(to_extractbits_expr(lhs).index(), index))
+    {
+      constraint_list.push_back(src);
+      return;
+    }
 
     boolbv_widtht boolbv_width(ns);
 

@@ -1,0 +1,7 @@
+CORE
+port_bit_select_netlist1.sv
+--aig --bound 2
+^\[main\.p_hold\] .*: PROVED up to bound 2$
+^\[main\.p_fail\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
