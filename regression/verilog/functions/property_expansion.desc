@@ -1,0 +1,9 @@
+CORE
+property_expansion.sv
+--bound 1
+^\[main\.p_parity\].*: PROVED up to bound 1$
+^\[main\.p_past\].*: PROVED up to bound 1$
+^\[main\.p_changes\].*: REFUTED$
+^\[main\.p_capture\].*: PROVED up to bound 1$
+^EXIT=10$
+^SIGNAL=0$

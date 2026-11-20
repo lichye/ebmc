@@ -97,8 +97,8 @@ protected:
   /// defined by the value; later expressions refer to the wire.
   static constexpr std::size_t auxiliary_wire_threshold = 1000;
 
-  /// values are bound to auxiliary wires while the statements of an
-  /// always construct are built
+  /// Bind large procedural values in always constructs and in functions
+  /// called from module-level properties.
   bool bind_values = false;
 
   /// the auxiliary wires, per value, to share a wire between the
@@ -808,6 +808,14 @@ exprt verilog_rtl_buildert::bind_value(exprt value, const irep_idt &identifier)
     return value;
 
   if(!tree_size_exceeds(value, auxiliary_wire_threshold))
+    return value;
+
+  // A module wire has one value per cycle. A local assertion variable
+  // can have a different value for each overlapping sequence match.
+  if(std::any_of(
+       value.unique_depth_begin(),
+       value.unique_depth_end(),
+       [](const exprt &op) { return op.id() == ID_sva_local; }))
     return value;
 
   auto existing = auxiliary_wires.find(value);
@@ -6243,10 +6251,12 @@ void verilog_rtl_buildert::build_property(
   auto kind_opt = property_kind(module_item.id());
   CHECK_RETURN(kind_opt.has_value());
 
-  // substitute elaboration-time constants,
-  // and expand function calls
+  // Function bodies in properties use the same procedural substitutions
+  // as always constructs, including when expanded from a named property.
   statet state;
+  bind_values = true;
   auto condition = substitute(module_item.condition(), state);
+  bind_values = false;
 
   // apply the default disable iff, if any
   if(default_disable_iff.has_value() && condition.id() != ID_sva_disable_iff)
