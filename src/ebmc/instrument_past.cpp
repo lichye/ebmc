@@ -86,10 +86,14 @@ model_past(const past_sett &past_set, transition_systemt &transition_system)
     }
     else if(*ticks_int_opt >= 1)
     {
-      // construct a fresh symbol
-      number++;
-      const irep_idt identifier = "ebmc::$past" + std::to_string(number) + "@" +
-                                  integer2string(*ticks_int_opt);
+      // The caller can reuse a transition system for several property batches.
+      const auto suffix = "@" + integer2string(*ticks_int_opt);
+      irep_idt identifier;
+      do
+      {
+        identifier = "ebmc::$past" + std::to_string(++number) + suffix;
+      } while(transition_system.symbol_table.has_symbol(identifier));
+
       const symbol_exprt symbol_expr(identifier, past_expr.type());
 
       // add to symbol table
@@ -98,7 +102,7 @@ model_past(const past_sett &past_set, transition_systemt &transition_system)
           identifier, past_expr.type(), transition_system.main_symbol->mode};
         symbol.is_state_var = true;
         symbol.module = transition_system.main_symbol->module;
-        transition_system.symbol_table.add(std::move(symbol));
+        CHECK_RETURN(!transition_system.symbol_table.add(std::move(symbol)));
       }
 
       past_map[past_expr] = symbol_expr;

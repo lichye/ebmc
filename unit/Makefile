@@ -6,6 +6,7 @@ SRC = unit_tests.cpp
 # Test source files
 SRC += ebmc/bdd_model_checker.cpp \
        ebmc/command_file.cpp \
+       ebmc/netlist.cpp \
        ebmc/smv_word_level.cpp \
        ebmc/transition_property.cpp \
        smvlang/expr2smv.cpp \
@@ -43,6 +44,8 @@ CXXFLAGS += -D'LOCAL_IREP_IDS=<hw_cbmc_irep_ids.h>'
 
 OBJ += ../src/ebmc/bdd_model_checker$(OBJEXT) \
        ../src/ebmc/command_file$(OBJEXT) \
+       ../src/ebmc/instrument_past$(OBJEXT) \
+       ../src/ebmc/netlist$(OBJEXT) \
        ../src/ebmc/output_smv_word_level$(OBJEXT) \
        ../src/ebmc/transition_property$(OBJEXT) \
        ../src/smvlang/smvlang$(LIBEXT) \
