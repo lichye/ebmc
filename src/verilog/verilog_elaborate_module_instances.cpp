@@ -536,35 +536,18 @@ void verilog_typecheckt::parameterize_instantiated_modules(verilog_instt &inst)
   Forall_expr(it, parameter_assignments)
   {
     // These must be constants. Preserve the location.
-    if(it->id() == ID_named_parameter_assignment)
-    {
-      auto &value = static_cast<exprt &>(it->add(ID_value));
-      if(value.id() == ID_type)
-      {
-        // leave as is
-      }
-      else
-      {
-        // constant-fold
-        convert_expr(value);
-        value =
-          elaborate_constant_expression_check(value).with_source_location(*it);
-      }
-    }
-    else
-    {
-      if(it->id() == ID_type)
-      {
-        // leave as is
-      }
-      else
-      {
-        // constant-fold
-        convert_expr(*it);
-        *it =
-          elaborate_constant_expression_check(*it).with_source_location(*it);
-      }
-    }
+    auto &value = it->id() == ID_named_parameter_assignment
+                    ? static_cast<exprt &>(it->add(ID_value))
+                    : *it;
+    // A literal is a string or a packed vector depending on the formal.
+    // Keep it intact until that declaration supplies the assignment context.
+    if(
+      value.id() == ID_type ||
+      (value.is_constant() && value.type().id() == ID_string))
+      continue;
+    convert_expr(value);
+    value =
+      elaborate_constant_expression_check(value).with_source_location(*it);
   }
 
   // get the instance symbols

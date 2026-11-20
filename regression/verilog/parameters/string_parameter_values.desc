@@ -1,0 +1,8 @@
+CORE
+string_parameter_values.sv
+
+^\[main\.selected\].*: PROVED.*$
+^\[main\.reachable\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--

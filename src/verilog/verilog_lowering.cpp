@@ -1019,6 +1019,21 @@ exprt verilog_lowering_node(exprt expr)
     expr.id() == ID_le || expr.id() == ID_ge || expr.id() == ID_lt ||
     expr.id() == ID_gt)
   {
+    const auto &relation = to_binary_relation_expr(node);
+    if(
+      relation.lhs().type().id() == ID_verilog_string &&
+      relation.lhs().is_constant() && relation.rhs().is_constant())
+    {
+      const auto cmp =
+        to_constant_expr(relation.lhs())
+          .get_string(ID_value)
+          .compare(to_constant_expr(relation.rhs()).get_string(ID_value));
+      const bool result = expr.id() == ID_lt   ? cmp < 0
+                          : expr.id() == ID_le ? cmp <= 0
+                          : expr.id() == ID_gt ? cmp > 0
+                                               : cmp >= 0;
+      return make_boolean_expr(result).with_source_location(expr);
+    }
     if(is_four_valued(expr))
     {
       return aval_bval(to_binary_relation_expr(expr));
@@ -1237,6 +1252,16 @@ exprt verilog_lowering_node(exprt expr)
     // element equalities, which is backend-agnostic.
     auto &binary_expr = to_binary_expr(expr);
     auto &lhs_type = binary_expr.lhs().type();
+
+    if(
+      lhs_type.id() == ID_verilog_string && binary_expr.lhs().is_constant() &&
+      binary_expr.rhs().is_constant())
+    {
+      const bool equal = to_constant_expr(binary_expr.lhs()).get_value() ==
+                         to_constant_expr(binary_expr.rhs()).get_value();
+      return make_boolean_expr(expr.id() == ID_equal ? equal : !equal)
+        .with_source_location(expr);
+    }
 
     if(
       lhs_type.id() == ID_array &&

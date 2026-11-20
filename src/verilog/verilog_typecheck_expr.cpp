@@ -415,6 +415,12 @@ void verilog_typecheck_exprt::assignment_conversion(
   if(lhs_type == rhs.type())
     return;
 
+  if(lhs_type.id() == ID_verilog_string)
+  {
+    downwards_type_propagation(rhs, lhs_type);
+    return;
+  }
+
   if(lhs_type.id() == ID_struct && !lhs_type.get_bool(ID_packed))
   {
     // assignment of a non-matching type to unpacked struct
@@ -835,6 +841,8 @@ void verilog_typecheck_exprt::downwards_type_propagation(
     // A typecast from signed to a larger unsigned would sign extend.
     expr = zero_extend_exprt{expr, type};
   }
+  else if(type.id() == ID_verilog_string)
+    implicit_typecast(expr, type);
   else
   {
     expr = typecast_exprt{expr, type};
@@ -2594,7 +2602,8 @@ exprt verilog_typecheck_exprt::convert_constant(constant_exprt expr)
     expr.type().id() == ID_verilog_unsignedbv || expr.type().id() == ID_bool ||
     expr.type().id() == ID_verilog_real ||
     expr.type().id() == ID_verilog_shortreal ||
-    expr.type().id() == ID_verilog_realtime)
+    expr.type().id() == ID_verilog_realtime ||
+    expr.type().id() == ID_verilog_string)
   {
     // Done already. Literals from the parser do not have a type; a typed
     // constant has been converted, e.g. the value of a parameter that is
@@ -3134,6 +3143,26 @@ void verilog_typecheck_exprt::implicit_typecast(
   if(expr.type() == dest_type)
     return;
 
+  if(dest_type.id() == ID_verilog_string)
+  {
+    // A literal is normally typed as a packed vector. In a string
+    // context its bytes are used directly, omitting NULs (1800-2017 6.16).
+    if(expr.id() == ID_typecast)
+    {
+      const auto &literal = to_typecast_expr(expr).op();
+      if(literal.is_constant() && literal.type().id() == ID_string)
+      {
+        auto bytes = id2string(to_constant_expr(literal).get_value());
+        bytes.erase(std::remove(bytes.begin(), bytes.end(), '\0'), bytes.end());
+        expr = constant_exprt{bytes, dest_type}.with_source_location(expr);
+        return;
+      }
+    }
+    throw errort{}.with_location(expr.source_location())
+      << "implicit conversion to string requires a string literal or string "
+         "expression";
+  }
+
   // do enum, union and struct decay
   decay_to_vector(expr);
 
@@ -3572,7 +3601,7 @@ typet verilog_typecheck_exprt::max_type(
   if(
     (vt0.is_signed_bit() || vt0.is_unsigned_bit() || vt0.is_signed_logic() ||
      vt0.is_unsigned_logic()) &&
-    vt0.is_string())
+    vt1.is_string())
   {
     return t1;
   }
