@@ -232,6 +232,16 @@ static exprt part_select_extract(
     src = concatenation_exprt(padding, std::move(src), new_type);
   }
 
+  // A Boolean result is a predicate, including a one-bit packed member
+  // read through goto-vv. extractbits is only defined for bitvector results.
+  if(type.id() == ID_bool)
+  {
+    if(src.type().id() == ID_bool)
+      return src;
+    return extractbit_exprt{std::move(src), from_integer(bottom, integer_typet{})}
+      .with_source_location(source_location);
+  }
+
   return extractbits_exprt{
     std::move(src), from_integer(bottom, integer_typet{}), type}
     .with_source_location(source_location);

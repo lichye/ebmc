@@ -1,0 +1,8 @@
+singleton_ok PROVED up to bound 3
+direct_ok PROVED up to bound 3
+wire_ok PROVED up to bound 3
+adjacent_ok PROVED up to bound 3
+direct_wrong REFUTED
+wire_wrong REFUTED
+field_one PROVED
+field_zero PROVED
