@@ -16,6 +16,7 @@ Author: Daniel Kroening, dkr@amazon.com
 
 #include "verilog_parse_tree.h"
 #include "verilog_undriven_report.h"
+#include "vv_object.h"
 
 #include <filesystem>
 #include <iosfwd>
@@ -37,6 +38,7 @@ public:
 
   // produce the transition system, and return it
   std::optional<transition_systemt> transition_system() override;
+  transition_systemt receive(vv_objectt);
 
   /// Build the transition system and report floating reads from the same RTL.
   std::optional<transition_systemt>

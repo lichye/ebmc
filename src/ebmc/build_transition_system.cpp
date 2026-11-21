@@ -53,6 +53,19 @@ std::optional<transition_systemt> ebmc_languagest::transition_system()
   auto ext_used = [&extensions](const char *ext)
   { return extensions.find(ext) != extensions.end(); };
 
+  if(ext_used("vv"))
+  {
+    if(cmdline.args.size()!=1) throw ebmc_errort{} << "expected a single goto-vv object";
+    try
+    {
+      return verilog_ebmc_languaget{cmdline,message_handler}.receive(vv_objectt::read(cmdline.args.front()));
+    }
+    catch(const std::runtime_error &error)
+    {
+      throw ebmc_errort{} << error.what();
+    }
+  }
+
   bool have_smv = ext_used("smv");
   bool have_verilog = ext_used("v") || ext_used("sv");
 
