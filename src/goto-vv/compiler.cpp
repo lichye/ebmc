@@ -315,6 +315,10 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       {
         auto &p = c->port.as<PortSymbol>();
         auto *e = c->getExpression();
+        // An open output has a formal and its original driver inside the
+        // child, but no receiving expression in the parent.
+        if(!e && p.internalSymbol && p.direction == ArgumentDirection::Out)
+          continue;
         if(!e || !p.internalSymbol)
           fail(child.location, "unbound child port " + std::string(p.name));
         if(e->kind == ExpressionKind::Assignment)
