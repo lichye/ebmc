@@ -1,0 +1,9 @@
+CORE
+qualified_unit_property1.sv
+--systemverilog --top main --bound 4
+^\[main\.p_capture\].*: PROVED up to bound 4$
+^\[main\.p_enum\].*: PROVED up to bound 4$
+^\[main\.p_sequence\].*: PROVED up to bound 4$
+^\[main\.p_refuted\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

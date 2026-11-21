@@ -2237,6 +2237,12 @@ void verilog_typecheckt::preresolve_identifiers(exprt &expr)
         << "unknown identifier " << base_name;
     }
   }
+  else if(expr.id() == ID_verilog_package_scope)
+  {
+    // The qualifier and member already specify the lookup scope. Resolve the
+    // qualified name when the property or sequence is instantiated.
+    return;
+  }
   else if(expr.id() == ID_hierarchical_identifier)
   {
     // The identifier on the rhs of the '.' is a member or an
