@@ -27,9 +27,12 @@ Author: Daniel Kroening, dkr@amazon.com
 #include "k_induction.h"
 #include "netlist.h"
 #include "report_results.h"
+#include "witness_lasso.h"
 
+#include <charconv>
 #include <chrono>
 #include <iostream>
+#include <limits>
 
 property_checker_resultt word_level_bmc(
   const cmdlinet &cmdline,
@@ -406,6 +409,28 @@ property_checker_resultt property_checker(
   ebmc_propertiest &properties,
   message_handlert &message_handler)
 {
+  std::optional<std::size_t> witness_bound;
+  if(cmdline.isset("witness-lasso"))
+  {
+    if(
+      (!cmdline.isset("k-induction") && !cmdline.isset("new-ic3")) ||
+      cmdline.isset("bdd") || cmdline.isset("show-bdds") ||
+      cmdline.isset("aig") || cmdline.isset("dimacs") || cmdline.isset("ic3") ||
+      cmdline.isset("liveness-to-safety"))
+      throw ebmc_errort{} << "--witness-lasso requires k-induction or new IC3 "
+                             "on a safety monitor";
+
+    const auto &arg = cmdline.get_value("witness-lasso");
+    std::size_t bound;
+    auto parsed = std::from_chars(arg.data(), arg.data() + arg.size(), bound);
+    if(
+      parsed.ec != std::errc{} || parsed.ptr != arg.data() + arg.size() ||
+      bound == 0 || bound == std::numeric_limits<std::size_t>::max())
+      throw ebmc_errort{}
+        << "--witness-lasso requires a positive transition bound";
+    witness_bound = bound;
+  }
+
   bool use_heuristic_engine =
     !cmdline.isset("bdd") && !cmdline.isset("aig") &&
     !cmdline.isset("k-induction") && !cmdline.isset("ic3") &&
@@ -470,6 +495,9 @@ property_checker_resultt property_checker(
   if(result.status == property_checker_resultt::statust::VERIFICATION_RESULT)
   {
     const namespacet ns{transition_system.symbol_table};
+    if(witness_bound)
+      certify_witnesses(
+        cmdline, transition_system, result, *witness_bound, message_handler);
     report_results(cmdline, use_heuristic_engine, result, ns, message_handler);
   }
 

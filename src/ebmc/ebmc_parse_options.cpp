@@ -544,6 +544,7 @@ void ebmc_parse_optionst::help()
     " {y--coi}                       \t reduce the model to the cone of influence of the properties (word-level BMC and k-induction)\n"
     "\n"
     "Methods:\n"
+    " {y--witness-lasso} {uN}         \t certify kind/new IC3 witnesses on an infinite loop within N transitions\n"
     " {y--k-induction}               \t do k-induction with k=bound\n"
     " {y--bdd}                       \t use (unbounded) BDD engine\n"
     " {y--ic3}                       \t use IC3 engine with options described below\n"

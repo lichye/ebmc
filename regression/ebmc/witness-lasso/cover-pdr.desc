@@ -1,0 +1,12 @@
+CORE buechi
+cover.sv
+--buechi --new-ic3 --witness-lasso 8
+^\[main\.due\].*: ASSUMED$
+^\[main\.quiet\].*: ASSUMED$
+^\[main\.reachable\].*: PROVED$
+^\[main\.terminal_hit\].*: INCONCLUSIVE$
+^\[main\.impossible\].*: REFUTED$
+^\[main\.safe\].*: PROVED$
+^EXIT=10$
+^SIGNAL=0$
+--

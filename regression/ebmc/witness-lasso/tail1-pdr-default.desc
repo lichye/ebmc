@@ -1,0 +1,9 @@
+CORE buechi
+tail1.sv
+--buechi --new-ic3 --property tail.p
+^\[tail\.a1\].*: ASSUMED$
+^\[tail\.a2\].*: ASSUMED$
+^\[tail\.p\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--

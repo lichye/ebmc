@@ -1,0 +1,9 @@
+CORE buechi
+tail1.sv
+--buechi --new-ic3 -D ALLOW_ALARM --witness-lasso 48 --property tail.p
+^\[tail\.a1\].*: ASSUMED$
+^\[tail\.p\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^\[tail\.a2\]

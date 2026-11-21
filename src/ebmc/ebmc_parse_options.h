@@ -32,7 +32,7 @@ public:
         "(modules-xml):"
         "(show-properties)(property):p:(trace)(waveform)(numbered-trace)"
         "(dimacs)(module):(top):"
-        "(po)(cegar)(k-induction)(2pi)(bound2):"
+        "(po)(cegar)(k-induction)(witness-lasso):(2pi)(bound2):"
         "(outfile):(xml-ui)(verbosity):(gui)"
         "(json-modules):(json-properties):(json-result):"
         "(neural-liveness)(neural-engine):"

@@ -53,6 +53,17 @@ public:
   // one state per timeframe
   typedef std::vector<statet> statest;
   statest states;
+
+  // For a certified lasso the last state duplicates this earlier frame.
+  std::optional<std::size_t> loop_start;
+
+  // Finite traces end at the first violation; a lasso includes its suffix.
+  std::size_t last_timeframe_to_show() const
+  {
+    PRECONDITION(!states.empty());
+    return loop_start ? states.size() - 1
+                      : get_min_failing_timeframe().value_or(states.size() - 1);
+  }
   
   // mode of whole trace
   std::string mode;

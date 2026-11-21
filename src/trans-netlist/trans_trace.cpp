@@ -186,7 +186,7 @@ void show_trans_trace(
 {
   PRECONDITION(!trace.states.empty());
 
-  auto l = trace.get_min_failing_timeframe().value_or(trace.states.size() - 1);
+  auto l = trace.last_timeframe_to_show();
 
   for(std::size_t t = 0; t <= l; t++)
     show_trans_state(t, trace.states[t], ns);
@@ -208,13 +208,12 @@ xmlt xml(const trans_tracet &trace, const namespacet &ns)
 {
   PRECONDITION(!trace.states.empty());
 
-  auto min_failing_timeframe_opt = trace.get_min_failing_timeframe();
-
-  auto last_time_frame =
-    min_failing_timeframe_opt.value_or(trace.states.size() - 1);
+  auto last_time_frame = trace.last_timeframe_to_show();
 
   xmlt dest = xmlt{"trans_trace"};
 
+  if(trace.loop_start)
+    dest.set_attribute("loop_start", *trace.loop_start);
   dest.new_element("mode").data=trace.mode;
 
   for(std::size_t t = 0; t <= last_time_frame; t++)
@@ -280,6 +279,8 @@ jsont json(const trans_tracet &trace, const namespacet &ns)
 {
   json_objectt json_trace;
 
+  if(trace.loop_start)
+    json_trace["loop_start"] = json_numbert(std::to_string(*trace.loop_start));
   json_trace["mode"] = json_stringt(trace.mode);
   json_arrayt &json_states = json_trace["states"].make_array();
 
@@ -802,6 +803,10 @@ void show_trans_trace_vcd(
 
   if(trace.states.empty()) return;
 
+  if(trace.loop_start)
+    out << "$comment witness loop " << *trace.loop_start << " -> "
+        << trace.states.size() - 1 << " (equal endpoints) $end\n";
+
   const trans_tracet::statet &state=trace.states[0];
 
   assert(!state.assignments.empty());
@@ -836,7 +841,7 @@ void show_trans_trace_vcd(
 
   out << "$enddefinitions $end\n";
 
-  auto l = trace.get_min_failing_timeframe().value_or(trace.states.size() - 1);
+  auto l = trace.last_timeframe_to_show();
 
   // initial state
 
@@ -905,7 +910,7 @@ void show_trans_trace_numbered(
 {
   PRECONDITION(!trace.states.empty());
 
-  auto l = trace.get_min_failing_timeframe().value_or(trace.states.size() - 1);
+  auto l = trace.last_timeframe_to_show();
 
   for(std::size_t t = 0; t <= l; t++)
     show_trans_state_numbered(t, trace.states[t], ns);

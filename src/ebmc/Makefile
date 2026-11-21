@@ -45,6 +45,7 @@ SRC = \
       tautology_check.cpp \
       transition_property.cpp \
       transition_system.cpp \
+      witness_lasso.cpp \
       waveform.cpp \
       #empty line
 

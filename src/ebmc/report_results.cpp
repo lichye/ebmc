@@ -184,6 +184,8 @@ void report_results(
           message.result() << term();
           auto failing_opt =
             property.witness_trace->get_min_failing_timeframe();
+          if(property.witness_trace->loop_start)
+            failing_opt = property.witness_trace->states.size() - 1;
           if(failing_opt.has_value())
           {
             if(*failing_opt == 0)

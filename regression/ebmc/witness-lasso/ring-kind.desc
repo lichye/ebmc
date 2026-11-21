@@ -1,0 +1,9 @@
+CORE buechi
+ring.sv
+--buechi --k-induction --bound 4 --property ring.unreachable --witness-lasso 20 --trace
+ring\.unreachable: witness loop [0-9]+ -> 20 \(equal endpoints\), bad frame [0-9]+
+^\[ring\.unreachable\].*: REFUTED$
+^Transition system state 20$
+^EXIT=10$
+^SIGNAL=0$
+--

@@ -1,0 +1,9 @@
+CORE buechi
+runway.sv
+--buechi --k-induction --bound 4 --property runway.unreachable --witness-lasso 20 --trace
+runway\.unreachable: no witness loop within 20 transitions
+^\[runway\.unreachable\].*: INCONCLUSIVE$
+^EXIT=10$
+^SIGNAL=0$
+--
+^Counterexample:
