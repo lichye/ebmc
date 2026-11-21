@@ -163,15 +163,34 @@ exprt compilert::stmt(const Statement &s)
   {
     const auto &c = s.as<CaseStatement>();
     if(
-      c.condition != CaseStatementCondition::Normal ||
+      (c.condition != CaseStatementCondition::Normal &&
+       c.condition != CaseStatementCondition::WildcardJustZ) ||
       c.check != UniquePriorityCheck::None)
       fail(at, "unsupported case matching mode");
-    r = item(ID_verilog_case, {expr(c.expr)});
+    const bool casez = c.condition == CaseStatementCondition::WildcardJustZ;
+    r = item(casez ? ID_verilog_casez : ID_verilog_case, {expr(c.expr)});
     for(auto &group : c.items)
     {
       auto labels = item(ID_empty_string);
       for(auto *x : group.expressions)
-        labels.operands().push_back(expr(*x));
+      {
+        if(!casez)
+        {
+          labels.operands().push_back(expr(*x));
+          continue;
+        }
+        EvalContext context(*scope);
+        auto pattern = x->eval(context);
+        if(!pattern.isInteger())
+          fail(x->sourceRange.start(), "requires a constant casez pattern");
+        // Retain literal Z and X bits until the RTL builder makes the mask.
+        auto &v = pattern.integer();
+        auto t = v.isSigned()
+                   ? typet(verilog_signedbv_typet(v.getBitWidth()))
+                   : typet(verilog_unsignedbv_typet(v.getBitWidth()));
+        labels.operands().push_back(
+          literal(v, v.hasUnknown() ? t : type(*x->type)));
+      }
       r.operands().push_back(item(ID_case_item, {labels, stmt(*group.stmt)}));
     }
     if(c.defaultCase)
