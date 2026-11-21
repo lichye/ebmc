@@ -388,18 +388,21 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       else
         fail(s.location, "unsupported procedure " + std::string(kind));
       // An outer @* responds to the implicit combinational sensitivity set.
-      // Leave explicit event controls on the checked single-clock path.
+      // Explicit edge controls retain their resolved signals.
       const auto *timed = body.as_if<TimedStatement>();
-      auto process =
-        kind == "Always" && timed &&
-            timed->timing.kind == TimingControlKind::ImplicitEvent
-          ? item(
-              ID_verilog_always,
-              {item(
-                ID_event_guard,
-                {typecast_exprt(item(ID_verilog_star_event), bool_typet()),
-                 stmt(timed->stmt)})})
-          : item(op, {stmt(body)});
+      exprt statement;
+      if(kind == "Always" && timed &&
+         timed->timing.kind == TimingControlKind::ImplicitEvent)
+        statement = item(
+          ID_event_guard,
+          {typecast_exprt(item(ID_verilog_star_event), bool_typet()),
+           stmt(timed->stmt)});
+      else if(kind == "AlwaysFF" && timed &&
+              timed->timing.kind == TimingControlKind::EventList)
+        statement = clock_reset_block(*timed);
+      else
+        statement = stmt(body);
+      auto process = item(op, {std::move(statement)});
       process.add_source_location() = loc(s.location);
       items.operands().push_back(std::move(process));
       break;

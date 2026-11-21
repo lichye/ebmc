@@ -47,7 +47,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -75,6 +75,10 @@ for name in first_zero first_nonzero; do
     test "$(cat "$name.direct.rc")" = 10
   fi
 done
+sed 's/if (rst) q/if (data) q/' "$front/tests/clock_reset.sv" >wrong-reset.sv
+run wrong-reset compile clock_reset rejected.vv wrong-reset.sv
+grep -q 'wrong-reset.sv:[0-9].*posedge reset tested by the outer if' wrong-reset
+test "$(cat wrong-reset.rc)" != 0
 # An explicitly empty input still needs its own supported undriven semantics.
 sed 's/\.a(a), \.forwarded(open_q)/.a(), .forwarded(open_q)/' "$front/tests/open_outputs.sv" >open_input.sv
 run open-input compile open_outputs rejected.vv open_input.sv

@@ -265,6 +265,34 @@ void vv_objectt::validate(bool require_constraints) const
             connections.emplace(id, p.get_sub().back().get(ID_identifier));
         }
       }
+      // A canonical clock/reset always_ff has two event operands, but only
+      // the first one samples the process. Validate the reset against the
+      // outer if, then visit its signal and the entire body normally.
+      if(n.id() == ID_verilog_always_ff && n.get_sub().size() == 1)
+      {
+        const auto &guard = n.get_sub()[0];
+        if(guard.id() == ID_event_guard && guard.get_sub().size() == 2)
+        {
+          const auto &event = guard.get_sub()[0];
+          const auto &body = guard.get_sub()[1];
+          if(event.id() == ID_verilog_event && event.get_sub().size() == 2)
+          {
+            const auto &clk = event.get_sub()[0];
+            const auto &reset = event.get_sub()[1];
+            if(clk.id() != ID_posedge || reset.id() != ID_posedge ||
+               reset.get_sub().size() != 1 || reset.get_sub()[0].id() != ID_symbol ||
+               reset.get_sub()[0].find(ID_type).id() != ID_bool ||
+               body.id() != ID_if || body.get_sub().size() < 2 ||
+               body.get_sub()[0].id() != ID_symbol ||
+               body.get_sub()[0].get(ID_identifier) != reset.get_sub()[0].get(ID_identifier))
+              error(s.location, "invalid clock/reset guard in always_ff");
+            self(self, clk);
+            self(self, reset.get_sub()[0]);
+            self(self, body);
+            return;
+          }
+        }
+      }
       if(n.id() == ID_negedge)
         error(
           where.is_nil() ? s.location : where,

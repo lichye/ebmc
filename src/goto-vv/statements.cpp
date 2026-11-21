@@ -62,6 +62,37 @@ exprt compilert::immediate(
   return result;
 }
 
+// Retain both native event operands for the clocked RTL builder. Only the
+// clock is a property sampling domain. The second edge must be the reset
+// tested by the process's outermost conditional.
+exprt compilert::clock_reset_block(const TimedStatement &block)
+{
+  const auto at = block.timing.sourceRange.start();
+  auto events = block.timing.as<EventListControl>().events;
+  if(events.size() != 2)
+    fail(at, "expected a clock and one active-high reset edge");
+  clock(events[0], at);
+  auto *reset = events[1]->as_if<SignalEventControl>();
+  const Statement *body = &block.stmt;
+  while(auto *compound = body->as_if<BlockStatement>())
+    body = &compound->body;
+  auto *cond = body->as_if<ConditionalStatement>();
+  if(!reset || reset->edge != EdgeKind::PosEdge || reset->iffCondition ||
+     reset->expr.kind != ExpressionKind::NamedValue ||
+     !reset->expr.type->isIntegral() || reset->expr.type->getBitWidth() != 1 ||
+     !cond || cond->conditions.size() != 1 || cond->conditions[0].pattern ||
+     cond->conditions[0].expr->kind != ExpressionKind::NamedValue ||
+     cond->conditions[0].expr->getSymbolReference() != reset->expr.getSymbolReference())
+    fail(at, "expected a posedge reset tested by the outer if");
+  auto &clk = events[0]->as<SignalEventControl>();
+  auto event = node(ID_verilog_event, bool_typet(), {
+    node(ID_posedge, bool_typet(), {expr(clk.expr)}),
+    node(ID_posedge, bool_typet(), {expr(reset->expr)})});
+  auto guard = item(ID_event_guard, {std::move(event), stmt(block.stmt)});
+  guard.add_source_location() = loc(at);
+  return guard;
+}
+
 exprt compilert::stmt(const Statement &s)
 {
   const auto at = s.sourceRange.start();
