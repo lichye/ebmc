@@ -51,3 +51,9 @@ An empty contract is a zero-length file. Contract lines can specify
 `reset top.rst` or `assume label posedge top.clk top.input_bus == '0`.
 Run the cross-process interface fixtures with
 `bash src/goto-vv/tests/run.sh /path/to/test-output`.
+
+The decoder comparison takes an external PLENA checkout, its decode_spec.sv
+wrapper and a fresh output path. It builds the adapted closure, retains the
+strict diagnostic and compares both routes at bound 20:
+
+    bash src/goto-vv/tests/decoder.sh /path/to/plena /path/to/decode_spec.sv /path/to/results
