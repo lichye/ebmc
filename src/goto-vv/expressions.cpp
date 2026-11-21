@@ -119,6 +119,9 @@ exprt compilert::expr(const Expression &e)
       {O::Add, ID_plus},
       {O::Subtract, ID_minus},
       {O::Multiply, ID_mult},
+      {O::Divide, ID_div},
+      {O::Mod, ID_mod},
+      {O::ArithmeticShiftLeft, ID_shl},
       {O::LogicalShiftLeft, ID_shl},
       {O::LogicalShiftRight, ID_lshr},
       {O::ArithmeticShiftRight, ID_ashr}};
@@ -126,6 +129,8 @@ exprt compilert::expr(const Expression &e)
     if(k == op.end())
       fail(at, "unsupported binary " + std::string(toString(b.op)));
     auto id = k->second;
+    if(id == ID_ashr && !b.left().type->isSigned())
+      id = ID_lshr;
     if(id == ID_and || id == ID_or)
     {
       l = boolean(l);
@@ -249,6 +254,24 @@ exprt compilert::expr(const Expression &e)
     auto &c = e.as<CallExpression>();
     if(c.getSubroutineName() == "$past" && c.arguments().size() == 1)
       r = verilog_past_exprt(expr(*c.arguments().front()), index_constant(1));
+    else if(
+      c.isSystemCall() && c.arguments().size() == 1 &&
+      (c.getSubroutineName() == "$signed" ||
+       c.getSubroutineName() == "$unsigned"))
+      r = typecast_exprt::conditional_cast(expr(*c.arguments().front()), t);
+    else if(
+      !c.isSystemCall() || c.getSubroutineName() == "$clog2" ||
+      c.getSubroutineName() == "$bits")
+    {
+      EvalContext context(*scope);
+      auto value = c.eval(context);
+      if(!value.isInteger())
+        fail(
+          at,
+          "requires an integral constant call to " +
+            std::string(c.getSubroutineName()));
+      r = literal(value.integer(), t);
+    }
     else
       fail(at, "unsupported function " + std::string(c.getSubroutineName()));
     break;

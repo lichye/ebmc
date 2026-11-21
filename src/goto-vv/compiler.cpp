@@ -292,6 +292,8 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
         scope = enclosing;
       }
       break;
+    // A called constant function is evaluated in its elaborated instance.
+    case SymbolKind::Subroutine:
     case SymbolKind::Genvar:
     case SymbolKind::Port:
     case SymbolKind::Variable:
