@@ -33,3 +33,21 @@ Compiling
    make -C src
    ```
    This also builds the CBMC submodule. The binary will be in src/ebmc/ebmc.
+
+### Optional goto-vv compiler
+
+Build slang v11.0 and the goto-vv executable with a C++20 compiler and CMake:
+
+    make -C src goto-vv SLANG_SOURCE=/path/to/slang-v11.0 CMAKE_ARGS=-DCMAKE_BUILD_TYPE=Release
+
+With an installed slang 11.0.0 CMake package, omit SLANG_SOURCE. Build EBMC
+with the normal target. For an empty contract and a single-clock design:
+
+    src/goto-vv/build/goto-vv compile design.vv --single-unit --top top design.sv
+    src/goto-vv/build/goto-vv constrain design.vv empty-contract.txt run.vv
+    src/ebmc/ebmc --undriven seq --bound 20 run.vv
+
+An empty contract is a zero-length file. Contract lines can specify
+`reset top.rst` or `assume label posedge top.clk top.input_bus == '0`.
+Run the cross-process interface fixtures with
+`bash src/goto-vv/tests/run.sh /path/to/test-output`.

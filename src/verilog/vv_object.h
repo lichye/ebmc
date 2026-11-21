@@ -2,6 +2,7 @@
 #define EBMC_VERILOG_VV_OBJECT_H
 
 #include <util/symbol_table.h>
+
 #include <string>
 
 // Experiment schema. Stable identities are fully-qualified symbol names.

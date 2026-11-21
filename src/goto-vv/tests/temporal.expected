@@ -1,0 +1,8 @@
+initial_only REFUTED
+past_ok PROVED up to bound 3
+past_bad REFUTED
+next_ok PROVED up to bound 3
+next_bad REFUTED
+window_cancel PROVED up to bound 3
+window_fail REFUTED
+trigger_live PROVED

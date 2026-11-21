@@ -45,3 +45,7 @@ $(patsubst %, %_clean, $(DIRS)):
 .PHONY: cprover_clean
 cprover_clean:
 	$(MAKE) $(MAKEARGS) -C $(CPROVER_DIR) clean
+
+.PHONY: goto-vv
+goto-vv: verilog.dir cprover.dir
+	$(MAKE) -C goto-vv

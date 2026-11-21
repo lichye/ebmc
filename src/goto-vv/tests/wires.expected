@@ -1,0 +1,8 @@
+driven_ok PROVED up to bound 3
+floating_same PROVED up to bound 3
+floating_zero REFUTED
+floating_one REFUTED
+x_zero REFUTED
+x_one REFUTED
+z_zero REFUTED
+z_one REFUTED
