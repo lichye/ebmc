@@ -1,6 +1,8 @@
 CORE
 shared_conditional.sv
---bound 1
+--bound 1 --witness-lasso 2
+^main.unknown_index: witness loop [01] -> 2 \(equal endpoints\), bad frame [01]$
+^main.unknown_low: witness loop [01] -> 2 \(equal endpoints\), bad frame [01]$
 ^\[main\.known_index\].*: PROVED.*$
 ^\[main\.unknown_index\].*: REFUTED$
 ^\[main\.common_bits\].*: PROVED.*$
