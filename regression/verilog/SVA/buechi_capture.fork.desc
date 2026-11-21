@@ -1,0 +1,14 @@
+CORE buechi
+buechi_capture.sv
+--bound 4 --buechi
+^\[main\.z\.p\].*: PROVED up to bound 4$
+^\[main\.wrong\.p\].*: REFUTED$
+^\[main\.stale\.p\].*: REFUTED$
+^\[main\.late\.p\].*: PROVED up to bound 4$
+^\[main\.starts2\.p\].*: PROVED up to bound 4$
+^\[main\.starts3\.p\].*: PROVED up to bound 4$
+^\[main\.fork2\.p\].*: REFUTED$
+^\[main\.fork3\.p\].*: REFUTED$
+^\[main\.equal_words\.p\].*: PROVED up to bound 4$
+^EXIT=10$
+^SIGNAL=0$

@@ -1,0 +1,8 @@
+CORE buechi
+buechi_capture_unsupported.sv
+--new-ic3 --buechi
+^\[main\.r\].*: UNSUPPORTED: sva_sequence_repetition_star not convertible to Buechi$
+^\[main\.w\].*: UNSUPPORTED: sva_sequence_match_items not convertible to Buechi$
+^\[main\.s\].*: UNSUPPORTED: verilog_blocking_assign not convertible to Buechi$
+^EXIT=10$
+^SIGNAL=0$

@@ -1,0 +1,6 @@
+CORE buechi
+buechi_capture_assume.sv
+--buechi --bound 2
+unsupported Buechi assumption main.env
+^EXIT=6$
+^SIGNAL=0$
