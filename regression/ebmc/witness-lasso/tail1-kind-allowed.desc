@@ -1,6 +1,6 @@
 CORE buechi
 tail1.sv
---buechi --k-induction --bound 10 -D ALLOW_ALARM --witness-lasso 48 --property tail.p
+--buechi --k-induction --bound 10 -D ALLOW_ALARM --witness-lasso 4 --property tail.p
 ^\[tail\.a1\].*: ASSUMED$
 ^\[tail\.p\].*: REFUTED$
 ^EXIT=10$

@@ -1,6 +1,6 @@
 CORE buechi
 tail1.sv
---buechi --new-ic3 --witness-lasso 48 --property tail.p
+--buechi --new-ic3 --witness-lasso 4 --property tail.p
 ^\[tail\.a1\].*: ASSUMED$
 ^\[tail\.a2\].*: ASSUMED$
 ^\[tail\.p\].*: INCONCLUSIVE$

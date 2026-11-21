@@ -1,5 +1,6 @@
 #include "witness_lasso.h"
 
+#include <util/arith_tools.h>
 #include <util/expr_util.h>
 
 #include <trans-word-level/instantiate_word_level.h>
@@ -34,19 +35,75 @@ void collect_boundary(const exprt &expr, std::set<exprt> &boundary)
     });
 }
 
+// A deterministic monitor assigns next(state) with a priority mux over its
+// current state. SMT define-fun expansion of large muxes across time frames
+// is costly in CVC5. Equalities to distinct integer state numbers are mutually
+// exclusive, so their implications plus the default case are equivalent.
+void split_state_muxes(exprt &trans)
+{
+  if(trans.id() == ID_and)
+  {
+    for(auto &op : trans.operands())
+      split_state_muxes(op);
+    return;
+  }
+  if(trans.id() != ID_equal)
+    return;
+
+  const auto &assignment = to_equal_expr(trans);
+  const auto &next = assignment.lhs();
+  if(next.id() != ID_next_symbol || next.type().id() != ID_range)
+    return;
+
+  const auto state = symbol_exprt{next.get(ID_identifier), next.type()};
+  const exprt *rhs = &assignment.rhs();
+  exprt::operandst guards, constraints;
+  std::set<mp_integer> seen;
+  while(rhs->id() == ID_if)
+  {
+    const auto &mux = to_if_expr(*rhs);
+    const auto &guard = mux.cond();
+    if(guard.id() != ID_equal)
+      break;
+    const auto &condition = to_equal_expr(guard);
+    if(condition.lhs() != state || condition.rhs().type() != state.type())
+      break;
+    auto value = numeric_cast<mp_integer>(condition.rhs());
+    if(
+      !value || !to_integer_range_type(state.type()).includes(*value) ||
+      !seen.insert(*value).second)
+      break;
+
+    guards.push_back(guard);
+    constraints.push_back(
+      implies_exprt{guard, equal_exprt{next, mux.true_case()}});
+    rhs = &mux.false_case();
+  }
+  if(guards.size() > 1)
+  {
+    constraints.push_back(
+      implies_exprt{not_exprt{disjunction(guards)}, equal_exprt{next, *rhs}});
+    trans = conjunction(constraints);
+  }
+}
+
 void certify(
   const transition_systemt &system,
+  const transt &trans,
   const exprt::operandst &assumptions,
   property_checker_resultt::propertyt &property,
   std::size_t end,
   const ebmc_solver_factoryt &factory,
   message_handlert &messages)
 {
+  messaget message{messages};
+  message.status() << property.name << ": certifying witness loop within "
+                   << end << " transitions" << messaget::eom;
   const namespacet ns{system.symbol_table};
   auto backend = factory(ns, messages);
   auto &solver = backend.decision_procedure();
   const auto frames = end + 1;
-  unwind(system.trans_expr, messages, solver, frames, ns);
+  unwind(trans, messages, solver, frames, ns);
 
   std::set<exprt> boundary;
   for(const auto &reg : system.state_variables())
@@ -85,7 +142,6 @@ void certify(
   }
   solver.set_to_true(disjunction(loops));
 
-  messaget message{messages};
   switch(solver())
   {
   case decision_proceduret::resultt::D_UNSATISFIABLE:
@@ -140,6 +196,11 @@ void certify_witnesses(
         supported_assumptions = false;
     }
 
+  // Keep the primary engine's transition system and solver selection intact.
+  auto trans = system.trans_expr;
+  if(cmdline.isset("cvc5"))
+    split_state_muxes(trans.trans());
+
   for(auto &p : result.properties)
   {
     // An engine can mark an earlier finite refutation inconclusive after
@@ -163,6 +224,7 @@ void certify_witnesses(
 
     certify(
       system,
+      trans,
       assumptions,
       p,
       max_transitions,

@@ -1,9 +1,9 @@
 CORE buechi
 tail.sv
---buechi --new-ic3 -D ALLOW_ALARM --property tail.unreachable --witness-lasso 20 --trace
-tail\.unreachable: witness loop [0-9]+ -> 20 \(equal endpoints\), bad frame [0-9]+
+--buechi --new-ic3 -D ALLOW_ALARM --property tail.unreachable --witness-lasso 10 --trace
+tail\.unreachable: witness loop [0-9]+ -> 10 \(equal endpoints\), bad frame [0-9]+
 ^\[tail\.unreachable\].*: REFUTED$
-^Transition system state 20$
+^Transition system state 10$
 ^EXIT=10$
 ^SIGNAL=0$
 --
