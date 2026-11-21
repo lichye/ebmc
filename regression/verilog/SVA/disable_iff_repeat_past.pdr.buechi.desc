@@ -1,0 +1,13 @@
+CORE
+disable_iff_repeat_past.sv
+--top top --new-ic3 --buechi --witness-lasso 12
+^\[top\.good\] .*: PROVED$
+^\[top\.wrong_data\] .*: REFUTED$
+^\[top\.aborted\] .*: PROVED$
+^\[top\.antecedent\] .*: PROVED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+A named sequence contains a fixed repetition, a delay chain, and distinct multi-cycle history in antecedent and consequent.

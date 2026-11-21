@@ -25,4 +25,11 @@ public:
 /// expression, or otherwise throws \ref sva_to_ltl_unsupportedt.
 exprt SVA_to_LTL(exprt);
 
+/// Convert a finite sequence implication under an abort. The consequent
+/// already accounts for aborts from its own starting tick onward.
+exprt SVA_abortable_implication_to_LTL(
+  const exprt &implication,
+  const exprt &abort,
+  const exprt &abortable_consequent);
+
 #endif

@@ -1,0 +1,25 @@
+CORE
+disable_iff_sequence.sv
+--top top --bound 12 --witness-lasso 12
+^\[top\.antecedent\] .*: PROVED$
+^\[top\.multi_abort_late\] .*: PROVED up to bound 12$
+^\[top\.multi_bad\] .*: REFUTED$
+^\[top\.multi_fail_early\] .*: REFUTED$
+^\[top\.next_bad\] .*: REFUTED$
+^\[top\.next_due\] .*: PROVED up to bound 12$
+^\[top\.next_match\] .*: PROVED up to bound 12$
+^\[top\.next_ok\] .*: PROVED up to bound 12$
+^\[top\.next_start\] .*: PROVED up to bound 12$
+^\[top\.overlap_bad\] .*: REFUTED$
+^\[top\.overlap_match\] .*: PROVED up to bound 12$
+^\[top\.overlap_ok\] .*: PROVED up to bound 12$
+^\[top\.overlap_start\] .*: PROVED up to bound 12$
+^\[top\.restart_bad\] .*: REFUTED$
+^\[top\.restart_ok\] .*: PROVED up to bound 12$
+^\[top\.restarted\] .*: PROVED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+Every match uses its own completion and reset window. A former abort must not cancel a subsequent attempt.

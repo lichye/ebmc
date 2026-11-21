@@ -1,0 +1,11 @@
+CORE
+disable_iff_sequence_unsupported.sv
+--top top --new-ic3 --buechi
+^\[top\.mixed_repetitions\] .*: UNSUPPORTED: sva_non_overlapped_implication not convertible to Buechi$
+^\[top\.unbounded_delay\] .*: UNSUPPORTED: sva_overlapped_implication not convertible to Buechi$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+Reject paths the finite matcher cannot enumerate exactly.

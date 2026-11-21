@@ -16,6 +16,8 @@ Author: Daniel Kroening, kroening@kroening.com
 #include "sva_sequence_match.h"
 #include "temporal_logic.h"
 
+#include <algorithm>
+
 static exprt n_Xes(mp_integer n, exprt op)
 {
   PRECONDITION(n >= 0);
@@ -37,6 +39,96 @@ static exprt ltl(const sva_sequence_matcht &match)
       conjuncts.push_back(n_Xes(i, c));
   }
   return conjunction(conjuncts);
+}
+
+// Only use the finite matcher on constructs for which it enumerates every
+// nonempty path. Repetition of a sequence with multiple possible matches
+// needs mixed paths across repetitions, which this matcher does not produce.
+static bool supports_abortable_antecedent(
+  const exprt &sequence,
+  bool single_match = false)
+{
+  if(sequence.id() == ID_sva_boolean)
+    return !has_temporal_operator(to_sva_boolean_expr(sequence).op());
+
+  if(sequence.id() == ID_sva_cycle_delay)
+  {
+    const auto &delay = to_sva_cycle_delay_expr(sequence);
+    return (!delay.is_range() || (!single_match && !delay.is_unbounded())) &&
+           (delay.lhs().is_nil() ||
+            supports_abortable_antecedent(delay.lhs(), single_match)) &&
+           supports_abortable_antecedent(delay.rhs(), single_match);
+  }
+
+  if(sequence.id() == ID_sva_sequence_repetition_star)
+  {
+    const auto &repeat = to_sva_sequence_repetition_star_expr(sequence);
+    if(!repeat.repetitions_given())
+      return false;
+    if(repeat.is_range())
+    {
+      if(single_match || repeat.is_unbounded() || repeat.from().is_zero())
+        return false;
+    }
+    else if(repeat.repetitions().is_zero())
+      return false;
+    return supports_abortable_antecedent(repeat.op(), true);
+  }
+
+  if(sequence.id() == ID_sva_and || (sequence.id() == ID_sva_or && !single_match))
+    return std::all_of(
+      sequence.operands().begin(),
+      sequence.operands().end(),
+      [&](const auto &op)
+      { return supports_abortable_antecedent(op, single_match); });
+
+  return false;
+}
+
+exprt SVA_abortable_implication_to_LTL(
+  const exprt &expr,
+  const exprt &abort,
+  const exprt &abortable_consequent)
+{
+  const auto &implication = to_sva_implication_base_expr(expr);
+  if(has_temporal_operator(abort) ||
+     !supports_abortable_antecedent(implication.sequence()))
+    throw sva_to_ltl_unsupportedt{expr};
+
+  const bool overlapped = expr.id() == ID_sva_overlapped_implication;
+
+  try
+  {
+    exprt::operandst conjuncts;
+    for(const auto &match : LTL_sequence_matches(implication.sequence()))
+    {
+      // Build each obligation backwards from its own deadline. A reset
+      // while waiting discharges only this attempt, including the gap
+      // after the final match of a nonoverlapped implication.
+      exprt obligation = abortable_consequent;
+      auto condition = match.cond_vector.rbegin();
+      if(match.empty_match())
+        throw sva_to_ltl_unsupportedt{expr};
+
+      if(!overlapped)
+        obligation = or_exprt{abort, X_exprt{std::move(obligation)}};
+
+      for(; condition != match.cond_vector.rend(); ++condition)
+      {
+        if(condition != match.cond_vector.rbegin())
+          obligation = or_exprt{abort, X_exprt{std::move(obligation)}};
+        if(!condition->is_true())
+          obligation = implies_exprt{*condition, std::move(obligation)};
+      }
+
+      conjuncts.push_back(std::move(obligation));
+    }
+    return conjunction(conjuncts);
+  }
+  catch(sva_sequence_match_unsupportedt error)
+  {
+    throw sva_to_ltl_unsupportedt{std::move(error.expr)};
+  }
 }
 
 /// takes an SVA property as input, and returns an equivalent LTL property

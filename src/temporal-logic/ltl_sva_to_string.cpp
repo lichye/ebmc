@@ -17,6 +17,7 @@ Author: Daniel Kroening, dkr@amazon.com
 
 #include "ltl.h"
 #include "rewrite_sva_sequence.h"
+#include "sva_to_ltl.h"
 #include "temporal_expr.h"
 #include "temporal_logic.h"
 
@@ -94,6 +95,21 @@ static exprt push_accept_on(const exprt &reset, const exprt &property)
     if(!has_temporal_operator(implication.lhs()))
       return implies_exprt{
         implication.lhs(), push_accept_on(reset, implication.rhs())};
+  }
+  else if(
+    property.id() == ID_sva_overlapped_implication ||
+    property.id() == ID_sva_non_overlapped_implication)
+  {
+    const auto &implication = to_sva_implication_base_expr(property);
+    try
+    {
+      return SVA_abortable_implication_to_LTL(
+        property, reset, push_accept_on(reset, implication.property()));
+    }
+    catch(sva_to_ltl_unsupportedt error)
+    {
+      throw ltl_sva_to_string_unsupportedt{std::move(error.expr)};
+    }
   }
   else if(property.id() == ID_and || property.id() == ID_or)
   {
