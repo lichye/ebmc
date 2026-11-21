@@ -809,11 +809,13 @@ void show_trans_trace_vcd(
 
   const trans_tracet::statet &state=trace.states[0];
 
-  if(state.assignments.empty() && trace.loop_start)
+  if(trace.total_extension)
+    out << "$comment finite witness with proved total extension $end\n";
+  if(state.assignments.empty() && (trace.loop_start || trace.total_extension))
   {
     out << "$scope module ebmc $end\n$var wire 1 ! property_failed $end\n"
            "$upscope $end\n$enddefinitions $end\n";
-    for(std::size_t t = 0; t < trace.states.size(); ++t)
+    for(std::size_t t = 0; t <= trace.last_timeframe_to_show(); ++t)
       out << '#' << t << '\n' << trace.states[t].property_failed << "!\n";
     return;
   }

@@ -56,6 +56,8 @@ public:
 
   // For a certified lasso the last state duplicates this earlier frame.
   std::optional<std::size_t> loop_start;
+  // A finite bad prefix in a structurally total transition system.
+  bool total_extension = false;
 
   // Finite traces end at the first violation; a lasso includes its suffix.
   std::size_t last_timeframe_to_show() const

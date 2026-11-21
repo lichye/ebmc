@@ -1,4 +1,5 @@
 #include "witness_lasso.h"
+#include "property_checker.h"
 
 #include <util/arith_tools.h>
 #include <util/expr_util.h>
@@ -14,6 +15,8 @@
 #include "instrument_buechi.h"
 #include "instrument_past.h"
 
+#include <charconv>
+#include <limits>
 #include <set>
 
 namespace
@@ -23,6 +26,55 @@ bool invariant(const exprt &expr)
   return (expr.id() == ID_AG || expr.id() == ID_G ||
           expr.id() == ID_sva_always) &&
          !has_temporal_operator(to_unary_expr(expr).op());
+}
+
+// Sufficient syntactic totality criterion. A freely chosen next value is
+// allowed for an unassigned latch; written latches are distinct and each RHS
+// is a total current-frame bit-vector function. Initial conditions do not
+// constrain successors. Unrecognised operators or state constraints fail closed.
+bool total_transition(const transition_systemt &system)
+{
+  const auto &tr = system.trans_expr;
+  const auto all_conjuncts = [](const exprt &root, const auto &check) {
+    std::vector<const exprt *> pending{&root};
+    while(!pending.empty())
+    {
+      auto &expr = *pending.back();
+      pending.pop_back();
+      if(expr.id() == ID_and)
+        for(const auto &op : expr.operands())
+          pending.push_back(&op);
+      else if(!expr.is_true() && !check(expr))
+        return false;
+    }
+    return true;
+  };
+  if(!all_conjuncts(tr.invar(), [](const exprt &) { return false; }))
+    return false;
+  std::set<irep_idt> assigned;
+  return all_conjuncts(tr.trans(), [&](const exprt &clause) {
+    if(clause.id() != ID_equal)
+      return false;
+    const auto &eq = to_equal_expr(clause);
+    if(eq.lhs().id() != ID_next_symbol || eq.lhs().type() != eq.rhs().type() ||
+       !assigned.insert(eq.lhs().get(ID_identifier)).second)
+      return false;
+    bool total = true;
+    eq.rhs().visit_pre([&](const exprt &e) {
+      const auto t=e.type().id(), id=e.id();
+      if(t != ID_bool && t != ID_signedbv && t != ID_unsignedbv)
+        total = false;
+      else if(id != ID_constant && id != ID_symbol && id != ID_nondet_symbol &&
+              id != ID_not && id != ID_and && id != ID_or && id != ID_xor &&
+              id != ID_implies && id != ID_equal && id != ID_notequal &&
+              id != ID_bitnot && id != ID_bitand && id != ID_bitor && id != ID_bitxor &&
+              id != ID_plus && id != ID_minus && id != ID_mult && id != ID_unary_minus &&
+              id != ID_typecast && id != ID_if && id != ID_lt && id != ID_le &&
+              id != ID_gt && id != ID_ge && id != ID_concatenation)
+        total = false;
+    });
+    return total;
+  });
 }
 
 // Match values on both sides of the repeated frame. This includes the
@@ -219,6 +271,7 @@ void certify(
       if(bad && (bmc_bound ? *bad <= *bmc_bound : *bad < end))
       {
         trace.loop_start = start;
+        property.witness_certificate = property_checker_resultt::propertyt::witness_certificatet::LASSO;
         property.witness_trace = std::move(trace);
         message.status() << property.name << ": witness loop " << start
                          << " -> " << end << " (equal endpoints), bad frame "
@@ -232,21 +285,72 @@ void certify(
 }
 } // namespace
 
-void certify_witnesses(
+std::optional<std::size_t> witness_lasso_budget(
+  const cmdlinet &cmdline, std::optional<std::size_t> depth)
+{
+  if(cmdline.isset("finite-prefix"))
+  {
+    if(cmdline.isset("witness-lasso"))
+      throw ebmc_errort{} << "--finite-prefix conflicts with --witness-lasso";
+    return {};
+  }
+  if(depth && *depth == std::numeric_limits<std::size_t>::max())
+    throw ebmc_errort{} << "BMC frame count overflows";
+  if(cmdline.isset("witness-lasso"))
+  {
+    const auto &arg=cmdline.get_value("witness-lasso");
+    std::size_t n;
+    const auto p=std::from_chars(arg.data(),arg.data()+arg.size(),n);
+    if(p.ec!=std::errc{} || p.ptr!=arg.data()+arg.size() || !n ||
+       n==std::numeric_limits<std::size_t>::max())
+      throw ebmc_errort{} << "--witness-lasso requires a positive transition bound";
+    return n;
+  }
+  const auto base=depth.value_or(0);
+  if(base >= std::numeric_limits<std::size_t>::max()-48)
+    throw ebmc_errort{} << "default witness budget overflows";
+  return base+48;
+}
+
+void certify_property_witnesses(
   const cmdlinet &cmdline,
   const transition_systemt &original_system,
   property_checker_resultt &result,
-  std::size_t max_transitions,
   std::optional<std::size_t> bmc_bound,
   message_handlert &messages)
 {
+  const auto budget=witness_lasso_budget(cmdline,bmc_bound);
+  if(!budget || result.status!=property_checker_resultt::statust::VERIFICATION_RESULT)
+    return;
+  using certificate = property_checker_resultt::propertyt::witness_certificatet;
+  const bool no_assumptions = std::none_of(result.properties.begin(),result.properties.end(),
+    [](const auto &p) { return !p.is_disabled() && (p.is_assumption() || p.is_assumed()); });
+  const bool total = no_assumptions && total_transition(original_system);
   bool need_witness = false;
   for(auto &p : result.properties)
   {
     if(p.is_inconclusive() || p.is_unsupported() || p.is_failure())
       p.witness_trace.reset();
     if(!p.is_assumption() && (p.is_exists_path() ? p.is_proved() : p.is_refuted()))
+    {
+      if(total && !bmc_bound && p.proof_via == "BDD CTL" && is_CTL(p.normalized_expr))
+      {
+        p.witness_certificate=certificate::TOTAL_BDD;
+        messaget{messages}.status() << p.name << ": exact BDD verdict on a total transition system" << messaget::eom;
+        continue;
+      }
+      auto bad = p.witness_trace ? p.witness_trace->get_min_failing_timeframe() : std::optional<std::size_t>{};
+      if(total && !cmdline.isset("witness-lasso") && bad && (!bmc_bound || *bad<=*bmc_bound) &&
+         (invariant(p.normalized_expr) || !has_temporal_operator(p.normalized_expr)))
+      {
+        p.witness_trace->total_extension = true;
+        p.witness_certificate=certificate::TOTAL_PREFIX;
+        messaget{messages}.status() << p.name << ": finite bad frame " << *bad
+                                    << " has an infinite extension by totality" << messaget::eom;
+        continue;
+      }
       need_witness = true;
+    }
   }
   if(!need_witness)
     return;
@@ -280,6 +384,12 @@ void certify_witnesses(
     }
 
   // Keep the primary engine's transition system and solver selection intact.
+  // An engine may ignore an output flag and return a real verdict. The
+  // secondary query always needs a solver, never a formula writer.
+  auto solver_options = cmdline;
+  for(const auto option : {"outfile", "show-formula", "smt2"})
+    if(solver_options.isset(option))
+      solver_options.set(option, false);
   auto trans = system.trans_expr;
   if(cmdline.isset("cvc5"))
     split_state_muxes(trans.trans());
@@ -291,7 +401,7 @@ void certify_witnesses(
     if(p.is_inconclusive())
       p.witness_trace.reset();
     if(
-      p.is_assumption() ||
+      p.witness_certificate != certificate::NONE || p.is_assumption() ||
       !(p.is_exists_path() ? p.is_proved() : p.is_refuted()))
       continue;
 
@@ -311,9 +421,9 @@ void certify_witnesses(
       namespacet{original_system.symbol_table},
       assumptions,
       p,
-      max_transitions,
+      *budget,
       bmc_bound,
-      ebmc_solver_factory(cmdline),
+      ebmc_solver_factory(solver_options),
       messages);
   }
   auto source = batch.properties.begin();

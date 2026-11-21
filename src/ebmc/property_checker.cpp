@@ -205,9 +205,106 @@ static std::optional<bvt> bounded_netlist_obligations(
   return literals;
 }
 
+bool compile_bounded_netlist_property(
+  const cmdlinet &cmdline, ebmc_propertiest::propertyt &p,
+  const netlistt &netlist, const bmc_mapt &frames, std::size_t bound,
+  const namespacet &ns, cnft &solver, message_handlert &messages)
+{
+  if(bound >= frames.get_no_timeframes())
+    throw ebmc_errort{} << "property depth exceeds the netlist unwinding";
+  if(p.is_disabled() || p.is_failure() || p.is_unsupported())
+    return false;
+  std::optional<bvt> literals;
+  if(netlist_bmc_supports_property(p.normalized_expr))
+  {
+    const auto found = netlist.properties.find(p.identifier);
+    if(found != netlist.properties.end() && found->second)
+    {
+      literals = unwind_property(*found->second, frames);
+      literals->resize(bound+1);
+    }
+  }
+  else if(!cmdline.isset("finite-prefix") && !cmdline.isset("dimacs"))
+    literals = bounded_netlist_obligations(
+      p, netlist.var_map, frames, bound, ns, solver, messages);
+  if(!literals)
+  {
+    if(p.is_assumed())
+      p.unsupported("assumption not supported by netlist BMC engine");
+    else
+      p.failure("property not supported by netlist BMC engine");
+    return false;
+  }
+  p.timeframe_literals = std::move(*literals);
+  for(auto l : p.timeframe_literals)
+    if(p.is_assumed())
+      solver.l_set_to_true(l);
+    else
+      solver.set_frozen(l);
+  return true;
+}
+
+void solve_bounded_netlist_property(
+  const cmdlinet &cmdline, ebmc_propertiest::propertyt &property,
+  const bmc_mapt &bmc_map, std::size_t bound, const namespacet &ns,
+  propt &solver, message_handlert &messages, bool record_trace)
+{
+  if(property.is_disabled() || property.is_assumed() || property.is_assumption() ||
+     property.is_unsupported() || property.is_failure())
+    return;
+  if(bound >= bmc_map.get_no_timeframes() || property.timeframe_literals.size()!=bound+1)
+    throw ebmc_errort{} << "property literals do not match the requested depth";
+  messaget message{messages};
+    literalt property_literal = !solver.land(property.timeframe_literals);
+
+    bvt assumptions;
+    assumptions.push_back(property_literal);
+
+    propt::resultt prop_result = solver.prop_solve(assumptions);
+
+    switch(prop_result)
+    {
+    case propt::resultt::P_SATISFIABLE:
+    {
+      if(!cmdline.isset("finite-prefix") && property.is_exists_path())
+        property.proved();
+      else
+        property.refuted();
+      message.result() << "SAT: counterexample found" << messaget::eom;
+
+
+
+      if(record_trace)
+        property.witness_trace =
+        compute_trans_trace(property.timeframe_literals, bmc_map, solver, ns);
+    }
+    break;
+
+    case propt::resultt::P_UNSATISFIABLE:
+      message.result() << "UNSAT: No counterexample found within bound"
+                       << messaget::eom;
+      if(!cmdline.isset("finite-prefix") && property.is_exists_path())
+        property.refuted_with_bound(bound);
+      else
+        property.proved_with_bound(bound);
+      break;
+
+    case propt::resultt::P_ERROR:
+      message.error() << "Error from decision procedure" << messaget::eom;
+      property.failure("netlist BMC solver error");
+      return;
+
+    default:
+      message.error() << "Unexpected result from decision procedure"
+                      << messaget::eom;
+      property.failure("netlist BMC solver error");
+      return;
+    }
+}
+
 property_checker_resultt finish_bit_level_bmc(
   std::size_t bound,
-  bool cover_duality,
+  const cmdlinet &cmdline,
   const bmc_mapt &bmc_map,
   propt &solver,
   const transition_systemt &transition_system,
@@ -235,48 +332,10 @@ property_checker_resultt finish_bit_level_bmc(
 
     message.status() << "Checking " << property.name << messaget::eom;
 
-    literalt property_literal = !solver.land(property.timeframe_literals);
-
-    bvt assumptions;
-    assumptions.push_back(property_literal);
-
-    propt::resultt prop_result = solver.prop_solve(assumptions);
-
-    switch(prop_result)
-    {
-    case propt::resultt::P_SATISFIABLE:
-    {
-      if(cover_duality && property.is_exists_path())
-        property.proved();
-      else
-        property.refuted();
-      message.result() << "SAT: counterexample found" << messaget::eom;
-
-      namespacet ns{transition_system.symbol_table};
-
-      property.witness_trace =
-        compute_trans_trace(property.timeframe_literals, bmc_map, solver, ns);
-    }
-    break;
-
-    case propt::resultt::P_UNSATISFIABLE:
-      message.result() << "UNSAT: No counterexample found within bound"
-                       << messaget::eom;
-      if(cover_duality && property.is_exists_path())
-        property.refuted_with_bound(bound);
-      else
-        property.proved_with_bound(bound);
-      break;
-
-    case propt::resultt::P_ERROR:
-      message.error() << "Error from decision procedure" << messaget::eom;
+    solve_bounded_netlist_property(cmdline,property,bmc_map,bound,
+      namespacet{transition_system.symbol_table},solver,message_handler);
+    if(property.is_failure())
       return property_checker_resultt::error();
-
-    default:
-      message.error() << "Unexpected result from decision procedure"
-                      << messaget::eom;
-      return property_checker_resultt::error();
-    }
   }
 
   auto sat_stop_time = std::chrono::steady_clock::now();
@@ -344,62 +403,9 @@ property_checker_resultt bit_level_bmc(
       if(property.is_disabled())
         continue;
 
-      if(!netlist_bmc_supports_property(property.normalized_expr))
-      {
-        if(!convert_only && !cmdline.isset("finite-prefix"))
-        {
-          const namespacet ns{transition_system.symbol_table};
-          auto literals = bounded_netlist_obligations(
-            property, netlist.var_map, bmc_map, bound, ns, solver, message_handler);
-          if(literals)
-          {
-            property.timeframe_literals = std::move(*literals);
-            for(auto l : property.timeframe_literals)
-              if(property.is_assumed())
-                solver.l_set_to_true(l);
-              else
-                solver.set_frozen(l);
-            continue;
-          }
-        }
-        if(property.is_assumed())
-        {
-          // An assumption that cannot be added to the netlist must not be
-          // silently dropped, as this is unsound: properties that hold under
-          // the assumption might otherwise be reported as refuted. Mark the
-          // assumption as unsupported, and mark refuted properties as
-          // inconclusive below.
-          assumption_unsupported = true;
-          property.unsupported(
-            "assumption not supported by netlist BMC engine");
-        }
-        else
-        {
-          property.failure("property not supported by netlist BMC engine");
-        }
-        continue;
-      }
-
-      // look up the property in the netlist
-      auto netlist_property = netlist.properties.find(property.identifier);
-      CHECK_RETURN(netlist_property != netlist.properties.end());
-      CHECK_RETURN(netlist_property->second.has_value());
-
-      property.timeframe_literals =
-        ::unwind_property(netlist_property->second.value(), bmc_map);
-
-      if(property.is_assumed())
-      {
-        // force these to be true
-        for(auto l : property.timeframe_literals)
-          solver.l_set_to(l, true);
-      }
-      else
-      {
-        // freeze for incremental usage
-        for(auto l : property.timeframe_literals)
-          solver.set_frozen(l);
-      }
+      if(!compile_bounded_netlist_property(cmdline, property, netlist, bmc_map,
+            bound, ns, solver, message_handler) && property.is_assumption())
+        assumption_unsupported = true;
     }
 
     if(convert_only)
@@ -407,7 +413,7 @@ property_checker_resultt bit_level_bmc(
     else
     {
       auto result = finish_bit_level_bmc(
-        bound, !cmdline.isset("finite-prefix"), bmc_map, solver, transition_system, properties, message_handler);
+        bound, cmdline, bmc_map, solver, transition_system, properties, message_handler);
 
       // Any refuted property is really inconclusive if there are unsupported
       // assumptions, as the assumption might have proven the property.
@@ -507,47 +513,30 @@ property_checker_resultt property_checker(
   message_handlert &message_handler)
 {
   const bool strict = !cmdline.isset("finite-prefix");
-  const bool converting = cmdline.isset("dimacs") || cmdline.isset("smt2") ||
-                          cmdline.isset("outfile") || cmdline.isset("show-formula") ||
-                          cmdline.isset("show-bdds");
-  const bool unbounded_engine = cmdline.isset("bdd") || cmdline.isset("ic3") ||
+  const bool bdd = cmdline.isset("bdd") || cmdline.isset("show-bdds");
+  const bool bit_bmc = !bdd && (cmdline.isset("aig") || cmdline.isset("dimacs"));
+  const bool unbounded_engine = bdd || cmdline.isset("ic3") ||
                                 cmdline.isset("new-ic3") || cmdline.isset("k-induction");
   std::optional<std::size_t> bmc_bound;
-  std::size_t witness_bound = 48;
-  if(strict && !converting && (cmdline.isset("aig") ||
+
+  if(strict && (bit_bmc ||
        (cmdline.isset("bound") && !unbounded_engine)))
   {
     const std::string arg = cmdline.value_opt("bound").value_or("1");
     unsigned depth;
     const auto parsed = std::from_chars(arg.data(), arg.data()+arg.size(), depth);
-    if(parsed.ec != std::errc{} || parsed.ptr != arg.data()+arg.size() ||
-       std::size_t(depth) >= std::numeric_limits<std::size_t>::max()-48)
+    if(parsed.ec != std::errc{} || parsed.ptr != arg.data()+arg.size())
       throw ebmc_errort{} << "invalid BMC bound";
     bmc_bound = depth;
-    witness_bound += depth;
-  }
-  if(cmdline.isset("witness-lasso"))
-  {
-    if(!strict)
-      throw ebmc_errort{} << "--finite-prefix conflicts with --witness-lasso";
 
-    const auto &arg = cmdline.get_value("witness-lasso");
-    std::size_t bound;
-    auto parsed = std::from_chars(arg.data(), arg.data() + arg.size(), bound);
-    if(
-      parsed.ec != std::errc{} || parsed.ptr != arg.data() + arg.size() ||
-      bound == 0 || bound == std::numeric_limits<std::size_t>::max())
-      throw ebmc_errort{}
-        << "--witness-lasso requires a positive transition bound";
-    witness_bound = bound;
   }
-
+  (void)witness_lasso_budget(cmdline, bmc_bound);
   bool use_heuristic_engine =
     !cmdline.isset("bdd") && !cmdline.isset("aig") &&
     !cmdline.isset("k-induction") && !cmdline.isset("ic3") &&
     !cmdline.isset("new-ic3") && !cmdline.isset("bound");
 
-  if(strict && !converting && !bmc_bound &&
+  if(strict && !bdd && !bmc_bound &&
      (use_heuristic_engine || cmdline.isset("new-ic3") || cmdline.isset("k-induction")))
   {
     try
@@ -620,9 +609,7 @@ property_checker_resultt property_checker(
   if(result.status == property_checker_resultt::statust::VERIFICATION_RESULT)
   {
     const namespacet ns{transition_system.symbol_table};
-    if(strict && !converting)
-      certify_witnesses(
-        cmdline, transition_system, result, witness_bound, bmc_bound, message_handler);
+    certify_property_witnesses(cmdline, transition_system, result, bmc_bound, message_handler);
     report_results(cmdline, use_heuristic_engine, result, ns, message_handler);
   }
 

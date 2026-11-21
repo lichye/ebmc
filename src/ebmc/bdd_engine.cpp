@@ -627,8 +627,8 @@ void bdd_enginet::check_CTL(propertyt &property)
   }
   else
   {
-    // refuted
-    property.refuted();
+    // Refutation by the exact CTL fixed point, without a linear trace.
+    property.refuted("BDD CTL");
     message.status() << "Property refuted" << messaget::eom;
   }
 }

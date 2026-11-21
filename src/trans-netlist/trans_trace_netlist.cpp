@@ -118,7 +118,8 @@ trans_tracet compute_trans_trace(
   // use a sorted var_map to get deterministic results
   const auto sorted_var_map = bmc_map.var_map.sorted();
 
-  for(unsigned t=0; t<bmc_map.get_no_timeframes(); t++)
+  PRECONDITION(prop_bv.size() <= bmc_map.get_no_timeframes());
+  for(std::size_t t=0; t<prop_bv.size(); t++)
   {
     dest.states.push_back(trans_tracet::statet());
     trans_tracet::statet &state=dest.states.back();
