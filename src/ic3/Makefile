@@ -94,3 +94,6 @@ opt:
 static:
 	make  "CXXFLAGS=$(CXXFLAGS) -O3 -static" "LINK_OPTIONS= -static"
 
+
+# The legacy build lists OBJ directly. The common SRC-based depfile list is empty.
+-include $(OBJ:.o=$(DEPEXT))
