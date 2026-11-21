@@ -1,4 +1,4 @@
-CORE
+CORE buechi
 disable_iff_repeat_past.sv
 --top top --new-ic3 --buechi --witness-lasso 12
 ^\[top\.good\] .*: PROVED$

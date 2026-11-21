@@ -1,4 +1,4 @@
-CORE
+CORE buechi
 disable_iff_repeat_past.sv
 --top top --k-induction --buechi --bound 12 --witness-lasso 12
 ^\[top\.good\] .*: PROVED$

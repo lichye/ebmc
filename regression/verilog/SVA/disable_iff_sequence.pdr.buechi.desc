@@ -1,4 +1,4 @@
-CORE
+CORE buechi
 disable_iff_sequence.sv
 --top top --new-ic3 --buechi --witness-lasso 12
 ^\[top\.antecedent\] .*: PROVED$

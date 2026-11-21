@@ -1,4 +1,4 @@
-CORE
+CORE buechi
 disable_iff_sequence.sv
 --top top --k-induction --buechi --bound 12 --witness-lasso 12
 ^\[top\.antecedent\] .*: PROVED$
