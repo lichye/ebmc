@@ -186,11 +186,19 @@ protected:
   void build_instances(const verilog_instt &);
   void build_gate_instances(const verilog_inst_builtint &);
 
+  enum class net_assignment_kindt
+  {
+    DEFINITION,
+    CONSTRAINT,
+    OUTPUT_PORT
+  };
+
   struct pending_drivert
   {
     verilog_rtlt::drivert drive;
     source_locationt location;
     std::optional<exprt> constraint_lhs;
+    net_assignment_kindt kind = net_assignment_kindt::DEFINITION;
   };
   std::map<irep_idt, std::vector<pending_drivert>> net_drivers;
   std::set<irep_idt> declared_nets;
@@ -213,7 +221,7 @@ protected:
     const exprt &,
     exprt,
     const source_locationt &,
-    bool constraint = false);
+    net_assignment_kindt = net_assignment_kindt::DEFINITION);
   verilog_rtlt::undriven_mapt find_undriven(bool only_reads);
   void collapse_inout_drivers();
   void finish_net_drivers();
@@ -4716,9 +4724,10 @@ void verilog_rtl_buildert::net_assignment(
   const exprt &lhs,
   exprt rhs,
   const source_locationt &location,
-  bool constraint)
+  net_assignment_kindt kind)
 {
   statet state;
+  const bool constraint = kind != net_assignment_kindt::DEFINITION;
   // An interface or expression connected to a port can be an equality
   // without being a net lvalue.
   if(
@@ -4750,7 +4759,10 @@ void verilog_rtl_buildert::net_assignment(
                       : extract_range(base, whole_slice(base), part.first);
       }
       net_drivers[entry.first].push_back(
-        {{part.first, std::move(part.second)}, location, std::move(connected)});
+        {{part.first, std::move(part.second)},
+         location,
+         std::move(connected),
+         kind});
     }
   }
 }
@@ -5334,6 +5346,26 @@ void verilog_rtl_buildert::finish_net_drivers()
       rtl.binary_conflicts.count(entry.first) ||
       rtl.ambiguous_drives.count(entry.first))
       continue;
+    // Ordinary port connections can contribute to the same wire definition
+    // as a disjoint parent assignment. This gives the vector one definition,
+    // with nondeterminism only on bits that have no drive.
+    const auto definitions = rtl.identifier_map.find(entry.first);
+    const bool merge_output_ports =
+      !primary_inputs.count(entry.first) && !encoded.count(entry.first) &&
+      !overlaps.count(entry.first) &&
+      (definitions == rtl.identifier_map.end() ||
+       std::all_of(
+         definitions->second.begin(),
+         definitions->second.end(),
+         [](const auto &def) { return def.second.is_wire(); })) &&
+      ((definitions != rtl.identifier_map.end() &&
+        !definitions->second.empty()) ||
+       std::any_of(
+         entry.second.begin(),
+         entry.second.end(),
+         [](const auto &d)
+         { return d.kind == net_assignment_kindt::DEFINITION; }));
+
     std::size_t next_unknown = 0;
     auto fresh = [&](const typet &type)
     {
@@ -5350,7 +5382,14 @@ void verilog_rtl_buildert::finish_net_drivers()
                     is_verilog_unknown_literal(op);
            }))
         d.drive.value = verilog_sample_drive(d.drive.value, fresh);
-      if(d.constraint_lhs)
+      const bool merge_output =
+        merge_output_ports && d.kind == net_assignment_kindt::OUTPUT_PORT &&
+        (definitions == rtl.identifier_map.end() ||
+         std::none_of(
+           definitions->second.begin(),
+           definitions->second.end(),
+           [&](const auto &def) { return def.first.overlaps(d.drive.slice); }));
+      if(d.constraint_lhs && !merge_output)
         rtl.constraints.push_back(
           equal_exprt{
             *d.constraint_lhs,
@@ -5362,6 +5401,8 @@ void verilog_rtl_buildert::finish_net_drivers()
         state.values[entry.first].emplace(
           d.drive.slice, std::move(d.drive.value));
         commit(state, kindt::WIRE, d.location);
+        if(merge_output)
+          rtl.composed_output_ports.insert(entry.first);
       }
     }
   }
@@ -5868,7 +5909,8 @@ void verilog_rtl_buildert::build_port_connection(
     substitute(std::move(lhs), state),
     substitute(std::move(rhs), state),
     source_location,
-    true);
+    port.direction() == ID_output ? net_assignment_kindt::OUTPUT_PORT
+                                  : net_assignment_kindt::CONSTRAINT);
 }
 
 /*******************************************************************\
@@ -6138,7 +6180,7 @@ void verilog_rtl_buildert::build_gate_instances(
         output,
         substitute(std::move(op), state),
         module_item.source_location(),
-        true);
+        net_assignment_kindt::CONSTRAINT);
     }
     else if(module == ID_buf || module == ID_not)
     {
@@ -6168,7 +6210,7 @@ void verilog_rtl_buildert::build_gate_instances(
           instance.connections()[i],
           substitute(rhs, state),
           module_item.source_location(),
-          true);
+          net_assignment_kindt::CONSTRAINT);
       }
     }
     else

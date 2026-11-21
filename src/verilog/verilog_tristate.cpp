@@ -733,7 +733,7 @@ exprt verilog_sample_drive(
 }
 
 void verilog_resolve_nets(
-  const verilog_rtlt &rtl,
+  verilog_rtlt &rtl,
   symbol_table_baset &symbols,
   const irep_idt &module,
   transt &trans,
@@ -765,7 +765,9 @@ void verilog_resolve_nets(
   for(const auto &[id, ranges] : rtl.undriven)
   {
     const auto &net = symbols.lookup_ref(id);
-    const auto visible = to_bitvector(lower(net.symbol_expr()));
+    auto definitions = rtl.identifier_map.find(id);
+    const bool composed_output =
+      rtl.composed_output_ports.count(id) != 0;
     for(const auto &range : ranges)
     {
       const unsignedbv_typet type{numeric_cast_v<std::size_t>(range.width())};
@@ -774,10 +776,29 @@ void verilog_resolve_nets(
       auto next = held;
       next.id(ID_next_symbol);
       trans.trans().add_to_operands(equal_exprt{next, held});
-      trans.invar().add_to_operands(equal_exprt{
-        extractbits_exprt{
-          visible, from_integer(range.lower, integer_typet{}), type},
-        held});
+      if(
+        composed_output &&
+        std::none_of(
+          definitions->second.begin(),
+          definitions->second.end(),
+          [&](const auto &def) { return def.first.overlaps(range); }))
+      {
+        // Feed the composed vector's gap directly. Inout aliases and
+        // physical driver resolution keep their separate constraints.
+        auto inserted = definitions->second.emplace(
+          range,
+          verilog_rtl_definitiont{
+            verilog_rtl_definitiont::kindt::WIRE, held, net.location});
+        CHECK_RETURN(inserted.second);
+      }
+      else
+      {
+        const auto visible = to_bitvector(lower(net.symbol_expr()));
+        trans.invar().add_to_operands(equal_exprt{
+          extractbits_exprt{
+            visible, from_integer(range.lower, integer_typet{}), type},
+          held});
+      }
     }
   }
 

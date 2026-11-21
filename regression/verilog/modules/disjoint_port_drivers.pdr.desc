@@ -1,0 +1,17 @@
+CORE
+disjoint_port_drivers.sv
+--top top --reset top.rst --undriven const --new-ic3 --witness-lasso 8
+^\[top\.p_driven\] .*: PROVED$
+^\[top\.p_gap_holds\] .*: PROVED$
+^\[top\.p_gap_zero\] .*: REFUTED$
+^\[top\.c_gap_000\] .*: PROVED$
+^\[top\.c_gap_111\] .*: PROVED$
+^\[top\.c_child_changes\] .*: PROVED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+A child output drives [6:4] while the parent drives bits 7 and 0.
+The undriven middle bits admit both extremes and hold their initial
+value. All of these bits have one functional definition.

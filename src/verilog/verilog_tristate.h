@@ -29,7 +29,7 @@ exprt verilog_sample_drive(
   const std::function<exprt(const typet &)> &fresh);
 
 void verilog_resolve_nets(
-  const verilog_rtlt &,
+  verilog_rtlt &,
   symbol_table_baset &,
   const irep_idt &module,
   transt &,

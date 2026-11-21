@@ -1,0 +1,16 @@
+CORE
+disjoint_port_drivers.sv
+--top top --reset top.rst --undriven seq --bound 4 --witness-lasso 8
+^\[top\.p_driven\] .*: PROVED up to bound 4$
+^\[top\.p_gap_holds\] .*: REFUTED$
+^\[top\.p_gap_zero\] .*: REFUTED$
+^\[top\.c_gap_000\] .*: PROVED$
+^\[top\.c_gap_111\] .*: PROVED$
+^\[top\.c_child_changes\] .*: PROVED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+The default floating inputs remain independently selectable in every
+frame. Their presence must leave the two driven ranges intact.

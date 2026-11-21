@@ -211,6 +211,9 @@ public:
 
   identifier_mapt identifier_map;
 
+  /// Wires whose definitions include a disjoint module output connection.
+  std::set<irep_idt> composed_output_ports;
+
   /// Statically undriven ranges, in least-significant-bit coordinates.
   using undriven_mapt = std::map<irep_idt, std::vector<verilog_rtl_slicet>>;
   undriven_mapt undriven;

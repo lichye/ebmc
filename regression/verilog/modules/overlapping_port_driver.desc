@@ -1,0 +1,14 @@
+CORE
+overlapping_port_driver.sv
+--top top --bound 1
+^\[top\.p_parent\] .*: REFUTED$
+^\[top\.p_child\] .*: REFUTED$
+^\[top\.c_agree\] .*: PROVED$
+^\[top\.c_disagree\] .*: PROVED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+Two actual drivers of the same wire bit resolve conflicts. Both
+combinations of driver inputs are legal.
