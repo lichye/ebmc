@@ -9,6 +9,7 @@
 #include <trans-word-level/property.h>
 #include <trans-word-level/trans_trace_word_level.h>
 #include <trans-word-level/unwind.h>
+#include <verilog/sva_expr.h>
 
 #include "ebmc_error.h"
 #include "ebmc_solver_factory.h"
@@ -52,6 +53,27 @@ bool definitive_prefix(const exprt &nnf, bool allow_pending)
     id == ID_sva_ranged_always || id == ID_sva_s_always ||
     id == ID_sva_eventually || id == ID_sva_ranged_s_eventually)
     return definitive_prefix(nnf.operands().back(), allow_pending);
+  if(
+    id == ID_sva_accept_on || id == ID_sva_sync_accept_on ||
+    id == ID_sva_reject_on || id == ID_sva_sync_reject_on)
+    return definitive_prefix(to_sva_abort_expr(nnf).property(), allow_pending);
+  if(
+    id == ID_sva_overlapped_followed_by ||
+    id == ID_sva_nonoverlapped_followed_by)
+  {
+    const auto &lhs = to_binary_expr(nnf).lhs();
+    // With a single-cycle antecedent all its candidate matches are known.
+    // A constant zero repetition has only an empty match.
+    const bool empty =
+      lhs.id() == ID_sva_sequence_repetition_star &&
+      lhs.operands().size() == 3 && lhs.operands()[1].is_zero() &&
+      (lhs.operands()[2].is_nil() || lhs.operands()[2].is_zero());
+    return (!has_temporal_operator(lhs) ||
+            (lhs.id() == ID_sva_boolean &&
+             !has_temporal_operator(to_unary_expr(lhs).op())) ||
+            empty) &&
+           definitive_prefix(to_binary_expr(nnf).rhs(), allow_pending);
+  }
   if(id == ID_if && !has_temporal_operator(to_if_expr(nnf).cond()))
     return definitive_prefix(to_if_expr(nnf).true_case(), allow_pending) &&
            definitive_prefix(to_if_expr(nnf).false_case(), allow_pending);
@@ -119,22 +141,31 @@ bool total_transition(const transition_systemt &system)
   };
   const auto total_value = [](const exprt &rhs)
   {
+    // Copying a value or assigning a constant of the destination's exact
+    // type is total, including arrays, floating point and aggregate state.
+    if(rhs.id() == ID_symbol || rhs.is_constant())
+      return true;
     bool total = true;
     rhs.visit_pre(
       [&](const exprt &e)
       {
         const auto t = e.type().id(), id = e.id();
-        if(t != ID_bool && t != ID_signedbv && t != ID_unsignedbv)
+        if(e.is_constant())
+          return;
+        if(
+          t != ID_bool && t != ID_signedbv && t != ID_unsignedbv &&
+          t != ID_floatbv)
           total = false;
         else if(
           id != ID_constant && id != ID_symbol && id != ID_nondet_symbol &&
           id != ID_not && id != ID_and && id != ID_or && id != ID_xor &&
           id != ID_implies && id != ID_equal && id != ID_notequal &&
-          id != ID_bitnot && id != ID_bitand && id != ID_bitor &&
-          id != ID_bitxor && id != ID_plus && id != ID_minus && id != ID_mult &&
-          id != ID_unary_minus && id != ID_extractbits && id != ID_extractbit &&
-          id != ID_shl && id != ID_lshr && id != ID_ashr &&
-          id != ID_replication &&
+          id != ID_floatbv_plus && id != ID_bitnot && id != ID_bitand &&
+          id != ID_bitor && id != ID_bitxor && id != ID_plus &&
+          id != ID_minus && id != ID_mult && id != ID_unary_minus &&
+          id != ID_extractbits && id != ID_extractbit && id != ID_shl &&
+          id != ID_lshr && id != ID_ashr && id != ID_replication &&
+          !(id == ID_constraint_select_one && !e.operands().empty()) &&
           !(id == ID_div && e.operands().size() == 2 &&
             to_binary_expr(e).rhs().is_constant() &&
             !to_binary_expr(e).rhs().is_zero()) &&
@@ -152,14 +183,17 @@ bool total_transition(const transition_systemt &system)
          if(clause.id() != ID_equal)
            return false;
          const auto &eq = to_equal_expr(clause);
-         if(
-           eq.lhs().id() != ID_symbol || eq.lhs().type() != eq.rhs().type() ||
-           !total_value(eq.rhs()))
+         if(eq.lhs().type() != eq.rhs().type())
            return false;
-         auto id = eq.lhs().get(ID_identifier);
-         auto sym = system.symbol_table.lookup(id);
-         return sym && !sym->is_state_var &&
-                wires.emplace(id, &eq.rhs()).second;
+         const auto define = [&](const exprt &lhs, const exprt &rhs)
+         {
+           if(lhs.id() != ID_symbol || !total_value(rhs))
+             return false;
+           auto id = lhs.get(ID_identifier);
+           auto sym = system.symbol_table.lookup(id);
+           return sym && !sym->is_state_var && wires.emplace(id, &rhs).second;
+         };
+         return define(eq.lhs(), eq.rhs()) || define(eq.rhs(), eq.lhs());
        }))
     return false;
   // Acyclic wire definitions give a valuation for every current state/input.
@@ -365,7 +399,14 @@ void certify(
       loops.push_back(solver.handle(selected));
     }
     else
-      loops.push_back(solver.handle(equal));
+    {
+      // A free Boolean selector has a scalar model value even when an SMT
+      // solver abbreviates a large conjunction using a shared expression.
+      auto selected = symbol_exprt{
+        "ebmc::witness_loop::" + std::to_string(start), bool_typet{}};
+      solver.set_to_true(implies_exprt{selected, equal});
+      loops.push_back(selected);
+    }
   }
   if(native_loop)
   {
@@ -499,13 +540,14 @@ void certify_property_witnesses(
         total && !cmdline.isset("witness-lasso") &&
         (invariant(p.normalized_expr) ||
          !has_temporal_operator(p.normalized_expr) ||
-         (bmc_bound &&
-          definitive_prefix(
-            property_nnf(p.normalized_expr), !p.is_exists_path()))))
+         definitive_prefix(
+           property_nnf(p.normalized_expr), !p.is_exists_path())))
       {
         // A COI witness is a projection. Establish a reachable full-model
         // bad prefix before relying on totality; do the same for traceless IC3.
-        if(cmdline.isset("coi") || !bad)
+        if(
+          cmdline.isset("coi") || !bad ||
+          (!bmc_bound && !invariant(p.normalized_expr)))
         {
           const auto depth =
             bmc_bound.value_or(std::min(*budget, bad.value_or(*budget)));
@@ -564,6 +606,14 @@ void certify_property_witnesses(
     &system.symbol_table.lookup_ref(original_system.main_symbol->name);
   ebmc_propertiest batch;
   batch.properties = result.properties;
+  // Model past in active assumptions and goals still requiring a certificate.
+  // A discharged sibling's private history is not part of the original machine.
+  for(auto &p : batch.properties)
+    if(
+      !p.is_assumption() && !p.is_assumed() &&
+      (p.witness_certificate != certificate::NONE ||
+       !(p.is_exists_path() ? p.is_proved() : p.is_refuted())))
+      p.normalized_expr = true_exprt();
   bool compiled = true;
   for(const auto &p : batch.properties)
     if(
