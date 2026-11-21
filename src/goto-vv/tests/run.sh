@@ -47,7 +47,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"

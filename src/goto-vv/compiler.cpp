@@ -302,6 +302,11 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
     case SymbolKind::ExplicitImport:
     case SymbolKind::TypeAlias:
       break;
+    case SymbolKind::TransparentMember:
+      // Names hoisted from a local enum refer to its existing value symbols.
+      if(s.as<TransparentMemberSymbol>().wrapped.kind != SymbolKind::EnumValue)
+        fail(s.location, "unsupported transparent module member");
+      break;
     case SymbolKind::Instance:
     {
       auto &child = s.as<InstanceSymbol>();
