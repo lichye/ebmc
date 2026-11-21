@@ -628,7 +628,10 @@ void bdd_enginet::check_CTL(propertyt &property)
   else
   {
     // Refutation by the exact CTL fixed point, without a linear trace.
-    property.refuted("BDD CTL");
+    if(cmdline.isset("finite-prefix"))
+      property.refuted();
+    else
+      property.refuted("BDD CTL");
     message.status() << "Property refuted" << messaget::eom;
   }
 }

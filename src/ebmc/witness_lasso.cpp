@@ -49,18 +49,9 @@ bool total_transition(const transition_systemt &system)
     }
     return true;
   };
-  if(!all_conjuncts(tr.invar(), [](const exprt &) { return false; }))
-    return false;
-  std::set<irep_idt> assigned;
-  return all_conjuncts(tr.trans(), [&](const exprt &clause) {
-    if(clause.id() != ID_equal)
-      return false;
-    const auto &eq = to_equal_expr(clause);
-    if(eq.lhs().id() != ID_next_symbol || eq.lhs().type() != eq.rhs().type() ||
-       !assigned.insert(eq.lhs().get(ID_identifier)).second)
-      return false;
+  const auto total_value = [](const exprt &rhs) {
     bool total = true;
-    eq.rhs().visit_pre([&](const exprt &e) {
+    rhs.visit_pre([&](const exprt &e) {
       const auto t=e.type().id(), id=e.id();
       if(t != ID_bool && t != ID_signedbv && t != ID_unsignedbv)
         total = false;
@@ -74,6 +65,44 @@ bool total_transition(const transition_systemt &system)
         total = false;
     });
     return total;
+  };
+  std::map<irep_idt, const exprt *> wires;
+  if(!all_conjuncts(tr.invar(), [&](const exprt &clause) {
+    if(clause.id()!=ID_equal)
+      return false;
+    const auto &eq=to_equal_expr(clause);
+    if(eq.lhs().id()!=ID_symbol || eq.lhs().type()!=eq.rhs().type() || !total_value(eq.rhs()))
+      return false;
+    auto id=eq.lhs().get(ID_identifier);
+    auto sym=system.symbol_table.lookup(id);
+    return sym && !sym->is_input && !sym->is_state_var && wires.emplace(id,&eq.rhs()).second;
+  }))
+    return false;
+  // Acyclic wire definitions give a valuation for every current state/input.
+  std::set<irep_idt> active, done;
+  std::function<bool(irep_idt)> acyclic = [&](irep_idt id) {
+    if(done.count(id)) return true;
+    if(!active.insert(id).second) return false;
+    bool ok=true;
+    wires.at(id)->visit_pre([&](const exprt &e) {
+      if(ok && e.id()==ID_symbol && wires.count(e.get(ID_identifier)))
+        ok=acyclic(e.get(ID_identifier));
+    });
+    active.erase(id);
+    done.insert(id);
+    return ok;
+  };
+  for(const auto &wire : wires)
+    if(!acyclic(wire.first)) return false;
+  std::set<irep_idt> assigned;
+  return all_conjuncts(tr.trans(), [&](const exprt &clause) {
+    if(clause.id()!=ID_equal) return false;
+    const auto &eq=to_equal_expr(clause);
+    if(eq.lhs().id()!=ID_next_symbol || eq.lhs().type()!=eq.rhs().type() || !total_value(eq.rhs()))
+      return false;
+    auto id=eq.lhs().get(ID_identifier);
+    auto sym=system.symbol_table.lookup(id);
+    return sym && sym->is_state_var && assigned.insert(id).second;
   });
 }
 
@@ -326,9 +355,14 @@ void certify_property_witnesses(
   const bool no_assumptions = std::none_of(result.properties.begin(),result.properties.end(),
     [](const auto &p) { return !p.is_disabled() && (p.is_assumption() || p.is_assumed()); });
   const bool total = no_assumptions && total_transition(original_system);
+  auto solver_options = cmdline;
+  for(const auto option : {"outfile", "show-formula", "smt2"})
+    if(solver_options.isset(option))
+      solver_options.set(option, false);
   bool need_witness = false;
   for(auto &p : result.properties)
   {
+    p.witness_certificate = certificate::NONE;
     if(p.is_inconclusive() || p.is_unsupported() || p.is_failure())
       p.witness_trace.reset();
     if(!p.is_assumption() && (p.is_exists_path() ? p.is_proved() : p.is_refuted()))
@@ -340,9 +374,43 @@ void certify_property_witnesses(
         continue;
       }
       auto bad = p.witness_trace ? p.witness_trace->get_min_failing_timeframe() : std::optional<std::size_t>{};
-      if(total && !cmdline.isset("witness-lasso") && bad && (!bmc_bound || *bad<=*bmc_bound) &&
-         (invariant(p.normalized_expr) || !has_temporal_operator(p.normalized_expr)))
+      if(total && !cmdline.isset("witness-lasso") &&
+         (invariant(p.normalized_expr) || !has_temporal_operator(p.normalized_expr)) &&
+         !has_subexpr(p.normalized_expr, ID_verilog_past))
       {
+        // A COI witness is a projection. Establish a reachable full-model
+        // bad prefix before relying on totality; do the same for traceless IC3.
+        if(cmdline.isset("coi") || !bad)
+        {
+          const auto depth = std::min(bad.value_or(bmc_bound.value_or(*budget)),
+                                      bmc_bound.value_or(*budget));
+          const namespacet ns{original_system.symbol_table};
+          auto backend=ebmc_solver_factory(solver_options)(ns,messages);
+          auto &solver=backend.decision_procedure();
+          unwind(original_system.trans_expr,messages,solver,depth+1,ns);
+          auto handles=::property(p.normalized_expr,!p.is_exists_path(),messages,depth+1);
+          for(auto &h:handles) h=solver.handle(h);
+          solver.set_to_false(conjunction(handles));
+          auto verdict=solver();
+          if(verdict==decision_proceduret::resultt::D_ERROR)
+          {
+            p.witness_trace.reset();
+            p.failure("solver error checking full-model prefix");
+            continue;
+          }
+          if(verdict==decision_proceduret::resultt::D_SATISFIABLE)
+            p.witness_trace=compute_trans_trace(handles,solver,depth+1,ns,original_system.main_symbol->name);
+          else
+            p.witness_trace.reset();
+          bad=p.witness_trace ? p.witness_trace->get_min_failing_timeframe() : std::optional<std::size_t>{};
+        }
+        if(!bad || (bmc_bound && *bad>*bmc_bound))
+        {
+          p.witness_trace.reset();
+          p.inconclusive();
+          continue;
+        }
+        p.witness_trace->loop_start.reset();
         p.witness_trace->total_extension = true;
         p.witness_certificate=certificate::TOTAL_PREFIX;
         messaget{messages}.status() << p.name << ": finite bad frame " << *bad
@@ -362,6 +430,11 @@ void certify_property_witnesses(
   ebmc_propertiest batch;
   batch.properties = result.properties;
   bool compiled = true;
+  for(const auto &p : batch.properties)
+    if(!p.is_disabled() && p.is_assumption() && p.normalized_expr.is_true() &&
+       has_temporal_operator(to_unary_expr(p.original_expr).op()))
+      compiled = false; // fairness erased by a liveness-to-safety transform
+
   try
   {
     instrument_past(system, batch);
@@ -386,10 +459,6 @@ void certify_property_witnesses(
   // Keep the primary engine's transition system and solver selection intact.
   // An engine may ignore an output flag and return a real verdict. The
   // secondary query always needs a solver, never a formula writer.
-  auto solver_options = cmdline;
-  for(const auto option : {"outfile", "show-formula", "smt2"})
-    if(solver_options.isset(option))
-      solver_options.set(option, false);
   auto trans = system.trans_expr;
   if(cmdline.isset("cvc5"))
     split_state_muxes(trans.trans());
@@ -405,8 +474,16 @@ void certify_property_witnesses(
       !(p.is_exists_path() ? p.is_proved() : p.is_refuted()))
       continue;
 
+    auto horizon=bmc_bound;
+    if(!horizon && !invariant(p.normalized_expr) && bmc_supports_property(p.normalized_expr))
+    {
+      // Checking an unbounded goal on an actual lasso is sound for the
+      // path fragment accepted by native BMC. Branching CTL is excluded.
+      horizon=p.witness_trace && !p.witness_trace->states.empty()
+        ? std::min(*budget,p.witness_trace->states.size()-1) : *budget;
+    }
     p.witness_trace.reset();
-    if(!supported_assumptions || (!bmc_bound && !invariant(p.normalized_expr)))
+    if(!supported_assumptions || (!horizon && !invariant(p.normalized_expr)))
     {
       messaget{messages}.status()
         << p.name << ": witness loop requires invariant monitor predicates"
@@ -422,7 +499,7 @@ void certify_property_witnesses(
       assumptions,
       p,
       *budget,
-      bmc_bound,
+      horizon,
       ebmc_solver_factory(solver_options),
       messages);
   }
