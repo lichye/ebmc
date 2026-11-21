@@ -1,0 +1,11 @@
+CORE
+sm98a7multi.sv
+--ic3 --property sm98a7multi.assert.2 --constr
+^cex verification is ok$
+^sm98a7multi.assert.2: cannot certify external IC3 gate constraints$
+^\[sm98a7multi\.assert\.2\].*: INCONCLUSIVE$
+^EXIT=10$
+^SIGNAL=0$
+--
+: REFUTED
+--

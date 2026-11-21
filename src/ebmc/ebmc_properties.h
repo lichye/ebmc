@@ -55,6 +55,8 @@ public:
     enum class witness_certificatet { NONE, LASSO, TOTAL_PREFIX, TOTAL_BDD };
     witness_certificatet witness_certificate = witness_certificatet::NONE;
     std::optional<trans_tracet> witness_trace;
+    // Depth reported by an engine that does not export the actual trace.
+    std::optional<std::size_t> witness_depth_hint;
     std::optional<std::string> failure_reason;
     std::optional<std::string> proof_via;
 

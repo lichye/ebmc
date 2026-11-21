@@ -170,10 +170,22 @@ property_checker_resultt ic3_enginet::operator()()
         switch(result)
         {
         case 1:
+          // Gate constraints from the .cnstr file exist only inside legacy
+          // IC3. A word-level replay could otherwise change constrained inputs.
+          if(!cmdline.isset("finite-prefix") && Ci.constr_flag)
+          {
+            message.status() << property.name
+                             << ": cannot certify external IC3 gate constraints"
+                             << messaget::eom;
+            property.inconclusive();
+            break;
+          }
           if(!cmdline.isset("finite-prefix") && property.is_exists_path())
             property.proved();
           else
             property.refuted();
+          if(!cmdline.isset("finite-prefix") && !Ci.Cex.empty())
+            property.witness_depth_hint = Ci.Cex.size() - 1;
           break;
         case 2:
           if(!cmdline.isset("finite-prefix") && property.is_exists_path())

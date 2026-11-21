@@ -1,6 +1,11 @@
 CORE
 elbtunnel.aig.smv
---bound 12
+--bound 12 --witness-lasso 20
+^spec1: witness loop [0-9]+ -> 20 \(equal endpoints\), bad frame ([0-9]|1[0-2])$
+^spec3: witness loop [0-9]+ -> 20 \(equal endpoints\), bad frame ([0-9]|1[0-2])$
+^spec4: witness loop [0-9]+ -> 20 \(equal endpoints\), bad frame ([0-9]|1[0-2])$
+^spec7: witness loop [0-9]+ -> 20 \(equal endpoints\), bad frame ([0-9]|1[0-2])$
+^spec8: witness loop [0-9]+ -> 20 \(equal endpoints\), bad frame ([0-9]|1[0-2])$
 ^EXIT=10$
 ^SIGNAL=0$
 ^\[spec1\] .* REFUTED$

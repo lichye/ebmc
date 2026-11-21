@@ -1,6 +1,6 @@
 CORE
 sm98a7multi.sv
---ic3 --property sm98a7multi.assert.2 --constr
+--finite-prefix --ic3 --property sm98a7multi.assert.2 --constr
 ^property FAILED
 ^cex verification is ok
 ^\[sm98a7multi\.assert\.2\] always !sm98a7multi\.p1: REFUTED$

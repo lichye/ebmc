@@ -23,6 +23,7 @@ void ebmc_propertiest::propertyt::copy_results_from(
   status = src.status;
   bound = src.bound;
   witness_trace = src.witness_trace;
+  witness_depth_hint = src.witness_depth_hint;
   witness_certificate = src.witness_certificate;
   failure_reason = src.failure_reason;
   proof_via = src.proof_via;

@@ -549,8 +549,8 @@ void certify_property_witnesses(
           cmdline.isset("coi") || !bad ||
           (!bmc_bound && !invariant(p.normalized_expr)))
         {
-          const auto depth =
-            bmc_bound.value_or(std::min(*budget, bad.value_or(*budget)));
+          const auto depth = bmc_bound.value_or(std::min(
+            *budget, bad.value_or(p.witness_depth_hint.value_or(*budget))));
           const namespacet ns{original_system.symbol_table};
           auto backend = ebmc_solver_factory(solver_options)(ns, messages);
           auto &solver = backend.decision_procedure();
