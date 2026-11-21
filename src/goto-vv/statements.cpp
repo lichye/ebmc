@@ -125,17 +125,40 @@ exprt compilert::stmt(const Statement &s)
           break;
         if(count >= 65536)
           fail(at, "static loop exceeds the expansion limit");
-        locals[&v] =
-          literal(context.findLocal(&v)->integer(), type(v.getType()));
-        r.operands().push_back(stmt(loop.body));
         auto updated = loop.steps[0]->eval(context);
         if(!updated.isInteger())
           fail(at, "cannot evaluate loop step");
       }
+      // Let the RTL builder unroll the checked loop. Its loop frame merges
+      // data-dependent break paths and retains the statement evaluation order.
+      auto where = loc(v.location);
+      auto id = name(*scope) + ".$for_" + id2string(where.get_line()) + "_" +
+                id2string(where.get_column()) + "." + std::string(v.name);
+      auto t = type(v.getType());
+      symbolt index(id, t, ID_Verilog);
+      index.base_name = std::string(v.name);
+      index.module = root;
+      index.location = where;
+      index.is_lvalue = true;
+      if(object.symbols.add(index))
+        fail(v.location, "duplicate loop index " + id);
+      auto ref = index.symbol_expr();
+      locals.emplace(&v, ref);
+      auto initialization =
+        item(ID_verilog_blocking_assign, {ref, literal(first.integer(), t)});
+      r.operands().push_back(item(
+        ID_for,
+        {item(ID_empty_string, {initialization}),
+         boolean(expr(*loop.stopExpr)),
+         item(ID_postincrement, {ref}),
+         stmt(loop.body)}));
       locals.erase(&v);
     }
     break;
   }
+  case StatementKind::Break:
+    r = item(ID_break);
+    break;
   case StatementKind::Case:
   {
     const auto &c = s.as<CaseStatement>();
@@ -180,6 +203,17 @@ exprt compilert::stmt(const Statement &s)
   case StatementKind::ExpressionStatement:
   {
     auto &e = s.as<ExpressionStatement>().expr;
+    if(e.kind == ExpressionKind::UnaryOp)
+    {
+      auto &u = e.as<UnaryExpression>();
+      if(
+        u.op == UnaryOperator::Postincrement &&
+        !locals.count(u.operand().getSymbolReference()))
+      {
+        r = item(ID_postincrement, {expr(u.operand())});
+        break;
+      }
+    }
     if(e.kind != ExpressionKind::Assignment)
       fail(at, "expected assignment");
     auto &a = e.as<AssignmentExpression>();
