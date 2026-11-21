@@ -47,7 +47,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal wires decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case; do
+for top in temporal sampled_sequence wires decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -56,6 +56,18 @@ for top in temporal wires decoder_features immediate generate_scopes fixed_arith
   while read -r name expected; do
     compare "$top.direct" "$top.typed" "$top.$name" "$expected"
   done < "$front/tests/$top.expected"
+done
+for name in first_zero first_nonzero; do
+  flags=(--bound 0 --undriven seq --property "sampled_sequence.$name" --trace)
+  run "$name.direct" "$eb" "${flags[@]}" --top sampled_sequence "$front/tests/sampled_sequence.sv"
+  run "$name.typed" "$eb" "${flags[@]}" sampled_sequence-check.vv
+  if [[ $name = first_zero ]]; then
+    compare "$name.direct" "$name.typed" "sampled_sequence.$name" 'PROVED up to bound 0'
+    test "$(cat "$name.direct.rc")" = 0
+  else
+    compare "$name.direct" "$name.typed" "sampled_sequence.$name" REFUTED
+    test "$(cat "$name.direct.rc")" = 10
+  fi
 done
 echo "assume typo posedge bridge.clk bridge.missing == '0" >bad-contract
 run bad-binding "$vv" constrain bridge-1.vv bad-contract rejected.vv
@@ -66,10 +78,13 @@ grep -q 'bad-version.vv:1: unsupported goto-vv schema' bad-version
 sed 's/posedge clk/negedge clk/' "$front/tests/bridge.sv" >bad-clock.sv
 run bad-clock compile bridge rejected.vv bad-clock.sv
 grep -q 'bad-clock.sv:[0-9].*posedge' bad-clock
+sed 's/\$stable(zero)/$stable(zero, @(negedge clk))/' "$front/tests/sampled_sequence.sv" >stable-clock.sv
+run stable-clock compile sampled_sequence rejected.vv stable-clock.sv
+grep -q 'stable-clock.sv:[0-9].*\$stable.*posedge' stable-clock
 sed 's/single-posedge\/preponed\/disable-current/single-posedge\/unsampled\/disable-current/' both.vv >bad-sampling.vv
 run bad-sampling "$eb" bad-sampling.vv
 grep -q 'bridge.sv:[0-9].*unsupported sampling model' bad-sampling
 grep -q '^"0110" 0 0$' wires.vv
 awk '/^Transition system state 0/{in0=1;next} /^Transition system state 1/{in0=0} in0 && /temporal.started = 0/{seen=1} END{exit !seen}' temporal.typed
-for k in bad-binding bad-version bad-clock bad-sampling; do test "$(cat "$k.rc")" != 0; done
+for k in bad-binding bad-version bad-clock stable-clock bad-sampling; do test "$(cat "$k.rc")" != 0; done
 echo PASS

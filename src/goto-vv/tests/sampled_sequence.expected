@@ -1,0 +1,15 @@
+first_zero PROVED up to bound 3
+first_nonzero REFUTED
+hold PROVED up to bound 3
+change REFUTED
+after_reset PROVED up to bound 3
+after_reset_bad REFUTED
+window_ok PROVED up to bound 3
+window_first REFUTED
+window_middle REFUTED
+window_last REFUTED
+window_cancel PROVED up to bound 3
+antecedent_ok PROVED up to bound 3
+antecedent_bad REFUTED
+window_live PROVED
+single_live PROVED

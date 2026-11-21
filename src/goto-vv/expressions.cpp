@@ -14,6 +14,19 @@ exprt slice(exprt base, exprt hi, exprt lo, const typet &t)
     t,
     {std::move(base), std::move(hi), std::move(lo)});
 }
+exprt as_sequence(exprt e)
+{
+  if(e.type().id() == ID_bool)
+    return node(ID_sva_boolean, verilog_sva_sequence_typet(), {std::move(e)});
+  return e;
+}
+exprt as_property(exprt e)
+{
+  if(e.type().id() == ID_verilog_sva_sequence)
+    return node(
+      ID_sva_sequence_property, verilog_sva_property_typet(), {std::move(e)});
+  return e;
+}
 } // namespace
 exprt compilert::expr(const Expression &e)
 {
@@ -272,6 +285,16 @@ exprt compilert::expr(const Expression &e)
             std::string(c.getSubroutineName()));
       r = literal(value.integer(), t);
     }
+    else if(c.isSystemCall() && c.getSubroutineName() == "$stable")
+    {
+      if(!in_clocked_property || c.arguments().size() != 1)
+        fail(at, "$stable requires the enclosing property's single posedge");
+      r = node(
+        ID_function_call,
+        bool_typet(),
+        {verilog_identifier_exprt("$stable"),
+         item(ID_arguments, {expr(*c.arguments().front())})});
+    }
     else
       fail(at, "unsupported function " + std::string(c.getSubroutineName()));
     break;
@@ -335,29 +358,32 @@ exprt compilert::assertion(const AssertionExpr &a, SourceLocation at)
     r = node(
       ID_sva_disable_iff,
       verilog_sva_property_typet(),
-      {boolean(expr(d.condition)), assertion(d.expr, at)});
+      {boolean(expr(d.condition)), as_property(assertion(d.expr, at))});
     break;
   }
   case AssertionExprKind::Binary:
   {
     auto &b = a.as<BinaryAssertionExpr>();
     auto k = b.op;
+    if(k == BinaryAssertionOperator::Throughout)
+    {
+      r = node(
+        ID_sva_sequence_throughout,
+        verilog_sva_sequence_typet(),
+        {assertion(b.left, at), as_sequence(assertion(b.right, at))});
+      break;
+    }
     if(
       k != BinaryAssertionOperator::OverlappedImplication &&
       k != BinaryAssertionOperator::NonOverlappedImplication)
       fail(at, "unsupported assertion operator " + std::string(toString(k)));
-    auto left = assertion(b.left, at), right = assertion(b.right, at);
-    if(left.type().id() == ID_bool)
-      left = node(ID_sva_boolean, verilog_sva_sequence_typet(), {left});
-    if(right.type().id() == ID_verilog_sva_sequence)
-      right =
-        node(ID_sva_sequence_property, verilog_sva_property_typet(), {right});
     r = node(
       k == BinaryAssertionOperator::OverlappedImplication
         ? ID_sva_overlapped_implication
         : ID_sva_non_overlapped_implication,
       verilog_sva_property_typet(),
-      {left, right});
+      {as_sequence(assertion(b.left, at)),
+       as_property(assertion(b.right, at))});
     break;
   }
   case AssertionExprKind::SequenceConcat:
@@ -368,9 +394,7 @@ exprt compilert::assertion(const AssertionExpr &a, SourceLocation at)
     {
       if(!part.delay.max)
         fail(at, "unbounded sequence");
-      auto atom = assertion(*part.sequence, at);
-      if(atom.type().id() == ID_bool)
-        atom = node(ID_sva_boolean, verilog_sva_sequence_typet(), {atom});
+      auto atom = as_sequence(assertion(*part.sequence, at));
       if(r.is_nil() && part.delay.min == 0 && *part.delay.max == 0)
         r = atom;
       else
@@ -413,10 +437,12 @@ void compilert::property(
     id = ID_verilog_cover_property;
   else
     fail(at, "unsupported assertion kind");
+  in_clocked_property = true;
+  auto property_expr = as_property(assertion(a.propertySpec, at));
+  in_clocked_property = false;
   auto entry = item(
     id,
-    {assertion(a.propertySpec, at),
-     item(ID_verilog_action_then, {item(ID_skip)})});
+    {std::move(property_expr), item(ID_verilog_action_then, {item(ID_skip)})});
   entry.set(ID_identifier, s.name);
   entry.set(ID_base_name, s.base_name);
   entry.add_source_location() = s.location;

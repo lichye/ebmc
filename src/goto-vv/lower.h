@@ -70,6 +70,7 @@ public:
   analysis::AnalysisManager &am;
   vv_objectt object;
   const Symbol *scope = nullptr;
+  bool in_clocked_property = false;
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
   std::map<std::string, std::string> clock_alias;
   std::map<const Symbol *, exprt> locals;
