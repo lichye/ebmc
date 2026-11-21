@@ -173,8 +173,12 @@ exprt compilert::expr(const Expression &e)
   case ExpressionKind::Concatenation:
   {
     r = node(ID_concatenation, t);
-    for(auto *a : e.as<ConcatenationExpression>().operands())
-      r.operands().push_back(expr(*a));
+    const auto args = e.as<ConcatenationExpression>().operands();
+    if(args.size() == 1 && t.id() == ID_bool)
+      r = typecast_exprt::conditional_cast(expr(*args.front()), t);
+    else
+      for(auto *a : args)
+        r.operands().push_back(expr(*a));
     break;
   }
   case ExpressionKind::RangeSelect:
@@ -238,8 +242,13 @@ exprt compilert::expr(const Expression &e)
     if(!count || *count > 65536 || !*count)
       fail(at, "unsupported replication count");
     auto pattern = expr(rep.concat());
-    r = node(ID_concatenation, t);
-    r.operands().assign(*count, pattern);
+    if(*count == 1 && t.id() == ID_bool)
+      r = typecast_exprt::conditional_cast(std::move(pattern), t);
+    else
+    {
+      r = node(ID_concatenation, t);
+      r.operands().assign(*count, pattern);
+    }
     break;
   }
   case ExpressionKind::MemberAccess:
