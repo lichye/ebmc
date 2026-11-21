@@ -207,7 +207,12 @@ void instrument_buechi(
       buechi.rename_state_symbol(new_state_symbol.symbol_expr());
 
       // add the new symbol to the symbol table
-      transition_system.symbol_table.add(std::move(new_state_symbol));
+      if(transition_system.symbol_table.add(std::move(new_state_symbol)))
+        throw ebmc_errort{} << "duplicate Buechi state " << buechi.state_symbol.identifier();
+
+      if(buechi.complete)
+        transition_system.complete_monitors.push_back(
+          {buechi.init, buechi.trans, buechi.state_symbol.identifier()});
 
       // add the automaton to the transition system
       transition_system.trans_expr.init() =

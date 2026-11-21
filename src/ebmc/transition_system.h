@@ -25,6 +25,17 @@ public:
   const symbolt *main_symbol;
   transt trans_expr; // transition system expression
 
+  // A complete Spot automaton always has a successor for every letter from
+  // every automaton state reachable from its designated initial states.
+  // Keep the actual factors so a transformed relation can't inherit the proof.
+  struct complete_monitort
+  {
+    exprt initial;
+    exprt transition;
+    irep_idt state;
+  };
+  std::vector<complete_monitort> complete_monitors;
+
   void output(std::ostream &) const;
 
   std::vector<symbol_exprt> state_variables() const;

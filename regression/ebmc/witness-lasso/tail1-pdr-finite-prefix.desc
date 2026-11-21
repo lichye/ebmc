@@ -1,6 +1,6 @@
-CORE
+CORE buechi
 tail1.sv
---bound 10 --property tail.p
+--buechi --new-ic3 --finite-prefix --property tail.p
 ^\[tail\.a1\].*: ASSUMED$
 ^\[tail\.a2\].*: ASSUMED$
 ^\[tail\.p\].*: REFUTED$

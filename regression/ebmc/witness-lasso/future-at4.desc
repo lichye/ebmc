@@ -1,0 +1,8 @@
+CORE
+future.sv
+--bound 4
+^\[future_match\.p\].*: REFUTED$
+^\[future_match\.hit\].*: PROVED$
+^EXIT=10$
+^SIGNAL=0$
+--

@@ -1,0 +1,8 @@
+CORE buechi
+bounded.sv
+--aig --buechi --bound 2
+^\[bounded\.good\].*: PROVED up to bound 2$
+^\[bounded\.reached\].*: REFUTED up to bound 2$
+^EXIT=10$
+^SIGNAL=0$
+--

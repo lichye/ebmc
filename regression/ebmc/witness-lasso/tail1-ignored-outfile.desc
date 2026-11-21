@@ -1,0 +1,7 @@
+CORE buechi
+tail1.sv
+--new-ic3 --buechi --outfile ignored-cnf
+^\[tail\.p\].*: INCONCLUSIVE$
+^EXIT=10$
+^SIGNAL=0$
+--

@@ -1,19 +1,20 @@
 #include "witness_lasso.h"
-#include "property_checker.h"
 
 #include <util/arith_tools.h>
 #include <util/expr_util.h>
 
+#include <temporal-logic/nnf.h>
 #include <trans-word-level/instantiate_word_level.h>
 #include <trans-word-level/lasso.h>
 #include <trans-word-level/property.h>
 #include <trans-word-level/trans_trace_word_level.h>
 #include <trans-word-level/unwind.h>
 
-#include "ebmc_solver_factory.h"
 #include "ebmc_error.h"
+#include "ebmc_solver_factory.h"
 #include "instrument_buechi.h"
 #include "instrument_past.h"
+#include "property_checker.h"
 
 #include <charconv>
 #include <limits>
@@ -28,6 +29,44 @@ bool invariant(const exprt &expr)
          !has_temporal_operator(to_unary_expr(expr).op());
 }
 
+// In native BMC a false obligation in this fragment is final on the finite
+// prefix. Assertions include pending sequence matches, so a failed positive
+// sequence has no possible pending match. Covers exclude pending matches, so
+// falsifying the negation of a sequence requires an actual completed match.
+bool definitive_prefix(const exprt &nnf, bool allow_pending)
+{
+  if(!has_temporal_operator(nnf))
+    return true;
+  const auto id = nnf.id();
+  if(id == ID_AG || id == ID_G || id == ID_sva_always)
+    return definitive_prefix(to_unary_expr(nnf).op(), allow_pending);
+  if(
+    id == ID_sva_overlapped_implication ||
+    id == ID_sva_non_overlapped_implication)
+    return definitive_prefix(to_binary_expr(nnf).rhs(), allow_pending);
+  if(
+    id == ID_X || id == ID_AX || id == ID_sva_s_nexttime ||
+    id == ID_sva_nexttime)
+    return definitive_prefix(to_unary_expr(nnf).op(), allow_pending);
+  if(
+    id == ID_sva_ranged_always || id == ID_sva_s_always ||
+    id == ID_sva_eventually || id == ID_sva_ranged_s_eventually)
+    return definitive_prefix(nnf.operands().back(), allow_pending);
+  if(id == ID_if && !has_temporal_operator(to_if_expr(nnf).cond()))
+    return definitive_prefix(to_if_expr(nnf).true_case(), allow_pending) &&
+           definitive_prefix(to_if_expr(nnf).false_case(), allow_pending);
+  if(id == ID_or || id == ID_and)
+    return std::all_of(
+      nnf.operands().begin(),
+      nnf.operands().end(),
+      [&](const exprt &op) { return definitive_prefix(op, allow_pending); });
+  const bool negated = id == ID_not;
+  const auto seq = (negated ? to_unary_expr(nnf).op() : nnf).id();
+  return (negated || allow_pending) &&
+         (seq == ID_sva_implicit_strong || seq == ID_sva_implicit_weak ||
+          seq == ID_sva_strong || seq == ID_sva_weak);
+}
+
 // Sufficient syntactic totality criterion. A freely chosen next value is
 // allowed for an unassigned latch; written latches are distinct and each RHS
 // is a total current-frame bit-vector function. Initial conditions do not
@@ -35,13 +74,42 @@ bool invariant(const exprt &expr)
 bool total_transition(const transition_systemt &system)
 {
   const auto &tr = system.trans_expr;
-  const auto all_conjuncts = [](const exprt &root, const auto &check) {
+  // A complete monitor can be composed independently of the design and the
+  // other monitors. Only use its construction proof while both exact factors
+  // remain present. No other constraint may write its private next state.
+  std::map<exprt, irep_idt> complete;
+  for(const auto &monitor : system.complete_monitors)
+  {
+    std::vector<const exprt *> conjuncts{&tr.init()};
+    while(!conjuncts.empty())
+    {
+      const auto &c = *conjuncts.back();
+      conjuncts.pop_back();
+      if(c == monitor.initial)
+      {
+        complete.emplace(monitor.transition, monitor.state);
+        break;
+      }
+      if(c.id() == ID_and)
+        for(const auto &op : c.operands())
+          conjuncts.push_back(&op);
+    }
+  }
+  std::set<irep_idt> assigned;
+  const auto all_conjuncts =
+    [&](const exprt &root, const auto &check, bool transition = false)
+  {
     std::vector<const exprt *> pending{&root};
     while(!pending.empty())
     {
       auto &expr = *pending.back();
       pending.pop_back();
-      if(expr.id() == ID_and)
+      if(transition && complete.count(expr))
+      {
+        if(!assigned.insert(complete.at(expr)).second)
+          return false;
+      }
+      else if(expr.id() == ID_and)
         for(const auto &op : expr.operands())
           pending.push_back(&op);
       else if(!expr.is_true() && !check(expr))
@@ -49,61 +117,90 @@ bool total_transition(const transition_systemt &system)
     }
     return true;
   };
-  const auto total_value = [](const exprt &rhs) {
+  const auto total_value = [](const exprt &rhs)
+  {
     bool total = true;
-    rhs.visit_pre([&](const exprt &e) {
-      const auto t=e.type().id(), id=e.id();
-      if(t != ID_bool && t != ID_signedbv && t != ID_unsignedbv)
-        total = false;
-      else if(id != ID_constant && id != ID_symbol && id != ID_nondet_symbol &&
-              id != ID_not && id != ID_and && id != ID_or && id != ID_xor &&
-              id != ID_implies && id != ID_equal && id != ID_notequal &&
-              id != ID_bitnot && id != ID_bitand && id != ID_bitor && id != ID_bitxor &&
-              id != ID_plus && id != ID_minus && id != ID_mult && id != ID_unary_minus &&
-              id != ID_typecast && id != ID_if && id != ID_lt && id != ID_le &&
-              id != ID_gt && id != ID_ge && id != ID_concatenation)
-        total = false;
-    });
+    rhs.visit_pre(
+      [&](const exprt &e)
+      {
+        const auto t = e.type().id(), id = e.id();
+        if(t != ID_bool && t != ID_signedbv && t != ID_unsignedbv)
+          total = false;
+        else if(
+          id != ID_constant && id != ID_symbol && id != ID_nondet_symbol &&
+          id != ID_not && id != ID_and && id != ID_or && id != ID_xor &&
+          id != ID_implies && id != ID_equal && id != ID_notequal &&
+          id != ID_bitnot && id != ID_bitand && id != ID_bitor &&
+          id != ID_bitxor && id != ID_plus && id != ID_minus && id != ID_mult &&
+          id != ID_unary_minus && id != ID_extractbits && id != ID_extractbit &&
+          id != ID_shl && id != ID_lshr && id != ID_ashr &&
+          id != ID_replication &&
+          !(id == ID_div && e.operands().size() == 2 &&
+            to_binary_expr(e).rhs().is_constant() &&
+            !to_binary_expr(e).rhs().is_zero()) &&
+          id != ID_typecast && id != ID_if && id != ID_lt && id != ID_le &&
+          id != ID_gt && id != ID_ge && id != ID_concatenation)
+          total = false;
+      });
     return total;
   };
   std::map<irep_idt, const exprt *> wires;
-  if(!all_conjuncts(tr.invar(), [&](const exprt &clause) {
-    if(clause.id()!=ID_equal)
-      return false;
-    const auto &eq=to_equal_expr(clause);
-    if(eq.lhs().id()!=ID_symbol || eq.lhs().type()!=eq.rhs().type() || !total_value(eq.rhs()))
-      return false;
-    auto id=eq.lhs().get(ID_identifier);
-    auto sym=system.symbol_table.lookup(id);
-    return sym && !sym->is_input && !sym->is_state_var && wires.emplace(id,&eq.rhs()).second;
-  }))
+  if(!all_conjuncts(
+       tr.invar(),
+       [&](const exprt &clause)
+       {
+         if(clause.id() != ID_equal)
+           return false;
+         const auto &eq = to_equal_expr(clause);
+         if(
+           eq.lhs().id() != ID_symbol || eq.lhs().type() != eq.rhs().type() ||
+           !total_value(eq.rhs()))
+           return false;
+         auto id = eq.lhs().get(ID_identifier);
+         auto sym = system.symbol_table.lookup(id);
+         return sym && !sym->is_state_var &&
+                wires.emplace(id, &eq.rhs()).second;
+       }))
     return false;
   // Acyclic wire definitions give a valuation for every current state/input.
   std::set<irep_idt> active, done;
-  std::function<bool(irep_idt)> acyclic = [&](irep_idt id) {
-    if(done.count(id)) return true;
-    if(!active.insert(id).second) return false;
-    bool ok=true;
-    wires.at(id)->visit_pre([&](const exprt &e) {
-      if(ok && e.id()==ID_symbol && wires.count(e.get(ID_identifier)))
-        ok=acyclic(e.get(ID_identifier));
-    });
+  std::function<bool(irep_idt)> acyclic = [&](irep_idt id)
+  {
+    if(done.count(id))
+      return true;
+    if(!active.insert(id).second)
+      return false;
+    bool ok = true;
+    wires.at(id)->visit_pre(
+      [&](const exprt &e)
+      {
+        if(ok && e.id() == ID_symbol && wires.count(e.get(ID_identifier)))
+          ok = acyclic(e.get(ID_identifier));
+      });
     active.erase(id);
     done.insert(id);
     return ok;
   };
   for(const auto &wire : wires)
-    if(!acyclic(wire.first)) return false;
-  std::set<irep_idt> assigned;
-  return all_conjuncts(tr.trans(), [&](const exprt &clause) {
-    if(clause.id()!=ID_equal) return false;
-    const auto &eq=to_equal_expr(clause);
-    if(eq.lhs().id()!=ID_next_symbol || eq.lhs().type()!=eq.rhs().type() || !total_value(eq.rhs()))
+    if(!acyclic(wire.first))
       return false;
-    auto id=eq.lhs().get(ID_identifier);
-    auto sym=system.symbol_table.lookup(id);
-    return sym && sym->is_state_var && assigned.insert(id).second;
-  });
+  return all_conjuncts(
+    tr.trans(),
+    [&](const exprt &clause)
+    {
+      if(clause.id() != ID_equal)
+        return false;
+      const auto &eq = to_equal_expr(clause);
+      if(eq.lhs().id() != ID_next_symbol || eq.lhs().type() != eq.rhs().type())
+        return false;
+      auto id = eq.lhs().get(ID_identifier);
+      auto sym = system.symbol_table.lookup(id);
+      const bool stutter =
+        eq.rhs().id() == ID_symbol && eq.rhs().get(ID_identifier) == id;
+      return sym && sym->is_state_var && assigned.insert(id).second &&
+             (stutter || total_value(eq.rhs()));
+    },
+    true);
 }
 
 // Match values on both sides of the repeated frame. This includes the
@@ -198,11 +295,18 @@ void certify(
   {
     if(*bmc_bound > end || !bmc_supports_property(property.normalized_expr))
     {
-      message.status() << property.name << ": original BMC horizon or property cannot be certified" << messaget::eom;
+      message.status()
+        << property.name
+        << ": original BMC horizon or property cannot be certified"
+        << messaget::eom;
       property.inconclusive();
       return;
     }
-    obligations = ::property(property.normalized_expr, !property.is_exists_path(), messages, *bmc_bound+1);
+    obligations = ::property(
+      property.normalized_expr,
+      !property.is_exists_path(),
+      messages,
+      *bmc_bound + 1);
     native_loop = uses_lasso_symbol(obligations);
     if(native_loop)
       end = *bmc_bound;
@@ -267,12 +371,12 @@ void certify(
   {
     for(std::size_t i = 1; i < end; ++i)
       for(std::size_t k = 0; k < i; ++k)
-        solver.set_to_false(lasso_symbol(k,i));
+        solver.set_to_false(lasso_symbol(k, i));
     exprt preceding = false_exprt();
     for(const auto &loop : loops)
     {
-      solver.set_to_false(and_exprt{preceding,loop});
-      preceding = solver.handle(or_exprt{preceding,loop});
+      solver.set_to_false(and_exprt{preceding, loop});
+      preceding = solver.handle(or_exprt{preceding, loop});
     }
   }
   solver.set_to_true(disjunction(loops));
@@ -300,7 +404,8 @@ void certify(
       if(bad && (bmc_bound ? *bad <= *bmc_bound : *bad < end))
       {
         trace.loop_start = start;
-        property.witness_certificate = property_checker_resultt::propertyt::witness_certificatet::LASSO;
+        property.witness_certificate =
+          property_checker_resultt::propertyt::witness_certificatet::LASSO;
         property.witness_trace = std::move(trace);
         message.status() << property.name << ": witness loop " << start
                          << " -> " << end << " (equal endpoints), bad frame "
@@ -314,8 +419,8 @@ void certify(
 }
 } // namespace
 
-std::optional<std::size_t> witness_lasso_budget(
-  const cmdlinet &cmdline, std::optional<std::size_t> depth)
+std::optional<std::size_t>
+witness_lasso_budget(const cmdlinet &cmdline, std::optional<std::size_t> depth)
 {
   if(cmdline.isset("finite-prefix"))
   {
@@ -327,18 +432,20 @@ std::optional<std::size_t> witness_lasso_budget(
     throw ebmc_errort{} << "BMC frame count overflows";
   if(cmdline.isset("witness-lasso"))
   {
-    const auto &arg=cmdline.get_value("witness-lasso");
+    const auto &arg = cmdline.get_value("witness-lasso");
     std::size_t n;
-    const auto p=std::from_chars(arg.data(),arg.data()+arg.size(),n);
-    if(p.ec!=std::errc{} || p.ptr!=arg.data()+arg.size() || !n ||
-       n==std::numeric_limits<std::size_t>::max())
-      throw ebmc_errort{} << "--witness-lasso requires a positive transition bound";
+    const auto p = std::from_chars(arg.data(), arg.data() + arg.size(), n);
+    if(
+      p.ec != std::errc{} || p.ptr != arg.data() + arg.size() || !n ||
+      n == std::numeric_limits<std::size_t>::max())
+      throw ebmc_errort{}
+        << "--witness-lasso requires a positive transition bound";
     return n;
   }
-  const auto base=depth.value_or(0);
-  if(base >= std::numeric_limits<std::size_t>::max()-48)
+  const auto base = depth.value_or(0);
+  if(base >= std::numeric_limits<std::size_t>::max() - 48)
     throw ebmc_errort{} << "default witness budget overflows";
-  return base+48;
+  return base + 48;
 }
 
 void certify_property_witnesses(
@@ -348,12 +455,17 @@ void certify_property_witnesses(
   std::optional<std::size_t> bmc_bound,
   message_handlert &messages)
 {
-  const auto budget=witness_lasso_budget(cmdline,bmc_bound);
-  if(!budget || result.status!=property_checker_resultt::statust::VERIFICATION_RESULT)
+  const auto budget = witness_lasso_budget(cmdline, bmc_bound);
+  if(
+    !budget ||
+    result.status != property_checker_resultt::statust::VERIFICATION_RESULT)
     return;
   using certificate = property_checker_resultt::propertyt::witness_certificatet;
-  const bool no_assumptions = std::none_of(result.properties.begin(),result.properties.end(),
-    [](const auto &p) { return !p.is_disabled() && (p.is_assumption() || p.is_assumed()); });
+  const bool no_assumptions = std::none_of(
+    result.properties.begin(),
+    result.properties.end(),
+    [](const auto &p)
+    { return !p.is_disabled() && (p.is_assumption() || p.is_assumed()); });
   const bool total = no_assumptions && total_transition(original_system);
   auto solver_options = cmdline;
   for(const auto option : {"outfile", "show-formula", "smt2"})
@@ -365,46 +477,67 @@ void certify_property_witnesses(
     p.witness_certificate = certificate::NONE;
     if(p.is_inconclusive() || p.is_unsupported() || p.is_failure())
       p.witness_trace.reset();
-    if(!p.is_assumption() && (p.is_exists_path() ? p.is_proved() : p.is_refuted()))
+    if(
+      !p.is_assumption() &&
+      (p.is_exists_path() ? p.is_proved() : p.is_refuted()))
     {
-      if(total && !bmc_bound && p.proof_via == "BDD CTL" && is_CTL(p.normalized_expr))
+      if(
+        no_assumptions && !bmc_bound && !cmdline.isset("witness-lasso") &&
+        !cmdline.isset("coi") &&
+        (p.proof_via == "BDD CTL, total relation" ||
+         (total && p.proof_via == "BDD CTL")))
       {
-        p.witness_certificate=certificate::TOTAL_BDD;
-        messaget{messages}.status() << p.name << ": exact BDD verdict on a total transition system" << messaget::eom;
+        p.witness_certificate = certificate::TOTAL_BDD;
+        messaget{messages}.status()
+          << p.name << ": exact BDD verdict on a total transition system"
+          << messaget::eom;
         continue;
       }
-      auto bad = p.witness_trace ? p.witness_trace->get_min_failing_timeframe() : std::optional<std::size_t>{};
-      if(total && !cmdline.isset("witness-lasso") &&
-         (invariant(p.normalized_expr) || !has_temporal_operator(p.normalized_expr)) &&
-         !has_subexpr(p.normalized_expr, ID_verilog_past))
+      auto bad = p.witness_trace ? p.witness_trace->get_min_failing_timeframe()
+                                 : std::optional<std::size_t>{};
+      if(
+        total && !cmdline.isset("witness-lasso") &&
+        (invariant(p.normalized_expr) ||
+         !has_temporal_operator(p.normalized_expr) ||
+         (bmc_bound &&
+          definitive_prefix(
+            property_nnf(p.normalized_expr), !p.is_exists_path()))))
       {
         // A COI witness is a projection. Establish a reachable full-model
         // bad prefix before relying on totality; do the same for traceless IC3.
         if(cmdline.isset("coi") || !bad)
         {
-          const auto depth = std::min(bad.value_or(bmc_bound.value_or(*budget)),
-                                      bmc_bound.value_or(*budget));
+          const auto depth =
+            bmc_bound.value_or(std::min(*budget, bad.value_or(*budget)));
           const namespacet ns{original_system.symbol_table};
-          auto backend=ebmc_solver_factory(solver_options)(ns,messages);
-          auto &solver=backend.decision_procedure();
-          unwind(original_system.trans_expr,messages,solver,depth+1,ns);
-          auto handles=::property(p.normalized_expr,!p.is_exists_path(),messages,depth+1);
-          for(auto &h:handles) h=solver.handle(h);
+          auto backend = ebmc_solver_factory(solver_options)(ns, messages);
+          auto &solver = backend.decision_procedure();
+          unwind(original_system.trans_expr, messages, solver, depth + 1, ns);
+          auto handles = ::property(
+            p.normalized_expr, !p.is_exists_path(), messages, depth + 1);
+          for(auto &h : handles)
+            h = solver.handle(h);
           solver.set_to_false(conjunction(handles));
-          auto verdict=solver();
-          if(verdict==decision_proceduret::resultt::D_ERROR)
+          auto verdict = solver();
+          if(verdict == decision_proceduret::resultt::D_ERROR)
           {
             p.witness_trace.reset();
             p.failure("solver error checking full-model prefix");
             continue;
           }
-          if(verdict==decision_proceduret::resultt::D_SATISFIABLE)
-            p.witness_trace=compute_trans_trace(handles,solver,depth+1,ns,original_system.main_symbol->name);
+          if(verdict == decision_proceduret::resultt::D_SATISFIABLE)
+            p.witness_trace = compute_trans_trace(
+              handles,
+              solver,
+              depth + 1,
+              ns,
+              original_system.main_symbol->name);
           else
             p.witness_trace.reset();
-          bad=p.witness_trace ? p.witness_trace->get_min_failing_timeframe() : std::optional<std::size_t>{};
+          bad = p.witness_trace ? p.witness_trace->get_min_failing_timeframe()
+                                : std::optional<std::size_t>{};
         }
-        if(!bad || (bmc_bound && *bad>*bmc_bound))
+        if(!bad || (bmc_bound && *bad > *bmc_bound))
         {
           p.witness_trace.reset();
           p.inconclusive();
@@ -412,9 +545,10 @@ void certify_property_witnesses(
         }
         p.witness_trace->loop_start.reset();
         p.witness_trace->total_extension = true;
-        p.witness_certificate=certificate::TOTAL_PREFIX;
-        messaget{messages}.status() << p.name << ": finite bad frame " << *bad
-                                    << " has an infinite extension by totality" << messaget::eom;
+        p.witness_certificate = certificate::TOTAL_PREFIX;
+        messaget{messages}.status()
+          << p.name << ": finite bad frame " << *bad
+          << " has an infinite extension by totality" << messaget::eom;
         continue;
       }
       need_witness = true;
@@ -426,13 +560,15 @@ void certify_property_witnesses(
   // The candidate engine has finished. Instrument the certification model
   // privately so linked callers can reuse their model and property batch.
   auto system = original_system;
-  system.main_symbol = &system.symbol_table.lookup_ref(original_system.main_symbol->name);
+  system.main_symbol =
+    &system.symbol_table.lookup_ref(original_system.main_symbol->name);
   ebmc_propertiest batch;
   batch.properties = result.properties;
   bool compiled = true;
   for(const auto &p : batch.properties)
-    if(!p.is_disabled() && p.is_assumption() && p.normalized_expr.is_true() &&
-       has_temporal_operator(to_unary_expr(p.original_expr).op()))
+    if(
+      !p.is_disabled() && p.is_assumption() && p.normalized_expr.is_true() &&
+      has_temporal_operator(to_unary_expr(p.original_expr).op()))
       compiled = false; // fairness erased by a liveness-to-safety transform
 
   try
@@ -474,13 +610,16 @@ void certify_property_witnesses(
       !(p.is_exists_path() ? p.is_proved() : p.is_refuted()))
       continue;
 
-    auto horizon=bmc_bound;
-    if(!horizon && !invariant(p.normalized_expr) && bmc_supports_property(p.normalized_expr))
+    auto horizon = bmc_bound;
+    if(
+      !horizon && !invariant(p.normalized_expr) &&
+      bmc_supports_property(p.normalized_expr))
     {
       // Checking an unbounded goal on an actual lasso is sound for the
       // path fragment accepted by native BMC. Branching CTL is excluded.
-      horizon=p.witness_trace && !p.witness_trace->states.empty()
-        ? std::min(*budget,p.witness_trace->states.size()-1) : *budget;
+      horizon = p.witness_trace && !p.witness_trace->states.empty()
+                  ? std::min(*budget, p.witness_trace->states.size() - 1)
+                  : *budget;
     }
     p.witness_trace.reset();
     if(!supported_assumptions || (!horizon && !invariant(p.normalized_expr)))

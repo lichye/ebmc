@@ -630,6 +630,11 @@ void bdd_enginet::check_CTL(propertyt &property)
     // Refutation by the exact CTL fixed point, without a linear trace.
     if(cmdline.isset("finite-prefix"))
       property.refuted();
+    else if(!cmdline.isset("coi") && !cmdline.isset("liveness-to-safety") &&
+            std::none_of(properties.properties.begin(), properties.properties.end(),
+              [](const auto &p){ return !p.is_disabled() && (p.is_assumption() || p.is_assumed()); }) &&
+            model_checker.is_total(mgr.True()))
+      property.refuted("BDD CTL, total relation");
     else
       property.refuted("BDD CTL");
     message.status() << "Property refuted" << messaget::eom;

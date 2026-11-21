@@ -1,0 +1,8 @@
+CORE
+history.sv
+--bound 4
+^\[history\.p\].*: REFUTED$
+^\[history\.hit\].*: PROVED$
+^EXIT=10$
+^SIGNAL=0$
+--

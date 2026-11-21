@@ -20,6 +20,7 @@ struct buechi_transt
   exprt error_signal;
   exprt liveness_signal;
   bool deterministic;
+  bool complete;
 
   buechi_transt(
     symbol_exprt __state_symbol,
@@ -27,13 +28,15 @@ struct buechi_transt
     exprt __trans,
     exprt __error_signal,
     exprt __liveness_signal,
-    bool __deterministic = false)
+    bool __deterministic = false,
+    bool __complete = false)
     : state_symbol(std::move(__state_symbol)),
       init(std::move(__init)),
       trans(std::move(__trans)),
       error_signal(std::move(__error_signal)),
       liveness_signal(std::move(__liveness_signal)),
-      deterministic(__deterministic)
+      deterministic(__deterministic),
+      complete(__complete)
   {
   }
 

@@ -1,0 +1,7 @@
+CORE
+tail1.sv
+--bound 0 --finite-prefix --witness-lasso 8
+^error: --finite-prefix conflicts with --witness-lasso$
+^EXIT=6$
+^SIGNAL=0$
+--

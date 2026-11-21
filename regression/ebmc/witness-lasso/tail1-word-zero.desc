@@ -1,0 +1,7 @@
+CORE
+tail1.sv
+--bound 0
+^\[tail\.p\].*: INCONCLUSIVE$
+^EXIT=10$
+^SIGNAL=0$
+--

@@ -43,6 +43,7 @@ public:
   // CTL operators
   mini_bddt EX(mini_bddt);
   mini_bddt EX_monolithic(mini_bddt);
+  bool is_total(mini_bddt universe) const;
   mini_bddt EF(mini_bddt);
   mini_bddt EG(mini_bddt);
   mini_bddt EU(mini_bddt, mini_bddt);

@@ -845,7 +845,12 @@ void show_trans_trace_vcd(
   else
   {
     out << "$scope module " << module_symbol.display_name() << " $end\n";
-    vcd_hierarchy_rec(ns, ids, id2string(module_symbol.name) + ".", out, 1);
+    // SMV's flattened symbols use "module::var::name". Use that namespace
+    // for certified traces so each value change has a declaration.
+    const bool smv_witness =
+      module_symbol.mode == "SMV" && (trace.loop_start || trace.total_extension);
+    const auto prefix = id2string(module_symbol.name) + (smv_witness ? "::var::" : ".");
+    vcd_hierarchy_rec(ns, ids, prefix, out, 1);
     out << "$upscope $end\n";
   }
 

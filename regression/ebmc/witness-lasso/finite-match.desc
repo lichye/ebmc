@@ -1,0 +1,13 @@
+CORE
+finite-match.sv
+--bound 2 --numbered-trace
+main.completed: finite bad frame 2 has an infinite extension by totality
+^\[main\.completed\].*: PROVED$
+^\[main\.pending\].*: REFUTED up to bound 2$
+main.missed: finite bad frame 2 has an infinite extension by totality
+^\[main\.missed\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+certifying witness loop
+--

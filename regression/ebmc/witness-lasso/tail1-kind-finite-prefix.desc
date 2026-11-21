@@ -1,6 +1,6 @@
 CORE buechi
 tail1.sv
---buechi --k-induction --bound 10 --property tail.p
+--buechi --k-induction --bound 10 --finite-prefix --property tail.p
 ^\[tail\.a1\].*: ASSUMED$
 ^\[tail\.a2\].*: ASSUMED$
 ^\[tail\.p\].*: REFUTED$

@@ -1,0 +1,7 @@
+CORE
+eventual.sv
+--bound 2
+^\[eventual\.wanted\].*: INCONCLUSIVE$
+^EXIT=10$
+^SIGNAL=0$
+--

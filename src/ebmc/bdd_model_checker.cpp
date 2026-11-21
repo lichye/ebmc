@@ -171,6 +171,22 @@ mini_bddt bdd_model_checkert::EX(mini_bddt f)
   return conjoin_and_quantify(conjuncts, quantified_vars);
 }
 
+// Every valid frame, including its specific input valuation, must have a
+// valid successor. EX projects the current inputs as well and would permit
+// a different input to rescue a terminal frame.
+bool bdd_model_checkert::is_total(mini_bddt universe) const
+{
+  for(const auto &constraint : transition_relation.constraint_conjuncts)
+    universe = universe & constraint;
+  auto conjuncts = transition_relation.transition_conjuncts;
+  conjuncts.push_back(current_to_next(universe));
+  std::unordered_set<unsigned> next;
+  for(const auto &v : transition_relation.variables)
+    next.insert(v.next.var());
+  const auto has_successor = conjoin_and_quantify(conjuncts, next);
+  return (universe & !has_successor).is_false();
+}
+
 mini_bddt bdd_model_checkert::EX_monolithic(mini_bddt f)
 {
   for(const auto &c : transition_relation.constraint_conjuncts)

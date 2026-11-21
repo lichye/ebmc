@@ -1,0 +1,7 @@
+CORE buechi
+tail1.sv
+--new-ic3 -D ALLOW_ALARM
+^\[tail\.p\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--

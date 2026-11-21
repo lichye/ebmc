@@ -1,0 +1,7 @@
+CORE
+eventual.sv
+--bound 2 -D ALLOW_SILENCE
+^\[eventual\.wanted\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--

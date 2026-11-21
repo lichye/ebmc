@@ -296,7 +296,8 @@ buechi_transt ltl_to_buechi(
       std::move(trans),
       std::move(error_signal),
       std::move(liveness_signal),
-      deterministic};
+      deterministic,
+      functional || hoa.has_property("complete")};
   }
   catch(ltl_sva_to_string_unsupportedt error)
   {

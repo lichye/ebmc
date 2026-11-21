@@ -1,0 +1,8 @@
+CORE
+future.sv
+--bound 4 --witness-lasso 2
+^\[future_match\.p\].*: INCONCLUSIVE$
+^\[future_match\.hit\].*: INCONCLUSIVE$
+^EXIT=10$
+^SIGNAL=0$
+--

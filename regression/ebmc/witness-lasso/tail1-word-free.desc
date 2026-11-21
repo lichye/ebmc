@@ -1,0 +1,7 @@
+CORE
+tail1.sv
+--bound 0 -D ALLOW_ALARM
+^\[tail\.p\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
