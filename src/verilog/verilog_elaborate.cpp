@@ -1618,23 +1618,47 @@ void verilog_typecheckt::elaborate_symbol_rec(irep_idt identifier)
     // mark as "elaborating" to detect cycles
     symbol.type.id(ID_elaborating);
 
-    bool is_let = let_symbols.find(symbol.name) != let_symbols.end();
+    const bool is_let = let_symbols.find(symbol.name) != let_symbols.end();
+    const auto &declared_type = to_type_with_subtype(symbol.type).subtype();
+    const auto signing = declared_type.id();
 
-    // Is the type derived from the value (e.g., parameters)?
-    if(
-      to_type_with_subtype(symbol.type).subtype().id() ==
-        ID_derive_from_value &&
-      symbol.value.is_nil())
+    // A signing keyword alone fixes the sign of a value parameter, but
+    // not its width (1800-2017 6.20.2).
+    const bool signing_only =
+      symbol.is_macro && !symbol.is_type && !is_let &&
+      (signing == ID_signed || signing == ID_unsigned) &&
+      to_type_with_subtype(declared_type).subtype().is_nil();
+    const bool infer_type =
+      declared_type.id() == ID_derive_from_value || signing_only;
+
+    if(infer_type && symbol.value.is_nil())
     {
       // A parameter without type and without value, e.g., of a class.
       // Its uses are errors.
       symbol.type = derive_from_value_typet{};
     }
-    else if(
-      to_type_with_subtype(symbol.type).subtype().id() == ID_derive_from_value)
+    else if(infer_type)
     {
       // First elaborate the value, possibly recursively.
       convert_expr(symbol.value);
+
+      if(signing_only)
+      {
+        const auto value_type = symbol.value.type().id();
+        const bool real_value = value_type == ID_verilog_real ||
+                                value_type == ID_verilog_shortreal ||
+                                value_type == ID_verilog_realtime;
+        // A real initializer is converted to a 32-bit integral value.
+        const auto width =
+          real_value ? 32
+                     : numeric_cast_v<std::size_t>(get_width(symbol.value));
+        typet type = signing == ID_signed
+                       ? typet{verilog_signedbv_typet{width}}
+                       : typet{verilog_unsignedbv_typet{width}};
+        if(real_value)
+          type = make_two_valued(std::move(type));
+        assignment_conversion(symbol.value, type);
+      }
 
       // A parameter without an explicit type takes the type of its final
       // value (1800-2017 6.20.2).
@@ -1651,8 +1675,7 @@ void verilog_typecheckt::elaborate_symbol_rec(irep_idt identifier)
     else
     {
       // No, elaborate the type.
-      auto elaborated_type =
-        elaborate_type(to_type_with_subtype(symbol.type).subtype());
+      auto elaborated_type = elaborate_type(declared_type);
 
       // Now elaborate the value, possibly recursively, if any.
       if(symbol.value.is_not_nil())

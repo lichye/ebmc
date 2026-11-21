@@ -1,0 +1,17 @@
+CORE
+signed_localparam1.sv
+--systemverilog --top top --bound 1
+^\[top\.p_bias\] .*: PROVED up to bound 1$
+^\[top\.p_frac\] .*: PROVED up to bound 1$
+^\[top\.p_elog\] .*: PROVED up to bound 1$
+^\[top\.p_untyped\] .*: PROVED up to bound 1$
+^\[top\.p_explicit\] .*: PROVED up to bound 1$
+^\[top\.p_scalar\] .*: PROVED up to bound 1$
+^\[top\.p_unknown\] .*: PROVED up to bound 1$
+^\[top\.p_shift\] .*: PROVED up to bound 1$
+^\[top\.p_real\] .*: PROVED up to bound 1$
+^\[top\.p_default\] .*: PROVED up to bound 1$
+^\[top\.p_override\] .*: PROVED up to bound 1$
+^\[top\.p_fail\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
