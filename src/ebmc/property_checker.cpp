@@ -12,6 +12,9 @@ Author: Daniel Kroening, dkr@amazon.com
 #include <util/string2int.h>
 
 #include <new-ic3/new_ic3_engine.h>
+#include <solvers/flattening/boolbv.h>
+#include <trans-word-level/instantiate_word_level.h>
+#include <trans-word-level/lasso.h>
 #include <solvers/sat/satcheck.h>
 #include <trans-netlist/trans_trace_netlist.h>
 #include <trans-netlist/unwind_netlist.h>
@@ -24,6 +27,7 @@ Author: Daniel Kroening, dkr@amazon.com
 #include "engine_heuristic.h"
 #include "ic3_engine.h"
 #include "instrument_past.h"
+#include "instrument_buechi.h"
 #include "k_induction.h"
 #include "netlist.h"
 #include "report_results.h"
@@ -132,8 +136,78 @@ property_checker_resultt word_level_bmc(
   }
 }
 
+// Translate finite Boolean/bit-vector obligations against the actual AIG
+// timeframe map. Do not let the bit-blaster invent independent inputs.
+static std::optional<bvt> bounded_netlist_obligations(
+  const ebmc_propertiest::propertyt &property,
+  const var_mapt &variables,
+  const bmc_mapt &frames,
+  std::size_t bound,
+  const namespacet &ns,
+  cnft &solver,
+  message_handlert &messages)
+{
+  if(!bmc_supports_property(property.normalized_expr))
+    return {};
+  auto obligations = ::property(
+    property.normalized_expr, !property.is_exists_path(), messages, bound + 1);
+  if(uses_lasso_symbol(obligations))
+    return {};
+
+  std::map<irep_idt, std::pair<const var_mapt::vart *, std::size_t>> bindings;
+  property.normalized_expr.visit_pre([&](const exprt &sub) {
+    if(sub.id() != ID_symbol)
+      return;
+    auto found = variables.map.find(sub.get(ID_identifier));
+    if(found != variables.map.end())
+      for(std::size_t t=0;t<=bound;++t)
+        bindings.emplace(timeframe_identifier(t,found->first),std::make_pair(&found->second,t));
+  });
+
+  boolbvt bv{ns, solver, messages};
+  std::set<irep_idt> bound_ids;
+  bool supported = true;
+  for(const auto &obligation : obligations)
+    obligation.visit_pre([&](const exprt &sub) {
+      const auto id = sub.id();
+      const auto type = sub.type().id();
+      if(id == ID_symbol)
+      {
+        auto binding = bindings.find(sub.get(ID_identifier));
+        if(binding == bindings.end() ||
+           (type != ID_bool && type != ID_unsignedbv && type != ID_signedbv))
+        {
+          supported = false;
+          return;
+        }
+        if(!bound_ids.insert(binding->first).second)
+          return;
+        const auto &[var, t] = binding->second;
+        const bvt bits = type == ID_bool ? bvt{bv.convert(sub)} : bv.convert_bv(sub);
+        if(bits.size() != var->bits.size())
+        {
+          supported = false;
+          return;
+        }
+        for(std::size_t i=0;i<bits.size();++i)
+          solver.set_equal(bits[i],frames.get(t,var->bits[i]));
+      }
+      else if(id != ID_constant && id != ID_and && id != ID_or && id != ID_not &&
+              id != ID_implies && id != ID_equal && id != ID_notequal && id != ID_if &&
+              id != ID_typecast && id != ID_lt && id != ID_le && id != ID_gt && id != ID_ge)
+        supported = false;
+    });
+  if(!supported)
+    return {};
+  bvt literals;
+  for(const auto &obligation : obligations)
+    literals.push_back(bv.convert(obligation));
+  return literals;
+}
+
 property_checker_resultt finish_bit_level_bmc(
   std::size_t bound,
+  bool cover_duality,
   const bmc_mapt &bmc_map,
   propt &solver,
   const transition_systemt &transition_system,
@@ -172,7 +246,10 @@ property_checker_resultt finish_bit_level_bmc(
     {
     case propt::resultt::P_SATISFIABLE:
     {
-      property.refuted();
+      if(cover_duality && property.is_exists_path())
+        property.proved();
+      else
+        property.refuted();
       message.result() << "SAT: counterexample found" << messaget::eom;
 
       namespacet ns{transition_system.symbol_table};
@@ -185,7 +262,10 @@ property_checker_resultt finish_bit_level_bmc(
     case propt::resultt::P_UNSATISFIABLE:
       message.result() << "UNSAT: No counterexample found within bound"
                        << messaget::eom;
-      property.proved_with_bound(bound);
+      if(cover_duality && property.is_exists_path())
+        property.refuted_with_bound(bound);
+      else
+        property.proved_with_bound(bound);
       break;
 
     case propt::resultt::P_ERROR:
@@ -266,6 +346,22 @@ property_checker_resultt bit_level_bmc(
 
       if(!netlist_bmc_supports_property(property.normalized_expr))
       {
+        if(!convert_only && !cmdline.isset("finite-prefix"))
+        {
+          const namespacet ns{transition_system.symbol_table};
+          auto literals = bounded_netlist_obligations(
+            property, netlist.var_map, bmc_map, bound, ns, solver, message_handler);
+          if(literals)
+          {
+            property.timeframe_literals = std::move(*literals);
+            for(auto l : property.timeframe_literals)
+              if(property.is_assumed())
+                solver.l_set_to_true(l);
+              else
+                solver.set_frozen(l);
+            continue;
+          }
+        }
         if(property.is_assumed())
         {
           // An assumption that cannot be added to the netlist must not be
@@ -311,7 +407,7 @@ property_checker_resultt bit_level_bmc(
     else
     {
       auto result = finish_bit_level_bmc(
-        bound, bmc_map, solver, transition_system, properties, message_handler);
+        bound, !cmdline.isset("finite-prefix"), bmc_map, solver, transition_system, properties, message_handler);
 
       // Any refuted property is really inconclusive if there are unsupported
       // assumptions, as the assumption might have proven the property.
@@ -320,7 +416,8 @@ property_checker_resultt bit_level_bmc(
         result.status == property_checker_resultt::statust::VERIFICATION_RESULT)
       {
         for(auto &property : result.properties)
-          if(property.is_refuted())
+          if(property.is_refuted() || (!cmdline.isset("finite-prefix") &&
+              property.is_exists_path() && property.is_proved()))
             property.inconclusive();
       }
 
@@ -409,16 +506,30 @@ property_checker_resultt property_checker(
   ebmc_propertiest &properties,
   message_handlert &message_handler)
 {
-  std::optional<std::size_t> witness_bound;
+  const bool strict = !cmdline.isset("finite-prefix");
+  const bool converting = cmdline.isset("dimacs") || cmdline.isset("smt2") ||
+                          cmdline.isset("outfile") || cmdline.isset("show-formula") ||
+                          cmdline.isset("show-bdds");
+  const bool unbounded_engine = cmdline.isset("bdd") || cmdline.isset("ic3") ||
+                                cmdline.isset("new-ic3") || cmdline.isset("k-induction");
+  std::optional<std::size_t> bmc_bound;
+  std::size_t witness_bound = 48;
+  if(strict && !converting && (cmdline.isset("aig") ||
+       (cmdline.isset("bound") && !unbounded_engine)))
+  {
+    const std::string arg = cmdline.value_opt("bound").value_or("1");
+    unsigned depth;
+    const auto parsed = std::from_chars(arg.data(), arg.data()+arg.size(), depth);
+    if(parsed.ec != std::errc{} || parsed.ptr != arg.data()+arg.size() ||
+       std::size_t(depth) >= std::numeric_limits<std::size_t>::max()-48)
+      throw ebmc_errort{} << "invalid BMC bound";
+    bmc_bound = depth;
+    witness_bound += depth;
+  }
   if(cmdline.isset("witness-lasso"))
   {
-    if(
-      (!cmdline.isset("k-induction") && !cmdline.isset("new-ic3")) ||
-      cmdline.isset("bdd") || cmdline.isset("show-bdds") ||
-      cmdline.isset("aig") || cmdline.isset("dimacs") || cmdline.isset("ic3") ||
-      cmdline.isset("liveness-to-safety"))
-      throw ebmc_errort{} << "--witness-lasso requires k-induction or new IC3 "
-                             "on a safety monitor";
+    if(!strict)
+      throw ebmc_errort{} << "--finite-prefix conflicts with --witness-lasso";
 
     const auto &arg = cmdline.get_value("witness-lasso");
     std::size_t bound;
@@ -435,6 +546,20 @@ property_checker_resultt property_checker(
     !cmdline.isset("bdd") && !cmdline.isset("aig") &&
     !cmdline.isset("k-induction") && !cmdline.isset("ic3") &&
     !cmdline.isset("new-ic3") && !cmdline.isset("bound");
+
+  if(strict && !converting && !bmc_bound &&
+     (use_heuristic_engine || cmdline.isset("new-ic3") || cmdline.isset("k-induction")))
+  {
+    try
+    {
+      instrument_buechi(transition_system, properties, true, message_handler, true);
+    }
+    catch(const ebmc_errort &error)
+    {
+      // Let the native engine diagnose any remaining unsupported assumptions.
+      messaget{message_handler}.warning() << error.what() << messaget::eom;
+    }
+  }
 
   if(cmdline.isset("k-induction") || use_heuristic_engine)
   {
@@ -495,9 +620,9 @@ property_checker_resultt property_checker(
   if(result.status == property_checker_resultt::statust::VERIFICATION_RESULT)
   {
     const namespacet ns{transition_system.symbol_table};
-    if(witness_bound)
+    if(strict && !converting)
       certify_witnesses(
-        cmdline, transition_system, result, *witness_bound, message_handler);
+        cmdline, transition_system, result, witness_bound, bmc_bound, message_handler);
     report_results(cmdline, use_heuristic_engine, result, ns, message_handler);
   }
 

@@ -123,12 +123,13 @@ void instrument_buechi(
   transition_systemt &transition_system,
   ebmc_propertiest &properties,
   bool functional_assertions,
-  message_handlert &message_handler)
+  message_handlert &message_handler,
+  bool assumptions_only)
 {
   for(auto &property : properties.properties)
   {
     const bool assumed = property.is_assumed();
-    if(!property.is_unknown() && !assumed)
+    if(!assumed && (assumptions_only || !property.is_unknown()))
       continue;
 
     auto formula = property.normalized_expr;

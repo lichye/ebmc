@@ -169,8 +169,18 @@ property_checker_resultt ic3_enginet::operator()()
       {
         switch(result)
         {
-        case 1: property.refuted(); break;
-        case 2: property.proved(); break;
+        case 1:
+          if(!cmdline.isset("finite-prefix") && property.is_exists_path())
+            property.proved();
+          else
+            property.refuted();
+          break;
+        case 2:
+          if(!cmdline.isset("finite-prefix") && property.is_exists_path())
+            property.refuted();
+          else
+            property.proved();
+          break;
         default: property.failure(); break;
         }
         break;

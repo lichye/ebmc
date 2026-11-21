@@ -9,6 +9,7 @@ void certify_witnesses(
   const transition_systemt &,
   property_checker_resultt &,
   std::size_t max_transitions,
+  std::optional<std::size_t> bmc_bound,
   message_handlert &);
 
 #endif

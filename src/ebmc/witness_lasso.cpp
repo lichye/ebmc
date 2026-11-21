@@ -4,10 +4,15 @@
 #include <util/expr_util.h>
 
 #include <trans-word-level/instantiate_word_level.h>
+#include <trans-word-level/lasso.h>
+#include <trans-word-level/property.h>
 #include <trans-word-level/trans_trace_word_level.h>
 #include <trans-word-level/unwind.h>
 
 #include "ebmc_solver_factory.h"
+#include "ebmc_error.h"
+#include "instrument_buechi.h"
+#include "instrument_past.h"
 
 #include <set>
 
@@ -90,9 +95,11 @@ void split_state_muxes(exprt &trans)
 void certify(
   const transition_systemt &system,
   const transt &trans,
+  const namespacet &trace_ns,
   const exprt::operandst &assumptions,
   property_checker_resultt::propertyt &property,
   std::size_t end,
+  std::optional<std::size_t> bmc_bound,
   const ebmc_solver_factoryt &factory,
   message_handlert &messages)
 {
@@ -102,6 +109,23 @@ void certify(
   const namespacet ns{system.symbol_table};
   auto backend = factory(ns, messages);
   auto &solver = backend.decision_procedure();
+  // Use the original finite obligation and its polarity. In particular its
+  // pending matches must never be re-evaluated at the extension horizon.
+  exprt::operandst obligations;
+  bool native_loop = false;
+  if(bmc_bound)
+  {
+    if(*bmc_bound > end || !bmc_supports_property(property.normalized_expr))
+    {
+      message.status() << property.name << ": original BMC horizon or property cannot be certified" << messaget::eom;
+      property.inconclusive();
+      return;
+    }
+    obligations = ::property(property.normalized_expr, !property.is_exists_path(), messages, *bmc_bound+1);
+    native_loop = uses_lasso_symbol(obligations);
+    if(native_loop)
+      end = *bmc_bound;
+  }
   const auto frames = end + 1;
   unwind(trans, messages, solver, frames, ns);
 
@@ -120,13 +144,21 @@ void certify(
 
   // Search afresh for the same violation. The primary engine may have put
   // the bad frame at the very end of its prefix.
-  const auto &predicate = to_unary_expr(property.normalized_expr).op();
-  collect_boundary(predicate, boundary);
+  collect_boundary(property.normalized_expr, boundary);
   exprt::operandst predicates;
-  for(std::size_t t = 0; t < end; ++t)
-    predicates.push_back(solver.handle(instantiate(predicate, t, frames)));
+  if(bmc_bound)
+  {
+    for(const auto &obligation : obligations)
+      predicates.push_back(solver.handle(obligation));
+  }
+  else
+  {
+    const auto &predicate = to_unary_expr(property.normalized_expr).op();
+    for(std::size_t t = 0; t < end; ++t)
+      predicates.push_back(solver.handle(instantiate(predicate, t, frames)));
+  }
   solver.set_to_false(conjunction(predicates));
-  predicates.push_back(solver.handle(instantiate(predicate, end, frames)));
+  predicates.resize(frames, true_exprt());
 
   // A shorter lasso can be unrolled around its loop to end at this frame.
   // Only one loop selector per earlier frame is needed.
@@ -138,7 +170,29 @@ void certify(
       equalities.emplace_back(equal_exprt{
         instantiate(variable, start, frames),
         instantiate(variable, end, frames)});
-    loops.push_back(solver.handle(conjunction(equalities)));
+    auto equal = conjunction(equalities);
+    if(native_loop)
+    {
+      // Select exactly one native lasso and certify that very same back
+      // edge, including all history and assumption monitor state.
+      auto selected = lasso_symbol(start, end);
+      solver.set_to_true(implies_exprt{selected, equal});
+      loops.push_back(solver.handle(selected));
+    }
+    else
+      loops.push_back(solver.handle(equal));
+  }
+  if(native_loop)
+  {
+    for(std::size_t i = 1; i < end; ++i)
+      for(std::size_t k = 0; k < i; ++k)
+        solver.set_to_false(lasso_symbol(k,i));
+    exprt preceding = false_exprt();
+    for(const auto &loop : loops)
+    {
+      solver.set_to_false(and_exprt{preceding,loop});
+      preceding = solver.handle(or_exprt{preceding,loop});
+    }
   }
   solver.set_to_true(disjunction(loops));
 
@@ -160,9 +214,9 @@ void certify(
     if(solver.get(loops[start]).is_true())
     {
       auto trace = compute_trans_trace(
-        predicates, solver, frames, ns, system.main_symbol->name);
+        predicates, solver, frames, trace_ns, system.main_symbol->name);
       auto bad = trace.get_min_failing_timeframe();
-      if(bad && *bad < end)
+      if(bad && (bmc_bound ? *bad <= *bmc_bound : *bad < end))
       {
         trace.loop_start = start;
         property.witness_trace = std::move(trace);
@@ -180,14 +234,43 @@ void certify(
 
 void certify_witnesses(
   const cmdlinet &cmdline,
-  const transition_systemt &system,
+  const transition_systemt &original_system,
   property_checker_resultt &result,
   std::size_t max_transitions,
+  std::optional<std::size_t> bmc_bound,
   message_handlert &messages)
 {
+  bool need_witness = false;
+  for(auto &p : result.properties)
+  {
+    if(p.is_inconclusive() || p.is_unsupported() || p.is_failure())
+      p.witness_trace.reset();
+    if(!p.is_assumption() && (p.is_exists_path() ? p.is_proved() : p.is_refuted()))
+      need_witness = true;
+  }
+  if(!need_witness)
+    return;
+
+  // The candidate engine has finished. Instrument the certification model
+  // privately so linked callers can reuse their model and property batch.
+  auto system = original_system;
+  system.main_symbol = &system.symbol_table.lookup_ref(original_system.main_symbol->name);
+  ebmc_propertiest batch;
+  batch.properties = result.properties;
+  bool compiled = true;
+  try
+  {
+    instrument_past(system, batch);
+    instrument_buechi(system, batch, true, messages, true);
+  }
+  catch(const ebmc_errort &error)
+  {
+    messaget{messages}.warning() << error.what() << messaget::eom;
+    compiled = false;
+  }
   exprt::operandst assumptions;
-  bool supported_assumptions = true;
-  for(const auto &p : result.properties)
+  bool supported_assumptions = compiled;
+  for(const auto &p : batch.properties)
     if(!p.is_disabled() && (p.is_assumption() || p.is_assumed()))
     {
       if(p.is_assumed() && invariant(p.normalized_expr))
@@ -201,7 +284,7 @@ void certify_witnesses(
   if(cmdline.isset("cvc5"))
     split_state_muxes(trans.trans());
 
-  for(auto &p : result.properties)
+  for(auto &p : batch.properties)
   {
     // An engine can mark an earlier finite refutation inconclusive after
     // encountering an unsupported assumption. Do not export that prefix.
@@ -213,7 +296,7 @@ void certify_witnesses(
       continue;
 
     p.witness_trace.reset();
-    if(!supported_assumptions || !invariant(p.normalized_expr))
+    if(!supported_assumptions || (!bmc_bound && !invariant(p.normalized_expr)))
     {
       messaget{messages}.status()
         << p.name << ": witness loop requires invariant monitor predicates"
@@ -225,10 +308,15 @@ void certify_witnesses(
     certify(
       system,
       trans,
+      namespacet{original_system.symbol_table},
       assumptions,
       p,
       max_transitions,
+      bmc_bound,
       ebmc_solver_factory(cmdline),
       messages);
   }
+  auto source = batch.properties.begin();
+  for(auto &p : result.properties)
+    p.copy_results_from(*source++);
 }

@@ -21,6 +21,7 @@ void instrument_buechi(
   transition_systemt &,
   ebmc_propertiest &,
   bool functional_assertions,
-  message_handlert &);
+  message_handlert &,
+  bool assumptions_only = false);
 
 #endif // EBMC_BUECHI_AUTOMATON_INSTRUMENTATION_H

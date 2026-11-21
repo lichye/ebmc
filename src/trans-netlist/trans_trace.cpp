@@ -809,6 +809,14 @@ void show_trans_trace_vcd(
 
   const trans_tracet::statet &state=trace.states[0];
 
+  if(state.assignments.empty() && trace.loop_start)
+  {
+    out << "$scope module ebmc $end\n$var wire 1 ! property_failed $end\n"
+           "$upscope $end\n$enddefinitions $end\n";
+    for(std::size_t t = 0; t < trace.states.size(); ++t)
+      out << '#' << t << '\n' << trace.states[t].property_failed << "!\n";
+    return;
+  }
   assert(!state.assignments.empty());
 
   // get identifiers
