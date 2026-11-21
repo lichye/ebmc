@@ -88,6 +88,8 @@ public:
   exprt assertion(const AssertionExpr &a, SourceLocation at);
   std::string clock(const TimingControl *ev, SourceLocation at);
   void module(const InstanceSymbol &inst, bool top);
+  using port_mapt = std::map<const Symbol *, const PortSymbol *>;
+  void members(const Scope &body, const port_mapt &ports, exprt &items);
   void property(
     const ConcurrentAssertionStatement &s,
     const Symbol &label,

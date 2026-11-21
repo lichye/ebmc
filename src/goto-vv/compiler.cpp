@@ -246,18 +246,53 @@ void compilert::module(const InstanceSymbol &i, bool top)
         type(p.getType(), p.location),
         p.direction == ArgumentDirection::In ? ID_input : ID_output);
     }
+  members(i.body, ports, items);
+  symbolt mod(id, mt, ID_Verilog);
+  mod.module = id;
+  mod.base_name = std::string(i.getDefinition().name);
+  mod.pretty_name = i.getHierarchicalPath();
+  mod.value = std::move(items);
+  mod.location = loc(i.location);
+  scope = previous_scope;
+  if(object.symbols.add(mod))
+    fail(i.location, "duplicate module " + id);
+}
+void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
+{
   // Declare before translating initializers and statements. Expression references
   // use the bound slang symbol and its type, including forward references.
-  for(auto &s : i.body.members())
+  for(auto &s : body.members())
     if(
       s.kind == SymbolKind::Variable || s.kind == SymbolKind::Net ||
       s.kind == SymbolKind::Parameter)
       declare(
         s.as<ValueSymbol>(), ports.count(&s) ? ports.at(&s) : nullptr, items);
-  for(auto &s : i.body.members())
+  for(auto &s : body.members())
   {
     switch(s.kind)
     {
+    case SymbolKind::GenerateBlock:
+    {
+      auto &block = s.as<GenerateBlockSymbol>();
+      if(!block.isUninstantiated)
+      {
+        auto enclosing = scope;
+        scope = &block;
+        members(block, {}, items);
+        scope = enclosing;
+      }
+      break;
+    }
+    case SymbolKind::GenerateBlockArray:
+      for(auto *entry : s.as<GenerateBlockArraySymbol>().entries)
+      {
+        auto enclosing = scope;
+        scope = entry;
+        members(*entry, {}, items);
+        scope = enclosing;
+      }
+      break;
+    case SymbolKind::Genvar:
     case SymbolKind::Port:
     case SymbolKind::Variable:
     case SymbolKind::Parameter:
@@ -366,15 +401,6 @@ void compilert::module(const InstanceSymbol &i, bool top)
         "unsupported module member " + std::string(toString(s.kind)));
     }
   }
-  symbolt mod(id, mt, ID_Verilog);
-  mod.module = id;
-  mod.base_name = std::string(i.getDefinition().name);
-  mod.pretty_name = i.getHierarchicalPath();
-  mod.value = std::move(items);
-  mod.location = loc(i.location);
-  scope = previous_scope;
-  if(object.symbols.add(mod))
-    fail(i.location, "duplicate module " + id);
 }
 } // namespace vv
 
