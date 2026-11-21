@@ -259,6 +259,14 @@ void compilert::module(const InstanceSymbol &i, bool top)
 }
 void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
 {
+  const auto lower_generate_scope = [&](const GenerateBlockSymbol &block)
+  {
+    const auto *enclosing = scope;
+    scope = &block;
+    members(block, {}, items);
+    scope = enclosing;
+  };
+
   // Declare before translating initializers and statements. Expression references
   // use the bound slang symbol and its type, including forward references.
   for(auto &s : body.members())
@@ -275,22 +283,12 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
     {
       auto &block = s.as<GenerateBlockSymbol>();
       if(!block.isUninstantiated)
-      {
-        auto enclosing = scope;
-        scope = &block;
-        members(block, {}, items);
-        scope = enclosing;
-      }
+        lower_generate_scope(block);
       break;
     }
     case SymbolKind::GenerateBlockArray:
       for(auto *entry : s.as<GenerateBlockArraySymbol>().entries)
-      {
-        auto enclosing = scope;
-        scope = entry;
-        members(*entry, {}, items);
-        scope = enclosing;
-      }
+        lower_generate_scope(*entry);
       break;
     // A called constant function is evaluated in its elaborated instance.
     case SymbolKind::Subroutine:

@@ -47,7 +47,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat; do
+for top in temporal sampled_sequence wires generate_nested decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -57,6 +57,12 @@ for top in temporal sampled_sequence wires decoder_features immediate generate_s
     compare "$top.direct" "$top.typed" "$top.$name" "$expected"
   done < "$front/tests/$top.expected"
 done
+grep -Fq 'generate_nested.outer.lanes[0].even_lane.u' generate_nested.vv
+grep -Fq 'generate_nested.outer.lanes[1].odd_lane.u' generate_nested.vv
+if grep -Fq 'unused_lane' generate_nested.vv; then
+  echo 'Uninstantiated generate scope was emitted' >&2
+  exit 1
+fi
 for name in first_zero first_nonzero; do
   flags=(--bound 0 --undriven seq --property "sampled_sequence.$name" --trace)
   run "$name.direct" "$eb" "${flags[@]}" --top sampled_sequence "$front/tests/sampled_sequence.sv"
