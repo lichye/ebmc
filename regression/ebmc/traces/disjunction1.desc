@@ -1,6 +1,6 @@
 CORE
 disjunction1.smv
---bound 20 --numbered-trace
+--bound 20 --numbered-trace --finite-prefix
 ^\[spec1\] G \(X FALSE \| X X FALSE\): REFUTED$
 ^Counterexample with 3 states:$
 ^i@0 = 0$

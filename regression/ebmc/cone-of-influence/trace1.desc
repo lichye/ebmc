@@ -1,6 +1,6 @@
 CORE
 unrelated1.sv
---bound 4 --coi --property main.p1 --numbered-trace
+--bound 4 --coi --property main.p1 --numbered-trace --finite-prefix
 ^\[main\.p1\] always main\.c != 42: REFUTED$
 ^Counterexample with 4 states:$
 ^main\.a@1 = 42$

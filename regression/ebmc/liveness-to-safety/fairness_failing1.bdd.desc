@@ -1,6 +1,6 @@
 CORE
 fairness_failing1.sv
---bdd --liveness-to-safety
+--bdd --liveness-to-safety --finite-prefix
 ^EXIT=10$
 ^SIGNAL=0$
 ^\[main\.p0\] always s_eventually main\.x: REFUTED$

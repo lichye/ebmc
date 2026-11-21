@@ -1,6 +1,6 @@
 CORE
 time1.sv
---bound -
+--bound 0
 ^EXIT=0$
 ^SIGNAL=0$
 --

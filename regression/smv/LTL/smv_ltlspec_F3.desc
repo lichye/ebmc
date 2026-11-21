@@ -1,6 +1,6 @@
 CORE
 smv_ltlspec_F3.smv
---bound 10 --numbered-trace
+--bound 10 --numbered-trace --finite-prefix
 ^\[.*\] F x = 0: REFUTED$
 ^Counterexample with 4 states:$
 ^x@0 = 1$

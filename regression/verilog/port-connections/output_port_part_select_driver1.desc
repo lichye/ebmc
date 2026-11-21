@@ -1,6 +1,6 @@
 CORE
 output_port_part_select_driver1.sv
---bound 10
+--bound 10 --witness-lasso 256
 ^\[main\.p0\] always main\.counter != 5: REFUTED$
 ^\[main\.p1\] always main\.v != 5: REFUTED$
 ^EXIT=10$

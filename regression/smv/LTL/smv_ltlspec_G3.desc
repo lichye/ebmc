@@ -1,6 +1,6 @@
 CORE
 smv_ltlspec_G3.smv
---bound 10 --numbered-trace
+--bound 10 --numbered-trace --finite-prefix
 ^\[.*\] G X x != 3: REFUTED$
 ^Counterexample with 3 states:$
 ^x@0 = 1$

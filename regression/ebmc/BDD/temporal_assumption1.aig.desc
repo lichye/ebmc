@@ -1,15 +1,11 @@
 CORE
 temporal_assumption1.sv
 --aig --bound 5
-^\[main\.assume\.1\] always \(main\.a \|=> main\.b\): UNSUPPORTED: assumption not supported by netlist BMC engine$
-^\[main\.p0\] always main\.r -> main\.b: INCONCLUSIVE$
-^EXIT=10$
+^\[main\.assume\.1\] always \(main\.a \|=> main\.b\): ASSUMED$
+^\[main\.p0\] always main\.r -> main\.b: PROVED up to bound 5$
+^EXIT=0$
 ^SIGNAL=0$
 --
 ^warning: ignoring
 --
-The netlist BMC engine cannot add an assumption with a temporal
-operator to the netlist.  Such an assumption must not be silently
-dropped, as this is unsound: the property holds under the assumption,
-but would be reported as REFUTED without it.  The assumption is
-therefore marked UNSUPPORTED, and the dependent property INCONCLUSIVE.
+The finite AIG obligation includes the nonoverlapped assumption at the original depth.

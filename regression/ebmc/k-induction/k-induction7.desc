@@ -1,7 +1,7 @@
 CORE
 k-induction7.sv
 --k-induction
-^\[main\.a0\] always not s_eventually !main\.y: UNSUPPORTED: unsupported by k-induction$
+^\[main\.a0\] always not s_eventually !main\.y: ASSUMED$
 ^\[main\.a1\] always !main\.x: ASSUMED$
 ^\[main\.p0\] always !main\.z: PROVED$
 ^EXIT=0$

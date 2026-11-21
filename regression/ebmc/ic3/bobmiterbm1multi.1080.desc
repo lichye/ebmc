@@ -1,6 +1,6 @@
 CORE
 bobmiterbm1multi.sv
---ic3 --property bobmiterbm1multi.assert.1080
+--ic3 --property bobmiterbm1multi.assert.1080 --finite-prefix
 ^property FAILED
 ^cex verification is ok
 ^\[bobmiterbm1multi\.assert\.1080\] always !bobmiterbm1multi\.p1079: REFUTED$

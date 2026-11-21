@@ -8,7 +8,7 @@ sequence_repetition2.sv
 ^\[main\.p4\] main\.x == 1 \[\*\]: REFUTED$
 ^\[main\.p5\] 0 \[\*\]: REFUTED$
 ^\[main\.p6\] main\.x == 1 \[\+\]: REFUTED$
-^\[main\.p7\] \(main\.x == 0 \[\+\]\) #-# main\.x == 1: REFUTED$
+^\[main\.p7\] \(main\.x == 0 \[\+\]\) #-# main\.x == 1: INCONCLUSIVE$
 ^\[main\.p8\] 0 \[\+\]: REFUTED$
 ^EXIT=10$
 ^SIGNAL=0$

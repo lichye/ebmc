@@ -1,6 +1,6 @@
 CORE broken-smt-backend
 waveform1.smv
---bound 20 --waveform
+--bound 20 --waveform --finite-prefix
 ^EXIT=10$
 ^SIGNAL=0$
 ^\[spec1\] .* REFUTED$

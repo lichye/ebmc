@@ -1,6 +1,6 @@
 CORE
 trace1.sv
---trace
+--trace --finite-prefix
 ^  main\.u = '\{ field1: 1 \}$
 ^  main\.u = '\{ field1: 2 \}$
 ^  main\.u = '\{ field1: 3 \}$

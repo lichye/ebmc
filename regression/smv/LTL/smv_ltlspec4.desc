@@ -1,6 +1,6 @@
 CORE
 smv_ltlspec4.smv
---bound 10 --numbered-trace
+--bound 10 --numbered-trace --finite-prefix
 ^EXIT=10$
 ^SIGNAL=0$
 ^\[p1\] F x = 0: REFUTED$
