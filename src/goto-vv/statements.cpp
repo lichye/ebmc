@@ -16,8 +16,72 @@ exprt compilert::stmt(const Statement &s)
   case StatementKind::List:
   {
     r = item(ID_block);
-    for(auto *part : s.as<StatementList>().list)
-      r.operands().push_back(stmt(*part));
+    auto list = s.as<StatementList>().list;
+    for(size_t n = 0; n < list.size(); n++)
+    {
+      if(list[n]->kind != StatementKind::VariableDeclaration)
+      {
+        r.operands().push_back(stmt(*list[n]));
+        continue;
+      }
+      auto &v = list[n]->as<VariableDeclStatement>().symbol;
+      if(n + 1 >= list.size() || list[n + 1]->kind != StatementKind::ForLoop)
+        fail(v.location, "unsupported procedural local outside a counted loop");
+      auto &loop = list[++n]->as<ForLoopStatement>();
+      auto init = v.getInitializer();
+      if(
+        !init || !loop.stopExpr || !loop.initializers.empty() ||
+        loop.steps.size() != 1 ||
+        loop.steps[0]->kind != ExpressionKind::UnaryOp)
+        fail(at, "requires a statically bounded counted loop");
+      auto &step = loop.steps[0]->as<UnaryExpression>();
+      if(
+        step.op != UnaryOperator::Postincrement ||
+        step.operand().getSymbolReference() != &v)
+        fail(at, "expected an increment of the loop-local index");
+      EvalContext context(v);
+      auto first = init->eval(context);
+      if(!first.isInteger())
+        fail(v.location, "nonconstant loop initializer");
+      context.createLocal(&v, first);
+      for(unsigned count = 0;; count++)
+      {
+        auto condition = loop.stopExpr->eval(context);
+        if(!condition.isInteger() || condition.integer().hasUnknown())
+          fail(at, "nonconstant loop guard");
+        if(!condition.isTrue())
+          break;
+        if(count >= 65536)
+          fail(at, "static loop exceeds the expansion limit");
+        locals[&v] =
+          literal(context.findLocal(&v)->integer(), type(v.getType()));
+        r.operands().push_back(stmt(loop.body));
+        auto updated = loop.steps[0]->eval(context);
+        if(!updated.isInteger())
+          fail(at, "cannot evaluate loop step");
+      }
+      locals.erase(&v);
+    }
+    break;
+  }
+  case StatementKind::Case:
+  {
+    const auto &c = s.as<CaseStatement>();
+    if(
+      c.condition != CaseStatementCondition::Normal ||
+      c.check != UniquePriorityCheck::None)
+      fail(at, "unsupported case matching mode");
+    r = item(ID_verilog_case, {expr(c.expr)});
+    for(auto &group : c.items)
+    {
+      auto labels = item(ID_empty_string);
+      for(auto *x : group.expressions)
+        labels.operands().push_back(expr(*x));
+      r.operands().push_back(item(ID_case_item, {labels, stmt(*group.stmt)}));
+    }
+    if(c.defaultCase)
+      r.operands().push_back(
+        item(ID_case_item, {item(ID_default), stmt(*c.defaultCase)}));
     break;
   }
   case StatementKind::Timed:
@@ -36,11 +100,9 @@ exprt compilert::stmt(const Statement &s)
     auto &c = s.as<ConditionalStatement>();
     if(c.conditions.size() != 1 || c.conditions[0].pattern)
       fail(at, "unsupported statement condition");
-    r = item(
-      ID_if,
-      {boolean(expr(*c.conditions[0].expr)),
-       stmt(c.ifTrue),
-       c.ifFalse ? stmt(*c.ifFalse) : nil_exprt()});
+    r = item(ID_if, {boolean(expr(*c.conditions[0].expr)), stmt(c.ifTrue)});
+    if(c.ifFalse)
+      r.operands().push_back(stmt(*c.ifFalse));
     break;
   }
   case StatementKind::ExpressionStatement:
@@ -49,6 +111,8 @@ exprt compilert::stmt(const Statement &s)
     if(e.kind != ExpressionKind::Assignment)
       fail(at, "expected assignment");
     auto &a = e.as<AssignmentExpression>();
+    if(locals.count(a.left().getSymbolReference()))
+      fail(at, "write to a statically expanded loop index");
     if(a.op)
       fail(at, "unsupported compound assignment");
     r = item(

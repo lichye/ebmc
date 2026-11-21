@@ -1,3 +1,4 @@
+#include <slang/ast/types/NetType.h>
 #include <slang/util/VersionInfo.h>
 
 #include "lower.h"
@@ -25,19 +26,78 @@ void compilert::fail(SourceLocation l, const std::string &why) const
     id2string(a.get_file()) + ":" + id2string(a.get_line()) + ":" +
     id2string(a.get_column()) + ": " + why);
 }
-typet compilert::type(const Type &t) const
+irept compilert::describe_type(const Type &t) const
+{
+  const Type &c = t.getCanonicalType();
+  irept desc(std::string(toString(c.kind)));
+  desc.set("four_state", t.isFourState());
+  if(!t.name.empty())
+    desc.set("original_name", t.getHierarchicalPath());
+  if(t.location)
+    desc.add(ID_C_source_location) = loc(t.location);
+  if(c.isIntegral())
+  {
+    desc.set("width", std::to_string(c.getBitWidth()));
+    desc.set("signed", c.isSigned());
+  }
+  if(c.hasFixedRange())
+  {
+    auto range = c.getFixedRange();
+    desc.set("left", std::to_string(range.left));
+    desc.set("right", std::to_string(range.right));
+  }
+  if(c.kind == SymbolKind::EnumType)
+  {
+    for(auto &v : c.as<EnumType>().values())
+    {
+      auto &member = desc.add("members").add(std::string(v.name));
+      member.id("enum_member");
+      member.add(ID_C_source_location) = loc(v.location);
+      member.add(ID_value) = literal(v.getValue().integer(), type(c));
+    }
+  }
+  else if(c.kind == SymbolKind::UnpackedStructType)
+  {
+    for(auto *field : c.as<UnpackedStructType>().fields)
+    {
+      irept member("field");
+      member.set(ID_name, std::string(field->name));
+      member.add(ID_type) = describe_type(field->getType());
+      member.add(ID_C_source_location) = loc(field->location);
+      desc.get_sub().push_back(std::move(member));
+    }
+  }
+  else if(c.kind == SymbolKind::FixedSizeUnpackedArrayType)
+    desc.add("element") =
+      describe_type(c.as<FixedSizeUnpackedArrayType>().elementType);
+  else if(c.kind == SymbolKind::PackedArrayType)
+    desc.add("element") = describe_type(c.as<PackedArrayType>().elementType);
+  return desc;
+}
+typet compilert::type(const Type &t, SourceLocation fallback) const
 {
   auto &c = t.getCanonicalType();
   if(c.kind == SymbolKind::FixedSizeUnpackedArrayType)
   {
     auto &a = c.as<FixedSizeUnpackedArrayType>();
-    if(a.range.lower() != 0 || a.range.left < a.range.right)
-      fail(c.location, "unsupported unpacked dimension");
-    return array_typet(
-      type(a.elementType), from_integer(a.range.width(), integer_typet()));
+    return verilog_array_typet(
+      ID_verilog_unpacked_array,
+      type(a.elementType),
+      a.range.width(),
+      a.range.lower(),
+      !a.range.isDescending());
+  }
+  if(c.kind == SymbolKind::UnpackedStructType)
+  {
+    struct_typet result;
+    for(auto *field : c.as<UnpackedStructType>().fields)
+      result.components().emplace_back(
+        std::string(field->name), type(field->getType()));
+    return result;
   }
   if(!c.isIntegral() || !c.getBitWidth())
-    fail(c.location, "unsupported type " + c.toString());
+    fail(
+      c.location ? c.location : fallback, "unsupported type " + c.toString());
   auto w = c.getBitWidth();
   if(w == 1 && !c.isSigned())
     return bool_typet();
@@ -78,10 +138,22 @@ symbolt &compilert::add(const Symbol &s, const typet &t)
 }
 void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
 {
-  auto t = type(s.getType());
+  if(s.kind == SymbolKind::Net)
+  {
+    const auto &net = s.as<NetSymbol>();
+    auto [drive0, drive1] = net.getDriveStrength();
+    if(net.getDelay() || drive0 || drive1)
+      fail(s.location, "unsupported delayed or strength-qualified net");
+    if(
+      net.netType.netKind != NetType::Wire &&
+      net.netType.netKind != NetType::UWire)
+      fail(s.location, "unsupported net kind " + std::string(net.netType.name));
+  }
+  auto t = type(s.getType(), s.location);
   auto &symbol = add(s, t);
   auto &info = object.metadata.add("signals").add(symbol.name);
   info.id("declaration");
+  info.add("source_type") = describe_type(s.getType());
   info.add(ID_C_source_location) = symbol.location;
   info.set("four_state", s.getType().isFourState());
   info.set("name", s.getHierarchicalPath());
@@ -147,6 +219,14 @@ void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
 }
 void compilert::module(const InstanceSymbol &i, bool top)
 {
+  auto previous_scope = scope;
+  scope = &i;
+  auto &occurrence = object.metadata.add("instances").add(name(i));
+  occurrence.id("instance");
+  occurrence.set("path", i.getHierarchicalPath());
+  occurrence.set("definition", std::string(i.getDefinition().name));
+  occurrence.add("definition_location") = loc(i.getDefinition().location);
+  occurrence.add(ID_C_source_location) = loc(i.location);
   auto id = top ? "Verilog::" + std::string(i.name) : name(i) + "$module";
   auto &inst = add(i, verilog_module_instance_typet());
   inst.value = verilog_module_instancet(id);
@@ -163,7 +243,7 @@ void compilert::module(const InstanceSymbol &i, bool top)
       mt.ports().emplace_back(
         name(*p.internalSymbol),
         std::string(p.name),
-        type(p.getType()),
+        type(p.getType(), p.location),
         p.direction == ArgumentDirection::In ? ID_input : ID_output);
     }
   // Declare before translating initializers and statements. Expression references
@@ -222,6 +302,9 @@ void compilert::module(const InstanceSymbol &i, bool top)
     {
       auto &ca = s.as<ContinuousAssignSymbol>();
       auto &a = ca.getAssignment().as<AssignmentExpression>();
+      const auto strengths = ca.getDriveStrength();
+      if(strengths.first || strengths.second)
+        fail(s.location, "unsupported driver strength");
       if(ca.getDelay())
         fail(s.location, "delayed continuous assign");
       auto assign = item(
@@ -277,6 +360,7 @@ void compilert::module(const InstanceSymbol &i, bool top)
   mod.pretty_name = i.getHierarchicalPath();
   mod.value = std::move(items);
   mod.location = loc(i.location);
+  scope = previous_scope;
   if(object.symbols.add(mod))
     fail(i.location, "duplicate module " + id);
 }
@@ -327,6 +411,10 @@ int compile_design(int argc, char **argv)
     auto &top = *tops.front();
     auto &meta = lower.object.metadata;
     meta.set("top", std::string(top.name));
+    meta.set("slang_version", VersionInfo::getVersionString());
+    auto &options = meta.add("compile_options");
+    for(int i = 2; i < argc; i++)
+      options.get_sub().emplace_back(argv[i]);
     meta.set("stage", "compiled");
     meta.set("undriven", "seq");
     meta.set("sampling", sampling);

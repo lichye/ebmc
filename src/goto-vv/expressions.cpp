@@ -18,7 +18,21 @@ exprt slice(exprt base, exprt hi, exprt lo, const typet &t)
 exprt compilert::expr(const Expression &e)
 {
   const auto at = e.sourceRange.start();
-  auto t = type(*e.type);
+  auto t = type(*e.type, at);
+  auto check_select = [&](const Expression &base)
+  {
+    const auto &c = base.type->getCanonicalType();
+    if(c.kind != SymbolKind::PackedArrayType)
+      return;
+    const auto &a = c.as<PackedArrayType>();
+    if(
+      !a.range.isDescending() || a.range.lower() != 0 ||
+      a.elementType.getBitWidth() != 1)
+      fail(
+        at,
+        "unsupported select of " + base.type->toString() +
+          " (expected [N:0] of scalar elements)");
+  };
   exprt r;
   switch(e.kind)
   {
@@ -38,7 +52,12 @@ exprt compilert::expr(const Expression &e)
       if(!v.isInteger())
         fail(at, "nonintegral named constant");
       r = literal(v.integer(), t);
-      r.set("#vv_constant", s->getHierarchicalPath());
+      auto id = s->getHierarchicalPath();
+      r.set("#vv_constant", id);
+      auto &entry = object.metadata.add("constants").add(id);
+      entry.id("constant");
+      entry.add(ID_value) = r;
+      entry.add(ID_C_source_location) = loc(s->location);
       break;
     }
     r = symbol_exprt(name(*s), t);
@@ -143,20 +162,78 @@ exprt compilert::expr(const Expression &e)
   case ExpressionKind::RangeSelect:
   {
     auto &rs = e.as<RangeSelectExpression>();
-    if(rs.getSelectionKind() != RangeSelectionKind::Simple)
-      fail(at, "unsupported indexed range");
-    r = slice(expr(rs.value()), expr(rs.left()), expr(rs.right()), t);
+    check_select(rs.value());
+    EvalContext ctx(*scope);
+    auto constant_bound = [&](const Expression &bound)
+    {
+      auto v = bound.eval(ctx);
+      if(!v.isInteger() || v.integer().hasUnknown())
+        fail(bound.sourceRange.start(), "nonconstant part-select bound");
+      return literal(v.integer(), type(*bound.type));
+    };
+    if(rs.getSelectionKind() == RangeSelectionKind::Simple)
+      r = slice(
+        expr(rs.value()),
+        constant_bound(rs.left()),
+        constant_bound(rs.right()),
+        t);
+    else
+    {
+      auto direction = rs.getSelectionKind() == RangeSelectionKind::IndexedUp
+                         ? ID_verilog_indexed_part_select_plus
+                         : ID_verilog_indexed_part_select_minus;
+      r = verilog_indexed_part_select_plus_or_minus_exprt(
+        direction,
+        expr(rs.value()),
+        expr(rs.left()),
+        constant_bound(rs.right()),
+        t);
+    }
     break;
   }
   case ExpressionKind::ElementSelect:
   {
     auto &el = e.as<ElementSelectExpression>();
+    check_select(el.value());
     r = verilog_bit_select_exprt(expr(el.value()), expr(el.selector()), t);
+    break;
+  }
+  case ExpressionKind::StructuredAssignmentPattern:
+  {
+    auto &pattern = e.as<StructuredAssignmentPatternExpression>();
+    if(
+      t.id() != ID_struct ||
+      pattern.elements().size() != to_struct_type(t).components().size())
+      fail(at, "unsupported assignment pattern");
+    r = node(ID_struct, t);
+    for(auto *field : pattern.elements())
+      r.operands().push_back(expr(*field));
+    break;
+  }
+  case ExpressionKind::Replication:
+  {
+    auto &rep = e.as<ReplicationExpression>();
+    auto n = rep.count().getConstant();
+    if(!n || !n->isInteger())
+      fail(at, "nonconstant replication");
+    auto count = n->integer().as<unsigned>();
+    if(!count || *count > 65536 || !*count)
+      fail(at, "unsupported replication count");
+    auto pattern = expr(rep.concat());
+    r = node(ID_concatenation, t);
+    r.operands().assign(*count, pattern);
     break;
   }
   case ExpressionKind::MemberAccess:
   {
     auto &m = e.as<MemberAccessExpression>();
+    if(
+      m.member.kind == SymbolKind::Field &&
+      m.value().type->getCanonicalType().kind == SymbolKind::UnpackedStructType)
+    {
+      r = member_exprt(expr(m.value()), std::string(m.member.name), t);
+      break;
+    }
     if(m.member.kind != SymbolKind::Field || !m.value().type->isIntegral())
       fail(at, "unsupported member");
     auto off = m.member.as<FieldSymbol>().bitOffset;
@@ -189,7 +266,8 @@ std::string compilert::clock(const TimingControl *tc, SourceLocation at)
   auto &ev = tc->as<SignalEventControl>();
   auto *sym = ev.expr.getSymbolReference();
   if(
-    ev.edge != EdgeKind::PosEdge || !sym || ev.iffCondition ||
+    ev.edge != EdgeKind::PosEdge ||
+    ev.expr.kind != ExpressionKind::NamedValue || !sym || ev.iffCondition ||
     !ev.expr.type->isIntegral() || ev.expr.type->getBitWidth() != 1)
     fail(at, "expected an unguarded single posedge");
   auto id = name(*sym);

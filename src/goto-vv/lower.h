@@ -69,6 +69,7 @@ public:
   SourceManager &sm;
   analysis::AnalysisManager &am;
   vv_objectt object;
+  const Symbol *scope = nullptr;
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
   std::map<std::string, std::string> clock_alias;
   std::map<const Symbol *, exprt> locals;
@@ -78,7 +79,8 @@ public:
   }
   source_locationt loc(SourceLocation l) const;
   [[noreturn]] void fail(SourceLocation l, const std::string &why) const;
-  typet type(const Type &t) const;
+  irept describe_type(const Type &type) const;
+  typet type(const Type &t, SourceLocation fallback = {}) const;
   exprt literal(const SVInt &v, const typet &t) const;
   exprt expr(const Expression &e);
   exprt stmt(const Statement &s);

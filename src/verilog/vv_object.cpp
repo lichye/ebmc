@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -190,15 +191,28 @@ void vv_objectt::validate(bool require_constraints) const
     module->value.id() != ID_verilog_module)
     error(loc, "missing typed top module " + top);
   auto clock = symbols.lookup(metadata.get("clock"));
-  if(!clock || clock->type.id() != ID_bool || !clock->is_input)
+  const auto &ports = to_module_type(module->type).ports();
+  auto primary_input = [&](const symbolt *s)
+  {
+    return s && s->is_input && s->type.id() == ID_bool &&
+           std::any_of(
+             ports.begin(),
+             ports.end(),
+             [&](const auto &p)
+             { return p.input() && !p.output() && p.identifier() == s->name; });
+  };
+  if(!primary_input(clock))
     error(loc, "unbound primary clock");
   if(!metadata.get("reset").empty())
   {
     auto r =
       symbols.lookup("Verilog::$root." + id2string(metadata.get("reset")));
-    if(!r || r->type.id() != ID_bool || !r->is_input)
+    if(!primary_input(r))
       error(loc, "invalid reset binding");
   }
+  std::map<irep_idt, irep_idt> connections;
+  std::vector<std::pair<irep_idt, source_locationt>> edges;
+  std::set<irep_idt> bound_properties;
   for(auto &entry : symbols.symbols)
   {
     const auto &s = entry.second;
@@ -217,6 +231,45 @@ void vv_objectt::validate(bool require_constraints) const
     {
       const auto &where =
         static_cast<const source_locationt &>(n.find(ID_C_source_location));
+      if(n.id() == ID_inst && !n.get(ID_module_identifier).empty())
+      {
+        const auto *inst = symbols.lookup(n.get(ID_identifier));
+        const auto *child = symbols.lookup(n.get(ID_module_identifier));
+        if(
+          !inst || inst->value.id() != ID_verilog_module_instance || !child ||
+          child->type.id() != ID_module ||
+          child->value.id() != ID_verilog_module ||
+          inst->value.get(ID_module) != child->name)
+          error(where, "bad specialized instance binding");
+        for(const auto &p : n.get_sub())
+        {
+          if(
+            p.id() != ID_verilog_named_port_connection ||
+            p.get_sub().size() != 2 || p.get_sub().front().id() != ID_symbol)
+            error(where, "bad formal port binding");
+          const auto id = p.get_sub().front().get(ID_identifier);
+          const auto &child_ports = to_module_type(child->type).ports();
+          if(std::none_of(
+               child_ports.begin(),
+               child_ports.end(),
+               [&](const auto &port) { return port.identifier() == id; }))
+            error(where, "formal port does not belong to the bound instance");
+          if(p.get_sub().back().id() == ID_symbol)
+            connections.emplace(id, p.get_sub().back().get(ID_identifier));
+        }
+      }
+      if(n.id() == ID_negedge)
+        error(
+          where.is_nil() ? s.location : where,
+          "unsupported negative clock edge");
+      if(n.id() == ID_posedge)
+      {
+        if(n.get_sub().size() != 1 || n.get_sub().front().id() != ID_symbol)
+          error(
+            where.is_nil() ? s.location : where,
+            "unsupported clock event expression");
+        edges.emplace_back(n.get_sub().front().get(ID_identifier), s.location);
+      }
       if(n.id() == ID_symbol)
       {
         auto target = symbols.lookup(n.get(ID_identifier));
@@ -231,12 +284,33 @@ void vv_objectt::validate(bool require_constraints) const
         n.id() == ID_verilog_cover_property)
       {
         auto target = symbols.lookup(n.get(ID_identifier));
-        if(!target || !target->is_property || n.get_sub().size() != 2)
+        if(
+          !target || !target->is_property || n.get_sub().size() != 2 ||
+          metadata.find("properties").find(target->name).get("kind") !=
+            n.id() ||
+          !bound_properties.insert(target->name).second)
           error(where, "bad property binding");
       }
       for(const auto &c : n.get_sub())
         self(self, c);
     };
     check(check, s.value);
+  }
+  for(const auto &s : symbols.symbols)
+    if(s.second.is_property && !bound_properties.count(s.first))
+      error(s.second.location, "property symbol without a module item");
+  for(auto &edge : edges)
+  {
+    std::set<irep_idt> seen;
+    auto id = edge.first;
+    while(id != clock->name)
+    {
+      auto it = connections.find(id);
+      if(!seen.insert(id).second || it == connections.end())
+        error(
+          edge.second,
+          "process clock does not bind to the recorded primary input");
+      id = it->second;
+    }
   }
 }
