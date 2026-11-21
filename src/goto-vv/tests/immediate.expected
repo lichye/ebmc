@@ -1,0 +1,4 @@
+([0-9]+[.])*init_ok PROVED up to bound 3
+([0-9]+[.])*comb_ok PROVED up to bound 3
+([0-9]+[.])*comb_bad REFUTED
+([0-9]+[.])*clock_ok PROVED up to bound 3

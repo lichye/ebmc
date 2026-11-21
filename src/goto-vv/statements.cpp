@@ -1,6 +1,67 @@
 #include "lower.h"
 namespace vv
 {
+exprt compilert::immediate(
+  const ImmediateAssertionStatement &a,
+  const Symbol *label)
+{
+  auto at = a.sourceRange.start();
+  if(a.assertionKind != AssertionKind::Assert || a.isDeferred)
+    fail(at, "unsupported procedural assertion kind or timing");
+  auto diagnostic_only = [](const Statement *action)
+  {
+    if(!action || action->kind == StatementKind::Empty)
+      return true;
+    if(action->kind != StatementKind::ExpressionStatement)
+      return false;
+    auto &e = action->as<ExpressionStatement>().expr;
+    if(e.kind != ExpressionKind::Call)
+      return false;
+    auto &call = e.as<CallExpression>();
+    auto task = call.getSubroutineName();
+    if(!call.isSystemCall() || (task != "$error" && task != "$warning"))
+      return false;
+    return std::all_of(
+      call.arguments().begin(),
+      call.arguments().end(),
+      [](const Expression *arg)
+      {
+        return arg->kind == ExpressionKind::StringLiteral ||
+               arg->kind == ExpressionKind::IntegerLiteral ||
+               arg->kind == ExpressionKind::NamedValue;
+      });
+  };
+  if(!diagnostic_only(a.ifTrue) || !diagnostic_only(a.ifFalse))
+    fail(at, "unsupported procedural assertion action");
+  const auto where = loc(at);
+  std::string base = label ? std::string(label->name)
+                           : "$assert_" + id2string(where.get_line()) + "_" +
+                               id2string(where.get_column());
+  auto id = label ? name(*label) : name(*scope) + "." + base;
+  symbolt symbol(id, bool_typet(), ID_Verilog);
+  symbol.base_name = base;
+  symbol.pretty_name = id.substr(std::string(root).size() + 1);
+  symbol.module = root;
+  symbol.location = where;
+  symbol.is_property = true;
+  if(object.symbols.add(symbol))
+    fail(at, "duplicate procedural assertion " + id);
+
+  auto result = item(
+    ID_verilog_immediate_assert,
+    {boolean(expr(a.cond)), item(ID_verilog_action_then, {item(ID_skip)})});
+  result.set(ID_identifier, id);
+  result.set(ID_base_name, base);
+  result.add_source_location() = where;
+  auto &info = object.metadata.add("properties").add(id);
+  info.id("property");
+  info.set("sampling", "procedural");
+  info.set("origin", "source");
+  info.set("kind", ID_verilog_immediate_assert);
+  info.add(ID_C_source_location) = where;
+  return result;
+}
+
 exprt compilert::stmt(const Statement &s)
 {
   const auto at = s.sourceRange.start();
@@ -11,7 +72,18 @@ exprt compilert::stmt(const Statement &s)
     r = item(ID_skip);
     break;
   case StatementKind::Block:
-    r = stmt(s.as<BlockStatement>().body);
+  {
+    auto &block = s.as<BlockStatement>();
+    if(
+      block.blockSymbol && !block.blockSymbol->name.empty() &&
+      block.body.kind == StatementKind::ImmediateAssertion)
+      return immediate(
+        block.body.as<ImmediateAssertionStatement>(), block.blockSymbol);
+    r = stmt(block.body);
+  }
+  break;
+  case StatementKind::ImmediateAssertion:
+    r = immediate(s.as<ImmediateAssertionStatement>(), nullptr);
     break;
   case StatementKind::List:
   {

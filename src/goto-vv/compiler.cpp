@@ -343,7 +343,19 @@ void compilert::module(const InstanceSymbol &i, bool top)
         op = ID_verilog_always;
       else
         fail(s.location, "unsupported procedure " + std::string(kind));
-      auto process = item(op, {stmt(body)});
+      // An outer @* responds to the implicit combinational sensitivity set.
+      // Leave explicit event controls on the checked single-clock path.
+      const auto *timed = body.as_if<TimedStatement>();
+      auto process =
+        kind == "Always" && timed &&
+            timed->timing.kind == TimingControlKind::ImplicitEvent
+          ? item(
+              ID_verilog_always,
+              {item(
+                ID_event_guard,
+                {typecast_exprt(item(ID_verilog_star_event), bool_typet()),
+                 stmt(timed->stmt)})})
+          : item(op, {stmt(body)});
       process.add_source_location() = loc(s.location);
       items.operands().push_back(std::move(process));
       break;

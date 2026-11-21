@@ -219,7 +219,14 @@ void vv_objectt::validate(bool require_constraints) const
     if(s.is_property)
     {
       const auto &p = metadata.find("properties").find(s.name);
-      if(
+      if(p.get("kind") == ID_verilog_immediate_assert)
+      {
+        if(
+          p.get("sampling") != "procedural" || !p.get("clock").empty() ||
+          !p.get("edge").empty())
+          error(s.location, "invalid procedural assertion sampling");
+      }
+      else if(
         p.is_nil() || p.get("clock") != clock->name ||
         p.get("edge") != "posedge" ||
         p.get("sampling") != metadata.get("sampling"))
@@ -281,7 +288,8 @@ void vv_objectt::validate(bool require_constraints) const
       if(
         n.id() == ID_verilog_assert_property ||
         n.id() == ID_verilog_assume_property ||
-        n.id() == ID_verilog_cover_property)
+        n.id() == ID_verilog_cover_property ||
+        n.id() == ID_verilog_immediate_assert)
       {
         auto target = symbols.lookup(n.get(ID_identifier));
         if(

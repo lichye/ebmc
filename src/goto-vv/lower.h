@@ -84,6 +84,7 @@ public:
   exprt literal(const SVInt &v, const typet &t) const;
   exprt expr(const Expression &e);
   exprt stmt(const Statement &s);
+  exprt immediate(const ImmediateAssertionStatement &s, const Symbol *label);
   exprt assertion(const AssertionExpr &a, SourceLocation at);
   std::string clock(const TimingControl *ev, SourceLocation at);
   void module(const InstanceSymbol &inst, bool top);
