@@ -34,6 +34,7 @@ clauset negate_cube(const cubet &cube);
 class cnft;
 class recording_cnft;
 class bmc_mapt;
+class initial_model_cachet;
 
 namespace IctMinisat
 {
@@ -145,6 +146,7 @@ private:
   void replay_base_cnf(cnft &dest, bool with_init);
 
   std::unique_ptr<satcheck_no_simplifiert> init_solver;
+  std::unique_ptr<initial_model_cachet> init_model;
 
   std::vector<tvt> init_values;
   bool init_is_unique_state = false;
