@@ -82,6 +82,36 @@ ltl_sva_to_stringt::infix(std::string s, const exprt &expr, modet mode)
   return resultt{precedencet::INFIX, result};
 }
 
+static bool is_regular_abortable_sequence(const exprt &sequence)
+{
+  if(sequence.id() == ID_sva_boolean)
+    return !has_temporal_operator(to_sva_boolean_expr(sequence).op());
+
+  // Repetition of a Boolean is a pure regular sequence, including the
+  // empty path of [*0:n] or [*0:$].
+  if(sequence.id() == ID_sva_sequence_repetition_star)
+  {
+    const auto &body = to_sva_sequence_repetition_expr(sequence).op();
+    return body.id() == ID_sva_boolean && is_regular_abortable_sequence(body);
+  }
+
+  if(sequence.id() != ID_sva_cycle_delay)
+    return false;
+
+  const auto &delay = to_sva_cycle_delay_expr(sequence);
+  if(delay.is_unbounded() ||
+     (delay.lhs().is_not_nil() &&
+      !is_regular_abortable_sequence(delay.lhs())) ||
+     !is_regular_abortable_sequence(delay.rhs()))
+    return false;
+
+  // Spot fusion (:), used for ##0, must have a tick on both sides.
+  // Leave nullable operands on that boundary to another conversion.
+  return !delay.from().is_zero() ||
+         ((delay.lhs().is_nil() || !admits_empty(delay.lhs())) &&
+          !admits_empty(delay.rhs()));
+}
+
 // IEEE 1800-2017 16.12: an abort discharges an active attempt. It
 // cannot rescue a failure after its deadline or start a new attempt.
 static exprt push_accept_on(const exprt &reset, const exprt &property)
@@ -101,14 +131,31 @@ static exprt push_accept_on(const exprt &reset, const exprt &property)
     property.id() == ID_sva_non_overlapped_implication)
   {
     const auto &implication = to_sva_implication_base_expr(property);
+    auto consequent = push_accept_on(reset, implication.property());
     try
     {
-      return SVA_abortable_implication_to_LTL(
-        property, reset, push_accept_on(reset, implication.property()));
+      return SVA_abortable_implication_to_LTL(property, reset, consequent);
     }
     catch(sva_to_ltl_unsupportedt error)
     {
-      throw ltl_sva_to_string_unsupportedt{std::move(error.expr)};
+      const auto &sequence = implication.sequence();
+      if(
+        has_temporal_operator(reset) ||
+        has_temporal_operator(implication.property()) ||
+        !is_regular_abortable_sequence(sequence) || admits_empty(sequence))
+        throw ltl_sva_to_string_unsupportedt{std::move(error.expr)};
+
+      // Length-matching throughout checks reset at every tick of each
+      // match, including delay gaps and internal zero-length repeats.
+      // The abortable consequent separately checks reset at its first
+      // tick, which is the following tick for a nonoverlapped implication.
+      auto guarded = sva_sequence_throughout_exprt{not_exprt{reset}, sequence};
+      guarded.type() = sequence.type();
+      auto result = property;
+      auto &result_implication = to_sva_implication_base_expr(result);
+      result_implication.sequence() = std::move(guarded);
+      result_implication.property() = std::move(consequent);
+      return result;
     }
   }
   else if(property.id() == ID_and || property.id() == ID_or)

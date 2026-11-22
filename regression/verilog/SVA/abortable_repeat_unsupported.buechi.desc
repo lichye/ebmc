@@ -1,0 +1,12 @@
+CORE buechi
+abortable_repeat_unsupported.sv
+--new-ic3 --buechi
+^\[main\.empty_antecedent\] .*: UNSUPPORTED: sva_non_overlapped_implication not convertible to Buechi$
+^\[main\.plus_based\] .*: UNSUPPORTED: sva_non_overlapped_implication not convertible to Buechi$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+The fallback requires a nonempty whole antecedent in the explicit
+consecutive repetition fragment.
