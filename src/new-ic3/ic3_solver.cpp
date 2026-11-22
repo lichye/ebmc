@@ -227,30 +227,51 @@ void ic3_solvert::initialize_init_solver()
   lift_minisat = new_minisat_solver();
 }
 
-void ic3_solvert::analyze_initial_state()
+void ic3_solvert::collect_fixed_initial_values(
+  const netlistt &netlist,
+  const bmc_mapt &bmc_map)
 {
-  // Determine which latches have forced initial values. If all are
-  // forced, the initial state is unique and intersection checks
-  // become purely syntactic.
   init_values.resize(latches.size(), tvt::unknown());
-  if(init_solver->prop_solve(bvt{}) == propt::resultt::P_SATISFIABLE)
-  {
-    std::vector<bool> model(latches.size());
-    for(std::size_t i = 0; i < latches.size(); i++)
-      model[i] = init_solver->l_get(latches[i].current).is_true();
 
-    init_is_unique_state = true;
-    for(std::size_t i = 0; i < latches.size(); i++)
+  // Initial conditions and invariant constraints hold in the initial
+  // solver. A true AND forces both operands; stop at any other gate.
+  // This computes a subset of the forced latch values without SAT probes.
+  bvt pending = netlist.initial;
+  pending.insert(
+    pending.end(), netlist.constraints.begin(), netlist.constraints.end());
+  std::vector<bool> expanded(netlist.number_of_nodes());
+  while(!pending.empty())
+  {
+    const auto literal = pending.back();
+    pending.pop_back();
+    if(literal.is_constant())
+      continue;
+
+    const auto &node = netlist.get_node(literal);
+    if(node.is_and())
     {
-      bvt assumption = {model[i] ? !latches[i].current : latches[i].current};
-      if(init_solver->prop_solve(assumption) == propt::resultt::P_UNSATISFIABLE)
+      if(!literal.sign() && !expanded[literal.var_no()])
       {
-        init_values[i] = tvt(model[i]);
+        expanded[literal.var_no()] = true;
+        pending.push_back(node.a);
+        pending.push_back(node.b);
       }
-      else
-        init_is_unique_state = false;
+      continue;
     }
+
+    const auto current = bmc_map.translate(0, literal);
+    const auto index = current_to_latch.find(current.var_no());
+    if(index != current_to_latch.end())
+      init_values[index->second] =
+        tvt(current.sign() == latches[index->second].current.sign());
   }
+
+  // Before accepting a syntactically consistent cube, check that the
+  // initial state actually exists. Otherwise use the exact SAT fallback.
+  const bool all_fixed = std::none_of(
+    init_values.begin(), init_values.end(), [](tvt v) { return v.is_unknown(); });
+  init_is_unique_state =
+    all_fixed && init_solver->prop_solve(bvt{}) == propt::resultt::P_SATISFIABLE;
 }
 
 ic3_solvert::ic3_solvert(
@@ -266,7 +287,7 @@ ic3_solvert::ic3_solvert(
   initialize_base_cnf(netlist, bmc_map, prop_netlist_lit);
   collect_latches_and_inputs(netlist, bmc_map);
   initialize_init_solver();
-  analyze_initial_state();
+  collect_fixed_initial_values(netlist, bmc_map);
 
   // F_0
   frame_clauses.emplace_back();

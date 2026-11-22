@@ -1,0 +1,11 @@
+CORE
+inconsistent_initial_invariant.smv
+--new-ic3
+^\[spec1\] AG !armed: PROVED$
+^EXIT=0$
+^SIGNAL=0$
+--
+finite bad frame
+--
+Even when initial literals assign every latch, their conjunction with
+invariant constraints can be unsatisfiable.

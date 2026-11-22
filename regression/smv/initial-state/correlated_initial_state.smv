@@ -1,0 +1,17 @@
+MODULE main
+VAR
+  x : boolean;
+  y : boolean;
+  equivalent : boolean;
+  armed : boolean;
+  data : boolean;
+INIT (x | y) & (!x | y) & (x = equivalent) & !armed & !data;
+ASSIGN
+  next(x) := x;
+  next(y) := y;
+  next(equivalent) := equivalent;
+  next(armed) := TRUE;
+  next(data) := x;
+SPEC AG y;
+SPEC AG (x = equivalent);
+SPEC AG (!armed | !data);
