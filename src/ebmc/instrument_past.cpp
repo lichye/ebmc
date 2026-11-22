@@ -16,10 +16,54 @@ Author: Daniel Kroening, dkr@amazon.com
 
 #include "ebmc_error.h"
 
+#include <optional>
 #include <set>
 
 // The set is ordered to get a stable numbering
 using past_sett = std::set<verilog_past_exprt>;
+
+// A constant in-range lane read commutes with $past, including the default
+// before frame zero. Sample only the consumed lanes so their history state
+// has scalar initial values. Keep aggregate and unchecked reads unchanged.
+static std::optional<verilog_past_exprt>
+sample_packed_lane(const index_exprt &read)
+{
+  const auto &array = read.array();
+  if(
+    (array.id() != ID_verilog_past && array.id() != ID_index) ||
+    array.type().get(ID_C_verilog_type) != ID_verilog_packed_array)
+    return {};
+
+  const auto index = numeric_cast<mp_integer>(read.index());
+  const auto size = numeric_cast<mp_integer>(to_array_type(array.type()).size());
+  if(!index || !size || *index < 0 || *index >= *size)
+    return {};
+
+  std::optional<verilog_past_exprt> sample;
+  if(array.id() == ID_verilog_past)
+    sample = to_verilog_past_expr(array);
+  else
+    sample = sample_packed_lane(to_index_expr(array));
+
+  if(sample)
+  {
+    auto lane = read;
+    lane.array() = sample->what();
+    return verilog_past_exprt{std::move(lane), sample->ticks()};
+  }
+  return {};
+}
+
+static void sample_packed_lanes(exprt &expr)
+{
+  replace_mapt replacements;
+  for(auto it = expr.depth_begin(); it != expr.depth_end(); ++it)
+    if(it->id() == ID_index && it->type().id() != ID_array)
+      if(auto sampled = sample_packed_lane(to_index_expr(*it)))
+        replacements.emplace(*it, std::move(*sampled));
+  if(!replacements.empty())
+    replace_expr(replacements, expr);
+}
 
 void collect_past(const exprt &expr, past_sett &past_set)
 {
@@ -194,6 +238,10 @@ void instrument_past(
   transition_systemt &transition_system,
   ebmc_propertiest &properties)
 {
+  sample_packed_lanes(transition_system.trans_expr);
+  for(auto &property : properties.properties)
+    sample_packed_lanes(property.normalized_expr);
+
   past_sett past_set;
   collect_past(transition_system, past_set);
   collect_past(properties, past_set);

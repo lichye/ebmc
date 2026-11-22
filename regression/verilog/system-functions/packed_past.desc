@@ -1,0 +1,14 @@
+CORE
+packed_past.sv
+--bound 3 --witness-lasso 6
+^\[main\.width_kept\].*: PROVED up to bound 3$
+^\[main\.default_zero\].*: PROVED up to bound 3$
+^\[main\.first_sample\].*: PROVED up to bound 3$
+^\[main\.later_sample\].*: PROVED up to bound 3$
+^\[main\.bad_default\].*: REFUTED$
+^\[main\.bad_sample\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
