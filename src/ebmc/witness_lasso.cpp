@@ -308,12 +308,13 @@ void certify(
   const transition_systemt &system,
   const transt &trans,
   const namespacet &trace_ns,
-  const exprt::operandst &assumptions,
+  const std::vector<const ebmc_propertiest::propertyt *> &assumptions,
   property_checker_resultt::propertyt &property,
   std::size_t end,
   std::optional<std::size_t> bmc_bound,
   const ebmc_solver_factoryt &factory,
-  message_handlert &messages)
+  message_handlert &messages,
+  const witness_lasso_observert &observe_lasso)
 {
   messaget message{messages};
   message.status() << property.name << ": certifying witness loop within "
@@ -354,11 +355,12 @@ void certify(
   for(const auto &input : system.inputs())
     boundary.insert(input);
   collect_boundary(system.trans_expr, boundary);
-  for(const auto &assumption : assumptions)
+  for(const auto *assumption : assumptions)
   {
-    collect_boundary(assumption, boundary);
+    const auto &predicate = to_unary_expr(assumption->normalized_expr).op();
+    collect_boundary(predicate, boundary);
     for(std::size_t t = 0; t < frames; ++t)
-      solver.set_to_true(instantiate(assumption, t, frames));
+      solver.set_to_true(instantiate(predicate, t, frames));
   }
 
   // Search afresh for the same violation. The primary engine may have put
@@ -444,6 +446,16 @@ void certify(
       auto bad = trace.get_min_failing_timeframe();
       if(bad && (bmc_bound ? *bad <= *bmc_bound : *bad < end))
       {
+        if(observe_lasso)
+          observe_lasso(
+            {system,
+             trans,
+             assumptions,
+             property,
+             solver,
+             frames,
+             start,
+             *bad});
         trace.loop_start = start;
         property.witness_certificate =
           property_checker_resultt::propertyt::witness_certificatet::LASSO;
@@ -495,6 +507,18 @@ void certify_property_witnesses(
   property_checker_resultt &result,
   std::optional<std::size_t> bmc_bound,
   message_handlert &messages)
+{
+  certify_property_witnesses(
+    cmdline, original_system, result, bmc_bound, messages, {});
+}
+
+void certify_property_witnesses(
+  const cmdlinet &cmdline,
+  const transition_systemt &original_system,
+  property_checker_resultt &result,
+  std::optional<std::size_t> bmc_bound,
+  message_handlert &messages,
+  const witness_lasso_observert &observe_lasso)
 {
   const auto budget = witness_lasso_budget(cmdline, bmc_bound);
   if(
@@ -631,13 +655,13 @@ void certify_property_witnesses(
     messaget{messages}.warning() << error.what() << messaget::eom;
     compiled = false;
   }
-  exprt::operandst assumptions;
+  std::vector<const ebmc_propertiest::propertyt *> assumptions;
   bool supported_assumptions = compiled;
   for(const auto &p : batch.properties)
     if(!p.is_disabled() && (p.is_assumption() || p.is_assumed()))
     {
       if(p.is_assumed() && invariant(p.normalized_expr))
-        assumptions.push_back(to_unary_expr(p.normalized_expr).op());
+        assumptions.push_back(&p);
       else
         supported_assumptions = false;
     }
@@ -690,7 +714,8 @@ void certify_property_witnesses(
       *budget,
       horizon,
       ebmc_solver_factory(solver_options),
-      messages);
+      messages,
+      observe_lasso);
   }
   auto source = batch.properties.begin();
   for(auto &p : result.properties)
