@@ -1,0 +1,14 @@
+CORE buechi
+regular_sequence_monitor_assume.sv
+--new-ic3 --buechi --undriven seq --witness-lasso 12 -D LOCKED
+^main\.p: no witness loop within 12 transitions$
+^\[main\.deadline\] .*: ASSUMED$
+^\[main\.conflict\] .*: ASSUMED$
+^\[main\.p\] .*: INCONCLUSIVE$
+^EXIT=10$
+^SIGNAL=0$
+--
+witness loop [0-9]+ ->
+--
+The assertion fails at sample 4 but the assumptions disagree when alarm
+becomes due at sample 6. A finite prefix cannot certify the refutation.

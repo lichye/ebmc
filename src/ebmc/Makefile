@@ -24,6 +24,7 @@ SRC = \
       format_hooks.cpp \
       instrument_past.cpp \
       instrument_buechi.cpp \
+      instrument_regular_sequence.cpp \
       k_induction.cpp \
       liveness_to_safety.cpp \
       liveness_lemma_engine.cpp \

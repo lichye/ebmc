@@ -1,0 +1,13 @@
+CORE buechi
+regular_sequence_monitor_assume.sv
+--new-ic3 --buechi --undriven seq --witness-lasso 12
+^main\.p: witness loop [0-9]+ -> [0-9]+ \(equal endpoints\), bad frame 4$
+^\[main\.deadline\] .*: ASSUMED$
+^\[main\.quiet\] .*: ASSUMED$
+^\[main\.p\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+Alarm satisfies the temporal assumption at sample 6. The original assertion
+still fails at sample 4 and the witness has a certified loop.
