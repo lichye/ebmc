@@ -1,0 +1,18 @@
+CORE buechi
+abortable_repeat.sv
+--new-ic3 --buechi --witness-lasso 20
+^\[main\.zero_overlap\] .*: REFUTED$
+^\[main\.zero_following\] .*: PROVED$
+^\[main\.late_reset\] .*: REFUTED$
+^\[main\.gap_reset\] .*: PROVED$
+^\[main\.long_repeat\] .*: REFUTED$
+^\[main\.restart\] .*: REFUTED$
+^\[main\.never_finishes\] .*: PROVED$
+^\[main\.long_match\] .*: PROVED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
+Check reset at every tick of a regular match and on the following tick.
+The nullable repetition can occur inside a nonempty antecedent.
