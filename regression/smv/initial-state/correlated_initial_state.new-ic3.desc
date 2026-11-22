@@ -1,0 +1,13 @@
+CORE
+correlated_initial_state.smv
+--new-ic3
+^spec3: finite bad frame 1 has an infinite extension by totality$
+^\[spec1\] AG y: PROVED$
+^\[spec2\] AG x = equivalent: PROVED$
+^\[spec3\] AG \(!armed \| !data\): REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+The clauses force y without a direct unit and correlate two free latches.
+Initial-state intersection must still use SAT to respect both facts.

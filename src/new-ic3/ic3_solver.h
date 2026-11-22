@@ -103,7 +103,7 @@ private:
   void initialize_base_cnf(const netlistt &, const bmc_mapt &, literalt);
   void collect_latches_and_inputs(const netlistt &, const bmc_mapt &);
   void initialize_init_solver();
-  void analyze_initial_state();
+  void collect_fixed_initial_values(const netlistt &, const bmc_mapt &);
 
   bool initial_state_is_bad();
   std::optional<ic3_resultt> block_frame(std::size_t level);

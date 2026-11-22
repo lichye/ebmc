@@ -1,0 +1,10 @@
+MODULE main
+VAR
+  armed : boolean;
+  enabled : boolean;
+INIT !armed & !enabled;
+INVAR enabled;
+ASSIGN
+  next(armed) := TRUE;
+  next(enabled) := enabled;
+SPEC AG !armed;
