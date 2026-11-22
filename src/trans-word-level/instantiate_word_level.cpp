@@ -8,6 +8,7 @@ Author: Daniel Kroening, kroening@kroening.com
 
 #include "instantiate_word_level.h"
 
+#include <util/arith_tools.h>
 #include <util/ebmc_util.h>
 #include <util/expr_util.h>
 
@@ -181,6 +182,25 @@ exprt wl_instantiatet::instantiate_rec(exprt expr, const mp_integer &t) const
       op = instantiate_rec(op, t);
     }
 
+    // Packing a $past value into a bit vector creates reads at fixed internal
+    // lane indices. Before enough history exists, the array operand becomes
+    // a uniform default. Eliminate these reads before SMT conversion, which
+    // can otherwise introduce a quantified constant-array axiom.
+    if(expr.id() == ID_index)
+    {
+      const auto &read = to_index_expr(expr);
+      const auto &array = read.array();
+      if(
+        array.id() == ID_array_of &&
+        array.type().get(ID_C_verilog_type) == ID_verilog_packed_array)
+      {
+        const auto &uniform = to_array_of_expr(array);
+        const auto index = numeric_cast<mp_integer>(read.index());
+        const auto size = numeric_cast<mp_integer>(uniform.type().size());
+        if(index && size && *index >= 0 && *index < *size)
+          return uniform.what();
+      }
+    }
     return expr;
   }
 }
