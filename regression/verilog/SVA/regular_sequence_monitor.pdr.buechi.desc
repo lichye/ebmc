@@ -1,0 +1,17 @@
+CORE buechi
+regular_sequence_monitor.sv
+--new-ic3 --buechi --undriven seq
+^main\.ordered: finite bad frame 4
+^main\.empty_tail_o: finite bad frame 1
+^main\.empty_tail_n: finite bad frame 2
+^main\.two_delays: finite bad frame 4
+^main\.past_bad: finite bad frame 4
+^\[main\.reversed\] .*: PROVED$
+^\[main\.reset_gap\] .*: PROVED$
+^\[main\.past_good\] .*: PROVED$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+Check consecutive stars, optional tails, multiple delay endpoints, reset on
+a delay tick, and past sampling in the functional sequence monitor.
