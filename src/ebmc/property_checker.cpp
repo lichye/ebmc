@@ -534,6 +534,17 @@ property_checker_resultt property_checker(
   ebmc_propertiest &properties,
   message_handlert &message_handler)
 {
+  return property_checker(
+    cmdline, transition_system, properties, message_handler, {});
+}
+
+property_checker_resultt property_checker(
+  const cmdlinet &cmdline,
+  transition_systemt &transition_system,
+  ebmc_propertiest &properties,
+  message_handlert &message_handler,
+  const witness_lasso_observert &observe_lasso)
+{
   const bool strict = !cmdline.isset("finite-prefix");
   const bool bdd = cmdline.isset("bdd") || cmdline.isset("show-bdds");
   const bool bit_bmc =
@@ -636,7 +647,12 @@ property_checker_resultt property_checker(
   {
     const namespacet ns{transition_system.symbol_table};
     certify_property_witnesses(
-      cmdline, transition_system, result, bmc_bound, message_handler);
+      cmdline,
+      transition_system,
+      result,
+      bmc_bound,
+      message_handler,
+      observe_lasso);
     report_results(cmdline, use_heuristic_engine, result, ns, message_handler);
   }
 
