@@ -12,6 +12,8 @@ Author: Daniel Kroening, dkr@amazon.com
 
 #include "ic3_solver.h"
 
+#include "initial_model_cache.h"
+
 #include <util/invariant.h>
 
 #include <ic3/minisat/minisat/core/Solver.h>
@@ -222,6 +224,15 @@ void ic3_solvert::initialize_init_solver()
   replay_base_cnf(*init_solver, true);
   if(!constraint_lit.is_true())
     init_solver->lcnf({constraint_lit});
+
+  std::vector<literalt::var_not> observed;
+  observed.reserve(latches.size() + input_lits.size());
+  for(const auto &latch : latches)
+    observed.push_back(latch.current.var_no());
+  for(literalt input : input_lits)
+    observed.push_back(input.var_no());
+  init_model =
+    std::make_unique<initial_model_cachet>(*init_solver, std::move(observed));
 
   // Create lifting solver using IC3's MiniSAT (has releaseVar).
   lift_minisat = new_minisat_solver();
@@ -485,8 +496,18 @@ bool ic3_solvert::init_intersects(const cubet &cube)
   if(all_bits_known)
     return true; // consistent with the unique initial state
 
-  // Fall back to the initial-state solver.
-  return init_solver->prop_solve(cube) == propt::resultt::P_SATISFIABLE;
+  // A cached assignment can answer this Boolean question. A cache hit
+  // does not make a model available from the native solver.
+  if(init_model->matches(*init_solver, cube))
+    return true;
+
+  if(init_solver->prop_solve(cube) != propt::resultt::P_SATISFIABLE)
+    return false;
+
+  init_model->capture(
+    *init_solver,
+    [&](literalt literal) { return init_solver->l_get(literal); });
+  return true;
 }
 
 void ic3_solvert::repair_init(const cubet &cube, cubet &reduced)

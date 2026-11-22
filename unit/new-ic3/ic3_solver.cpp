@@ -9,6 +9,7 @@ Author: Daniel Kroening, dkr@amazon.com
 #include <util/std_types.h>
 
 #include <new-ic3/ic3_solver.h>
+#include <new-ic3/initial_model_cache.h>
 #include <testing-utils/use_catch.h>
 
 /// Helper: build a netlist with a single 1-bit latch. The latch's
@@ -316,4 +317,55 @@ SCENARIO("ic3_solvert reports the length of a deeper counterexample")
       REQUIRE(result.counterexample_length == 4);
     }
   }
+}
+
+TEST_CASE("An IC3 initial SAT cache matches one signed model")
+{
+  null_message_handlert mh;
+  satcheck_no_simplifiert solver(mh);
+  const auto x = solver.new_variable();
+  const auto y = solver.new_variable();
+  const auto input = solver.new_variable();
+  const auto omitted = solver.new_variable();
+  solver.lcnf({!x, y});
+  solver.lcnf({x, !y});
+  solver.lcnf({input});
+
+  using resultt = propt::resultt;
+  const bvt cube{x, y, input};
+  initial_model_cachet cache{solver, {x.var_no(), y.var_no(), input.var_no()}};
+  const auto read = [&](literalt literal) { return solver.l_get(literal); };
+
+  REQUIRE(solver.prop_solve(cube) == resultt::P_SATISFIABLE);
+  cache.capture(solver, read);
+  CHECK(cache.matches(solver, cube));
+  CHECK_FALSE(cache.matches(solver, {x, !y}));
+  CHECK_FALSE(cache.matches(solver, {x, !x}));
+  CHECK_FALSE(cache.matches(solver, {x, !input}));
+  CHECK_FALSE(cache.matches(solver, {omitted}));
+  CHECK_FALSE(cache.matches(solver, {!omitted}));
+  CHECK_FALSE(cache.matches(solver, {const_literal(false)}));
+
+  REQUIRE(solver.prop_solve({x, !y}) == resultt::P_UNSATISFIABLE);
+  CHECK(cache.matches(solver, cube));
+  REQUIRE(solver.prop_solve(cube) == resultt::P_SATISFIABLE);
+  CHECK(solver.l_get(y).is_true());
+
+  cache.capture(
+    solver,
+    [&](literalt literal)
+    { return literal == y ? tvt::unknown() : read(literal); });
+  CHECK_FALSE(cache.matches(solver, cube));
+
+  cache.capture(solver, read);
+  REQUIRE(cache.matches(solver, cube));
+  satcheck_no_simplifiert alternate(mh);
+  for(unsigned i = 0; i < 4; ++i)
+    (void)alternate.new_variable();
+  alternate.lcnf({!input});
+  CHECK_FALSE(cache.matches(alternate, cube));
+  CHECK(alternate.prop_solve(cube) == resultt::P_UNSATISFIABLE);
+
+  (void)solver.new_variable();
+  CHECK_FALSE(cache.matches(solver, cube));
 }
