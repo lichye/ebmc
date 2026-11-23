@@ -1,0 +1,12 @@
+CORE
+regular-conjunction.sv
+--buechi --bound 4
+^main\.immediate: finite bad frame 1 has an infinite extension by totality$
+^main\.deferred: finite bad frame 4 has an infinite extension by totality$
+^main\.empty_window: finite bad frame 2 has an infinite extension by totality$
+^\[main\.immediate\].*: REFUTED$
+^\[main\.deferred\].*: REFUTED$
+^\[main\.cancelled\].*: PROVED up to bound 4$
+^\[main\.empty_window\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

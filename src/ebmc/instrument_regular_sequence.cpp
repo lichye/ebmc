@@ -162,18 +162,37 @@ bool instrument_regular_sequence(
   if(abort.id() != ID_sva_accept_on)
     return false;
   const auto &reset = to_binary_expr(abort).lhs();
-  const auto &rule = to_binary_expr(abort).rhs();
-  const bool nonoverlapped = rule.id() == ID_sva_non_overlapped_implication;
-  if(!nonoverlapped && rule.id() != ID_sva_overlapped_implication)
+  const auto *rule = &to_binary_expr(abort).rhs();
+  exprt::operandst immediate;
+  if(rule->id() == ID_and)
+  {
+    const auto &conjuncts = rule->operands();
+    rule = nullptr;
+    for(const auto &conjunct : conjuncts)
+    {
+      if(sequencet::boolean(conjunct))
+        immediate.push_back(conjunct);
+      else if(rule)
+        return false;
+      else
+        rule = &conjunct;
+    }
+    if(!rule)
+      return false;
+  }
+
+  const bool nonoverlapped = rule->id() == ID_sva_non_overlapped_implication;
+  if(!nonoverlapped && rule->id() != ID_sva_overlapped_implication)
     return false;
-  const auto &implication = to_sva_implication_base_expr(rule);
+  const auto &implication = to_sva_implication_base_expr(*rule);
   const auto &consequent = implication.property();
   if(!sequencet::boolean(reset) || !sequencet::boolean(consequent))
     return false;
 
   sequencet sequence;
-  if(!sequence.append(implication.sequence()) || !sequence.nonempty ||
-     !sequence.regular_repeat)
+  if(
+    !sequence.append(implication.sequence()) || !sequence.nonempty ||
+    !sequence.regular_repeat)
     return false;
 
   exprt::operandst initial, transition;
@@ -235,7 +254,11 @@ bool instrument_regular_sequence(
     and_exprt{system.trans_expr.init(), conjunction(initial)};
   system.trans_expr.trans() =
     and_exprt{system.trans_expr.trans(), conjunction(transition)};
-  property.normalized_expr = AG_exprt{
-    not_exprt{conjunction({enabled, matched, not_exprt{consequent}})}};
+  // An instantaneous conjunct is due on its own sample. Reset can only
+  // discharge it on that sample. The sequence consequent is due at each
+  // match endpoint (or the following sample for a nonoverlapped rule).
+  immediate.push_back(implies_exprt{matched, consequent});
+  property.normalized_expr =
+    AG_exprt{implies_exprt{enabled, conjunction(immediate)}};
   return true;
 }

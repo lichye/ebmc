@@ -1,0 +1,6 @@
+CORE
+w10.sv
+--top w10 --reset w10.rst --buechi --bound 3
+^\[w10\.p\].*: PROVED up to bound 3$
+^EXIT=0$
+^SIGNAL=0$
