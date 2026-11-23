@@ -29,8 +29,11 @@ Author: Daniel Kroening, dkr@amazon.com
 class cone_of_influencet
 {
 public:
-  cone_of_influencet(const transt &_trans, const exprt::operandst &_seeds)
-    : trans(_trans), seeds(_seeds)
+  cone_of_influencet(
+    const transt &_trans,
+    const exprt::operandst &_seeds,
+    const std::function<bool(const exprt &)> &_total_rhs)
+    : trans(_trans), seeds(_seeds), total_rhs(_total_rhs)
   {
   }
 
@@ -39,6 +42,7 @@ public:
 protected:
   const transt &trans;
   const exprt::operandst &seeds;
+  const std::function<bool(const exprt &)> &total_rhs;
 
   typedef std::unordered_set<irep_idt> symbol_sett;
 
@@ -261,7 +265,7 @@ void cone_of_influencet::classify(conjunctt &conjunct)
       conjunct.kind = kindt::NEXT;
     }
 
-    if(conjunct.definitional)
+    if(conjunct.definitional && (!total_rhs || total_rhs(rhs)))
     {
       collect_symbols(rhs, conjunct.current_symbols, conjunct.next_symbols);
 
@@ -682,10 +686,12 @@ Function: cone_of_influence
 
 \*******************************************************************/
 
-cone_of_influence_resultt
-cone_of_influence(const transt &trans, const exprt::operandst &seeds)
+cone_of_influence_resultt cone_of_influence(
+  const transt &trans,
+  const exprt::operandst &seeds,
+  const std::function<bool(const exprt &)> &total_rhs)
 {
-  return cone_of_influencet{trans, seeds}();
+  return cone_of_influencet{trans, seeds, total_rhs}();
 }
 
 /*******************************************************************\

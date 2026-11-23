@@ -12,6 +12,8 @@ Author: Daniel Kroening, dkr@amazon.com
 #include <util/mathematical_expr.h>
 #include <util/message.h>
 
+#include <functional>
+
 /// The result of a cone-of-influence reduction
 struct cone_of_influence_resultt
 {
@@ -91,7 +93,11 @@ struct cone_of_influence_resultt
 /// combined with them. Note that the argument above relies on all
 /// constraints on the removed variables being definitions; this must be
 /// revisited if assumptions are ever dropped as well.
-cone_of_influence_resultt
-cone_of_influence(const transt &, const exprt::operandst &seeds);
+/// When provided, \p total_rhs must accept a definition's right-hand side
+/// before it may be removed. A rejected definition is kept as a constraint.
+cone_of_influence_resultt cone_of_influence(
+  const transt &,
+  const exprt::operandst &seeds,
+  const std::function<bool(const exprt &)> &total_rhs = {});
 
 #endif // CPROVER_TRANS_WORD_LEVEL_CONE_OF_INFLUENCE_H

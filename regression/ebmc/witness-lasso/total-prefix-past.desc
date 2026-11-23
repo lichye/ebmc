@@ -1,0 +1,10 @@
+CORE
+total-prefix-past.sv
+--systemverilog --bound 2
+^main\.goal: finite bad frame 2 has an infinite extension by totality$
+^\[main\.goal\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+certifying witness loop
+--

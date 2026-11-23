@@ -5,6 +5,7 @@
 #include <util/simplify_expr.h>
 
 #include <temporal-logic/nnf.h>
+#include <trans-word-level/cone_of_influence.h>
 #include <trans-word-level/instantiate_word_level.h>
 #include <trans-word-level/lasso.h>
 #include <trans-word-level/property.h>
@@ -12,6 +13,8 @@
 #include <trans-word-level/unwind.h>
 #include <verilog/sva_expr.h>
 #include <verilog/verilog_bits.h>
+#include <verilog/verilog_expr.h>
+#include <verilog/verilog_initializer.h>
 #include <verilog/verilog_rtl.h>
 
 #include "ebmc_error.h"
@@ -23,6 +26,7 @@
 #include <charconv>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <new>
@@ -399,6 +403,15 @@ bool acyclic_wire_definitions(const wire_definition_mapt &wires)
       pending.pop_back();
       if(!visited.insert(&expr.read()).second)
         continue;
+      if(expr.id() == ID_verilog_past)
+      {
+        // A positive delay reads stored history. A zero delay still reads
+        // the current frame and must participate in cycle detection.
+        const auto &past = to_verilog_past_expr(expr);
+        if(numeric_cast<mp_integer>(past.ticks()) == mp_integer{0})
+          pending.push_back(&past.what());
+        continue;
+      }
       // An in-range constant projection only depends on its own slice.
       // A dynamic read visits the whole aggregate and the index expression.
       if(const auto *operand = selected_constructor_operand(expr))
@@ -428,13 +441,62 @@ bool acyclic_wire_definitions(const wire_definition_mapt &wires)
   return true;
 }
 
+class total_valuet
+{
+public:
+  bool operator()(const exprt &root)
+  {
+    if(root.id() == ID_symbol)
+      return true;
+    std::vector<const exprt *> pending{&root};
+    std::unordered_set<const irept::dt *> visited;
+    while(!pending.empty())
+    {
+      const auto &expr = *pending.back();
+      pending.pop_back();
+      const auto *node = &expr.read();
+      if(checked.count(node) || !visited.insert(node).second)
+        continue;
+      if(expr.id() == ID_verilog_past)
+      {
+        const auto &past = to_verilog_past_expr(expr);
+        const auto ticks = numeric_cast<mp_integer>(past.ticks());
+        if(
+          !ticks || *ticks < 0 ||
+          (*ticks > 0 && !verilog_default_initializer(past.type())))
+          return false;
+        // The implicit history registers start with the same default as word
+        // unwinding. After evaluating the current frame they sample what()
+        // and shift older values. Check the sampled expression even though a
+        // positive delay introduces no current-frame dependency at its use.
+        pending.push_back(&past.what());
+        continue;
+      }
+      if(!total_operation(expr))
+        return false;
+      for(const auto &op : expr.operands())
+        pending.push_back(&op);
+    }
+    checked.merge(visited);
+    return true;
+  }
+
+private:
+  // Cache only successfully checked subexpressions. A failed RHS stays in the
+  // reduced relation and must never become eligible for removal on reuse.
+  std::unordered_set<const irept::dt *> checked;
+};
+
 // Sufficient syntactic totality criterion. A freely chosen next value is
 // allowed for an unassigned latch; written latches are distinct and each RHS
-// is a total current-frame bit-vector function. Initial conditions do not
-// constrain successors. Unrecognised operators or state constraints fail closed.
-bool total_transition(const transition_systemt &system)
+// is a total function of the current frame and sampled history. Initial
+// conditions do not constrain successors. Unrecognised operators or state
+// constraints fail closed.
+bool total_transition(
+  const transition_systemt &system,
+  const transt &tr,
+  total_valuet &total_value)
 {
-  const auto &tr = system.trans_expr;
   // A complete monitor can be composed independently of the design and the
   // other monitors. Only use its construction proof while both exact factors
   // remain present. No other constraint may write its private next state.
@@ -475,25 +537,6 @@ bool total_transition(const transition_systemt &system)
           pending.push_back(&op);
       else if(!expr.is_true() && !check(expr))
         return false;
-    }
-    return true;
-  };
-  std::unordered_set<const irept::dt *> checked;
-  const auto total_value = [&](const exprt &root)
-  {
-    if(root.id() == ID_symbol)
-      return true;
-    std::vector<const exprt *> pending{&root};
-    while(!pending.empty())
-    {
-      const auto &expr = *pending.back();
-      pending.pop_back();
-      if(!checked.insert(&expr.read()).second)
-        continue;
-      if(!total_operation(expr))
-        return false;
-      for(const auto &op : expr.operands())
-        pending.push_back(&op);
     }
     return true;
   };
@@ -1019,7 +1062,8 @@ void certify_property_witnesses(
     result.properties.end(),
     [](const auto &p)
     { return !p.is_disabled() && (p.is_assumption() || p.is_assumed()); });
-  const bool total = no_assumptions && total_transition(original_system);
+  std::optional<bool> total_for_bdd;
+  total_valuet total_value;
   auto solver_options = cmdline;
   for(const auto option : {"outfile", "show-formula", "smt2"})
     if(solver_options.isset(option))
@@ -1034,11 +1078,16 @@ void certify_property_witnesses(
       !p.is_assumption() &&
       (p.is_exists_path() ? p.is_proved() : p.is_refuted()))
     {
+      const bool try_totality =
+        no_assumptions && !cmdline.isset("witness-lasso");
+      const bool exact_bdd =
+        try_totality && !bmc_bound && !cmdline.isset("coi");
+      if(exact_bdd && p.proof_via == "BDD CTL" && !total_for_bdd)
+        total_for_bdd = total_transition(
+          original_system, original_system.trans_expr, total_value);
       if(
-        no_assumptions && !bmc_bound && !cmdline.isset("witness-lasso") &&
-        !cmdline.isset("coi") &&
-        (p.proof_via == "BDD CTL, total relation" ||
-         (total && p.proof_via == "BDD CTL")))
+        exact_bdd && (p.proof_via == "BDD CTL, total relation" ||
+                      (p.proof_via == "BDD CTL" && *total_for_bdd)))
       {
         p.witness_certificate = certificate::TOTAL_BDD;
         messaget{messages}.status()
@@ -1049,12 +1098,24 @@ void certify_property_witnesses(
       auto bad = p.witness_trace ? p.witness_trace->get_min_failing_timeframe()
                                  : std::optional<std::size_t>{};
       if(
-        total && !cmdline.isset("witness-lasso") &&
+        try_totality &&
         (invariant(p.normalized_expr) ||
          !has_temporal_operator(p.normalized_expr) ||
          definitive_prefix(
            property_nnf(p.normalized_expr), !p.is_exists_path())))
       {
+        // Omitted definitions can be evaluated in dependency order to extend
+        // the reduced trace. Keep all constraints, including definitions
+        // whose RHS we cannot establish as total.
+        const auto reduced = cone_of_influence(
+          original_system.trans_expr,
+          {p.normalized_expr},
+          std::ref(total_value));
+        if(!total_transition(original_system, reduced.trans, total_value))
+        {
+          need_witness = true;
+          continue;
+        }
         // A COI witness is a projection. Establish a reachable full-model
         // bad prefix before relying on totality; do the same for traceless IC3.
         if(
