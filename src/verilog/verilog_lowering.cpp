@@ -1255,13 +1255,8 @@ exprt verilog_lowering_node(exprt expr)
   }
   else if(expr.id() == ID_equal || expr.id() == ID_notequal)
   {
-    // Equality of two unpacked arrays (1800-2017 7.6, 11.4.5). The
-    // operands are already lowered; some backends do not reliably compare
-    // array values that are built from element expressions (e.g. array
-    // slices), so expand the comparison element-wise into a conjunction of
-    // element equalities, which is backend-agnostic.
-    auto &binary_expr = to_binary_expr(expr);
-    auto &lhs_type = binary_expr.lhs().type();
+    const auto &binary_expr = to_binary_expr(node);
+    const auto &lhs_type = binary_expr.lhs().type();
 
     if(
       lhs_type.id() == ID_verilog_string && binary_expr.lhs().is_constant() &&
@@ -1273,9 +1268,14 @@ exprt verilog_lowering_node(exprt expr)
         .with_source_location(expr);
     }
 
+    // Compare the declared elements (1800-2017 7.4.3, 7.6 and 11.4.5).
+    // SMT array equality would also compare indices outside the Verilog
+    // bounds. This expansion also handles unpacked array slices.
+    const auto &array_kind = lhs_type.get(ID_C_verilog_type);
     if(
       lhs_type.id() == ID_array &&
-      lhs_type.get(ID_C_verilog_type) == ID_verilog_unpacked_array &&
+      (array_kind == ID_verilog_packed_array ||
+       array_kind == ID_verilog_unpacked_array) &&
       binary_expr.rhs().type() == lhs_type)
     {
       auto &array_type = to_verilog_array_type(lhs_type);
