@@ -38,10 +38,10 @@ namespace
 {
 constexpr std::uint64_t mib = 1024 * 1024;
 
-std::uint64_t witness_memory_budget(const cmdlinet &cmdline)
+std::optional<std::uint64_t> witness_memory_budget(const cmdlinet &cmdline)
 {
   if(!cmdline.isset("witness-lasso-memory"))
-    return 1536 * mib;
+    return {};
 
   const auto &arg = cmdline.get_value("witness-lasso-memory");
   std::uint64_t size;
@@ -1111,11 +1111,14 @@ void certify_property_witnesses(
   if(!need_witness)
     return;
 
+  const auto memory_budget = witness_memory_budget(cmdline);
   const char *reason = "could not start under its address-space limit";
   try
   {
-    const lasso_memory_limitt memory{witness_memory_budget(cmdline)};
-    if(memory.available())
+    std::optional<lasso_memory_limitt> memory;
+    if(memory_budget)
+      memory.emplace(*memory_budget);
+    if(!memory || memory->available())
     {
       certify_pending_lassos(
         solver_options,
@@ -1131,7 +1134,8 @@ void certify_property_witnesses(
   catch(const std::bad_alloc &)
   {
     // Report after restoring the caller's address-space limit.
-    reason = "exhausted its memory budget";
+    reason =
+      memory_budget ? "exhausted its memory budget" : "ran out of memory";
   }
   catch(const std::length_error &)
   {
