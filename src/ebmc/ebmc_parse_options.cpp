@@ -546,6 +546,7 @@ void ebmc_parse_optionst::help()
     "Methods:\n"
     " {y--finite-prefix}             \t use the original engine's finite-prefix witness semantics\n"
     " {y--witness-lasso} {uN}         \t maximum transitions for an infinite witness (default 48, or BMC bound + 48)\n"
+    " {y--witness-lasso-memory} {uMiB} \t address-space ceiling per certification process (default 1536 MiB)\n"
     " {y--k-induction}               \t do k-induction with k=bound\n"
     " {y--bdd}                       \t use (unbounded) BDD engine\n"
     " {y--ic3}                       \t use IC3 engine with options described below\n"
