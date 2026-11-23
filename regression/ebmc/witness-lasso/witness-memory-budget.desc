@@ -1,0 +1,10 @@
+CORE
+tail1.sv
+--bound 0 -D ALLOW_ALARM --witness-lasso 12 --witness-lasso-memory 1
+^tail\.p: witness lasso could not start under its address-space limit$
+^\[tail\.p\].*: INCONCLUSIVE$
+^EXIT=10$
+^SIGNAL=0$
+--
+certifying witness loop
+--

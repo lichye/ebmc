@@ -2,6 +2,7 @@
 
 #include <util/arith_tools.h>
 #include <util/expr_util.h>
+#include <util/simplify_expr.h>
 
 #include <temporal-logic/nnf.h>
 #include <trans-word-level/instantiate_word_level.h>
@@ -10,6 +11,8 @@
 #include <trans-word-level/trans_trace_word_level.h>
 #include <trans-word-level/unwind.h>
 #include <verilog/sva_expr.h>
+#include <verilog/verilog_bits.h>
+#include <verilog/verilog_rtl.h>
 
 #include "ebmc_error.h"
 #include "ebmc_solver_factory.h"
@@ -18,11 +21,139 @@
 #include "property_checker.h"
 
 #include <charconv>
+#include <cstdint>
+#include <fstream>
 #include <limits>
+#include <mutex>
+#include <new>
 #include <set>
+#include <stdexcept>
+#include <unordered_set>
+
+#ifndef _WIN32
+#  include <sys/resource.h>
+#endif
 
 namespace
 {
+constexpr std::uint64_t mib = 1024 * 1024;
+
+std::optional<std::uint64_t> witness_memory_budget(const cmdlinet &cmdline)
+{
+  if(!cmdline.isset("witness-lasso-memory"))
+    return {};
+
+  const auto &arg = cmdline.get_value("witness-lasso-memory");
+  std::uint64_t size;
+  const auto parsed =
+    std::from_chars(arg.data(), arg.data() + arg.size(), size);
+  if(
+    parsed.ec != std::errc{} || parsed.ptr != arg.data() + arg.size() ||
+    !size || size > std::numeric_limits<std::uint64_t>::max() / mib)
+    throw ebmc_errort{}
+      << "--witness-lasso-memory requires a positive size in MiB";
+  return size * mib;
+}
+
+#ifdef __linux__
+// An SMT solver is a child of EBMC and inherits its address-space limit.
+// Leave room for both processes and for cgroup charges outside their heaps.
+std::uint64_t cgroup_witness_memory_budget(std::uint64_t limit)
+{
+  std::ifstream cgroups("/proc/self/cgroup");
+  std::string line;
+  while(std::getline(cgroups, line))
+  {
+    if(line.compare(0, 4, "0::/") != 0)
+      continue;
+    auto path = line.substr(3);
+    while(!path.empty())
+    {
+      std::uint64_t bytes;
+      if(std::ifstream("/sys/fs/cgroup" + path + "/memory.max") >> bytes)
+      {
+        const auto reserve = std::min<std::uint64_t>(bytes / 4, 256 * mib);
+        limit = std::min(limit, (bytes - reserve) / 2);
+      }
+      path.resize(path.rfind('/'));
+    }
+    break;
+  }
+  return limit;
+}
+
+bool process_below_limit(std::uint64_t bytes)
+{
+  std::ifstream status("/proc/self/status");
+  std::string line;
+  while(std::getline(status, line))
+  {
+    if(line.compare(0, 7, "VmSize:") == 0)
+    {
+      const auto first = line.find_first_not_of(" \t", 7);
+      std::uint64_t kib;
+      if(first == std::string::npos)
+        break;
+      const auto parsed =
+        std::from_chars(line.data() + first, line.data() + line.size(), kib);
+      if(parsed.ec == std::errc{})
+        return kib < bytes / 1024;
+      break;
+    }
+  }
+  return false;
+}
+#endif
+
+class lasso_memory_limitt
+{
+public:
+  explicit lasso_memory_limitt(std::uint64_t limit)
+  {
+#if defined(RLIMIT_AS) && !defined(_WIN32)
+    if(getrlimit(RLIMIT_AS, &previous) != 0)
+      return;
+#  ifdef __linux__
+    limit = cgroup_witness_memory_budget(limit);
+#  endif
+    if(previous.rlim_cur != RLIM_INFINITY)
+      limit = std::min<std::uint64_t>(limit, previous.rlim_cur);
+#  ifdef __linux__
+    if(!process_below_limit(limit))
+      return;
+#  endif
+    if(limit >= std::numeric_limits<rlim_t>::max())
+      return;
+    const rlimit bounded{static_cast<rlim_t>(limit), previous.rlim_max};
+    active = setrlimit(RLIMIT_AS, &bounded) == 0;
+#else
+    (void)limit;
+#endif
+  }
+
+  ~lasso_memory_limitt()
+  {
+#if defined(RLIMIT_AS) && !defined(_WIN32)
+    if(active)
+      setrlimit(RLIMIT_AS, &previous);
+#endif
+  }
+
+  bool available() const
+  {
+    return active;
+  }
+
+private:
+  bool active = false;
+#if defined(RLIMIT_AS) && !defined(_WIN32)
+  // RLIMIT_AS is process-wide. Serialize scoped changes by linked callers.
+  inline static std::mutex limiter_mutex;
+  const std::unique_lock<std::mutex> lock{limiter_mutex};
+  rlimit previous{};
+#endif
+};
+
 bool invariant(const exprt &expr)
 {
   return (expr.id() == ID_AG || expr.id() == ID_G ||
@@ -89,6 +220,214 @@ bool definitive_prefix(const exprt &nnf, bool allow_pending)
           seq == ID_sva_strong || seq == ID_sva_weak);
 }
 
+// A definition may drive a whole current-frame wire or a constant, in-range
+// projection of it. For overlap and dependency analysis we need only a
+// consistent coordinate system, not the Verilog spelling of the indices.
+struct wire_locationt
+{
+  irep_idt name;
+  std::optional<verilog_rtl_slicet> slice;
+
+  bool overlaps(const wire_locationt &other) const
+  {
+    return name == other.name &&
+           (!slice || !other.slice || slice->overlaps(*other.slice));
+  }
+};
+
+std::optional<mp_integer> packed_width(const typet &type)
+{
+  if(can_cast_type<bitvector_typet>(type))
+    return to_bitvector_type(type).get_width();
+  return verilog_bits_opt(type);
+}
+
+bool ground_index(const exprt &expr)
+{
+  if(expr.is_constant())
+    return true;
+  if(
+    expr.id() != ID_plus && expr.id() != ID_minus &&
+    expr.id() != ID_unary_minus && expr.id() != ID_typecast)
+    return false;
+  return std::all_of(
+    expr.operands().begin(), expr.operands().end(), ground_index);
+}
+
+std::optional<mp_integer> constant_index(const exprt &expr)
+{
+  if(expr.is_constant())
+    return numeric_cast<mp_integer>(expr);
+  if(ground_index(expr))
+    return numeric_cast<mp_integer>(simplify_expr(expr, multi_namespacet{}));
+  return {};
+}
+
+const exprt *selected_constructor_operand(const exprt &expr)
+{
+  if(expr.id() == ID_member)
+  {
+    const auto &member = to_member_expr(expr);
+    const auto &compound = member.struct_op();
+    if(compound.id() == ID_struct && compound.type().id() == ID_struct)
+    {
+      const auto &type = to_struct_type(compound.type());
+      const auto component = type.component_number(member.get_component_name());
+      if(component < compound.operands().size())
+        return &compound.operands()[component];
+    }
+  }
+  else if(expr.id() == ID_index)
+  {
+    const auto &index = to_index_expr(expr);
+    if(index.array().id() == ID_array)
+    {
+      const auto part = constant_index(index.index());
+      if(part && *part >= 0 && *part < index.array().operands().size())
+        return &index.array().operands()[part->to_ulong()];
+    }
+  }
+  return nullptr;
+}
+
+std::optional<wire_locationt> wire_location(const exprt &expr)
+{
+  if(expr.id() == ID_symbol)
+    return wire_locationt{to_symbol_expr(expr).get_identifier(), {}};
+  if(const auto *operand = selected_constructor_operand(expr))
+    return wire_location(*operand);
+
+  const exprt *base;
+  std::optional<mp_integer> offset, width;
+  if(expr.id() == ID_index)
+  {
+    const auto &index = to_index_expr(expr);
+    base = &index.array();
+    if(base->type().id() != ID_array)
+      return {};
+    const auto size =
+      numeric_cast<mp_integer>(to_array_type(base->type()).size());
+    const auto part = constant_index(index.index());
+    width = packed_width(expr.type());
+    if(!size || !part || *part < 0 || *part >= *size || !width)
+      return {};
+    offset = *part * *width;
+  }
+  else if(expr.id() == ID_extractbit || expr.id() == ID_extractbits)
+  {
+    base = &expr.operands().front();
+    if(!can_cast_type<bitvector_typet>(base->type()))
+      return {};
+    offset = constant_index(expr.operands()[1]);
+    width = packed_width(expr.type());
+    if(
+      !offset || !width || *offset < 0 ||
+      *offset + *width > to_bitvector_type(base->type()).get_width())
+      return {};
+  }
+  else
+    return {};
+
+  if(*width <= 0)
+    return {};
+  auto location = wire_location(*base);
+  if(location)
+  {
+    if(location->slice)
+      *offset += location->slice->lower;
+    location->slice.emplace(*offset, *offset + *width - 1);
+  }
+  return location;
+}
+
+// These lowered operations give a value for every valuation of their inputs.
+// Array select/store, aggregate construction and bit-vector division,
+// including the backend's result for division by zero, impose no extra
+// restriction on the inputs. An unknown expression or next() fails closed.
+bool total_operation(const exprt &expr)
+{
+  const auto type = expr.type().id(), id = expr.id();
+  if(expr.is_constant())
+    return true;
+  if(
+    type != ID_bool && type != ID_signedbv && type != ID_unsignedbv &&
+    type != ID_bv && type != ID_floatbv && type != ID_array &&
+    type != ID_struct)
+    return false;
+  if(id == ID_div || id == ID_mod)
+    return type == ID_signedbv || type == ID_unsignedbv;
+  return id == ID_symbol || id == ID_nondet_symbol || id == ID_not ||
+         id == ID_and || id == ID_or || id == ID_xor || id == ID_implies ||
+         id == ID_equal || id == ID_notequal || id == ID_floatbv_plus ||
+         id == ID_bitnot || id == ID_bitand || id == ID_bitor ||
+         id == ID_bitxor || id == ID_plus || id == ID_minus || id == ID_mult ||
+         id == ID_unary_minus || id == ID_extractbits || id == ID_extractbit ||
+         id == ID_shl || id == ID_lshr || id == ID_ashr ||
+         id == ID_replication || id == ID_typecast || id == ID_if ||
+         id == ID_lt || id == ID_le || id == ID_gt || id == ID_ge ||
+         id == ID_concatenation || id == ID_array || id == ID_struct ||
+         id == ID_index || id == ID_member || id == ID_with ||
+         id == ID_zero_extend || id == ID_reduction_and ||
+         id == ID_reduction_or || id == ID_reduction_xor ||
+         (id == ID_constraint_select_one && !expr.operands().empty());
+}
+
+struct wire_definitiont
+{
+  wire_locationt target;
+  const exprt *value;
+};
+
+using wire_definition_mapt = std::map<irep_idt, std::vector<wire_definitiont>>;
+
+bool acyclic_wire_definitions(const wire_definition_mapt &wires)
+{
+  std::set<const wire_definitiont *> active, done;
+  std::function<bool(const wire_definitiont &)> acyclic =
+    [&](const wire_definitiont &wire)
+  {
+    if(done.count(&wire))
+      return true;
+    if(!active.insert(&wire).second)
+      return false;
+
+    std::vector<const exprt *> pending{wire.value};
+    std::unordered_set<const irept::dt *> visited;
+    while(!pending.empty())
+    {
+      const auto &expr = *pending.back();
+      pending.pop_back();
+      if(!visited.insert(&expr.read()).second)
+        continue;
+      // An in-range constant projection only depends on its own slice.
+      // A dynamic read visits the whole aggregate and the index expression.
+      if(const auto *operand = selected_constructor_operand(expr))
+        pending.push_back(operand);
+      else if(auto read = wire_location(expr))
+      {
+        auto defs = wires.find(read->name);
+        if(defs != wires.end())
+          for(const auto &definition : defs->second)
+            if(read->overlaps(definition.target) && !acyclic(definition))
+              return false;
+      }
+      else
+        for(const auto &op : expr.operands())
+          pending.push_back(&op);
+    }
+
+    active.erase(&wire);
+    done.insert(&wire);
+    return true;
+  };
+
+  for(const auto &entry : wires)
+    for(const auto &definition : entry.second)
+      if(!acyclic(definition))
+        return false;
+  return true;
+}
+
 // Sufficient syntactic totality criterion. A freely chosen next value is
 // allowed for an unassigned latch; written latches are distinct and each RHS
 // is a total current-frame bit-vector function. Initial conditions do not
@@ -139,43 +478,62 @@ bool total_transition(const transition_systemt &system)
     }
     return true;
   };
-  const auto total_value = [](const exprt &rhs)
+  std::unordered_set<const irept::dt *> checked;
+  const auto total_value = [&](const exprt &root)
   {
-    // Copying a value or assigning a constant of the destination's exact
-    // type is total, including arrays, floating point and aggregate state.
-    if(rhs.id() == ID_symbol || rhs.is_constant())
+    if(root.id() == ID_symbol)
       return true;
-    bool total = true;
-    rhs.visit_pre(
-      [&](const exprt &e)
-      {
-        const auto t = e.type().id(), id = e.id();
-        if(e.is_constant())
-          return;
-        if(
-          t != ID_bool && t != ID_signedbv && t != ID_unsignedbv &&
-          t != ID_floatbv)
-          total = false;
-        else if(
-          id != ID_constant && id != ID_symbol && id != ID_nondet_symbol &&
-          id != ID_not && id != ID_and && id != ID_or && id != ID_xor &&
-          id != ID_implies && id != ID_equal && id != ID_notequal &&
-          id != ID_floatbv_plus && id != ID_bitnot && id != ID_bitand &&
-          id != ID_bitor && id != ID_bitxor && id != ID_plus &&
-          id != ID_minus && id != ID_mult && id != ID_unary_minus &&
-          id != ID_extractbits && id != ID_extractbit && id != ID_shl &&
-          id != ID_lshr && id != ID_ashr && id != ID_replication &&
-          !(id == ID_constraint_select_one && !e.operands().empty()) &&
-          !(id == ID_div && e.operands().size() == 2 &&
-            to_binary_expr(e).rhs().is_constant() &&
-            !to_binary_expr(e).rhs().is_zero()) &&
-          id != ID_typecast && id != ID_if && id != ID_lt && id != ID_le &&
-          id != ID_gt && id != ID_ge && id != ID_concatenation)
-          total = false;
-      });
-    return total;
+    std::vector<const exprt *> pending{&root};
+    while(!pending.empty())
+    {
+      const auto &expr = *pending.back();
+      pending.pop_back();
+      if(!checked.insert(&expr.read()).second)
+        continue;
+      if(!total_operation(expr))
+        return false;
+      for(const auto &op : expr.operands())
+        pending.push_back(&op);
+    }
+    return true;
   };
-  std::map<irep_idt, const exprt *> wires;
+  const auto writable_wire =
+    [&](const exprt &lhs) -> std::optional<wire_locationt>
+  {
+    const auto location = wire_location(lhs);
+    if(location)
+    {
+      const auto *symbol = system.symbol_table.lookup(location->name);
+      if(symbol && !symbol->is_state_var)
+        return location;
+    }
+    return {};
+  };
+
+  wire_definition_mapt wires;
+  const auto occupied = [&](const wire_locationt &location)
+  {
+    auto it = wires.find(location.name);
+    return it != wires.end() && std::any_of(
+                                  it->second.begin(),
+                                  it->second.end(),
+                                  [&](const wire_definitiont &d)
+                                  { return location.overlaps(d.target); });
+  };
+  const auto define = [&](const wire_locationt &target, const exprt &rhs)
+  {
+    if(occupied(target))
+      return false;
+    wires[target.name].push_back({target, &rhs});
+    return true;
+  };
+
+  struct aliast
+  {
+    wire_locationt lhs, rhs;
+    const equal_exprt *equation;
+  };
+  std::vector<aliast> aliases;
   if(!all_conjuncts(
        tr.invar(),
        [&](const exprt &clause)
@@ -185,39 +543,49 @@ bool total_transition(const transition_systemt &system)
          const auto &eq = to_equal_expr(clause);
          if(eq.lhs().type() != eq.rhs().type())
            return false;
-         const auto define = [&](const exprt &lhs, const exprt &rhs)
+         auto lhs = writable_wire(eq.lhs());
+         auto rhs = writable_wire(eq.rhs());
+         if(!total_value(eq.lhs()) || !total_value(eq.rhs()))
+           return false;
+         if(eq.lhs() == eq.rhs())
+           return true;
+         if(lhs && rhs)
          {
-           if(lhs.id() != ID_symbol || !total_value(rhs))
-             return false;
-           auto id = lhs.get(ID_identifier);
-           auto sym = system.symbol_table.lookup(id);
-           return sym && !sym->is_state_var && wires.emplace(id, &rhs).second;
-         };
-         return define(eq.lhs(), eq.rhs()) || define(eq.rhs(), eq.lhs());
+           aliases.push_back({std::move(*lhs), std::move(*rhs), &eq});
+           return true;
+         }
+         return lhs ? define(*lhs, eq.rhs()) : rhs && define(*rhs, eq.lhs());
        }))
     return false;
-  // Acyclic wire definitions give a valuation for every current state/input.
-  std::set<irep_idt> active, done;
-  std::function<bool(irep_idt)> acyclic = [&](irep_idt id)
+
+  // Orient an alias away from an already defined end. When neither end is
+  // defined, defer it until all aliases connected to existing definitions
+  // have been processed, then choose a free root for the remaining component.
+  while(!aliases.empty())
   {
-    if(done.count(id))
-      return true;
-    if(!active.insert(id).second)
-      return false;
-    bool ok = true;
-    wires.at(id)->visit_pre(
-      [&](const exprt &e)
+    const auto before = aliases.size();
+    auto first_deferred = std::remove_if(
+      aliases.begin(),
+      aliases.end(),
+      [&](const aliast &alias)
       {
-        if(ok && e.id() == ID_symbol && wires.count(e.get(ID_identifier)))
-          ok = acyclic(e.get(ID_identifier));
+        const bool lhs = occupied(alias.lhs), rhs = occupied(alias.rhs);
+        if(lhs == rhs)
+          return false;
+        const auto &eq = *alias.equation;
+        return lhs ? define(alias.rhs, eq.lhs()) : define(alias.lhs, eq.rhs());
       });
-    active.erase(id);
-    done.insert(id);
-    return ok;
-  };
-  for(const auto &wire : wires)
-    if(!acyclic(wire.first))
-      return false;
+    aliases.erase(first_deferred, aliases.end());
+    if(aliases.size() == before)
+    {
+      const auto &alias = aliases.back();
+      if(occupied(alias.rhs) || !define(alias.lhs, alias.equation->rhs()))
+        return false;
+      aliases.pop_back();
+    }
+  }
+  if(!acyclic_wire_definitions(wires))
+    return false;
   return all_conjuncts(
     tr.trans(),
     [&](const exprt &clause)
@@ -432,7 +800,11 @@ void certify(
     property.inconclusive();
     return;
   case decision_proceduret::resultt::D_ERROR:
-    property.failure("solver error while certifying witness loop");
+    message.status() << property.name
+                     << ": witness lasso solver did not complete within the "
+                        "certification resource limits"
+                     << messaget::eom;
+    property.inconclusive();
     return;
   case decision_proceduret::resultt::D_SATISFIABLE:
     break;
@@ -470,11 +842,127 @@ void certify(
 
   property.failure("solver did not return the witness loop or bad frame");
 }
+
+bool needs_lasso(const ebmc_propertiest::propertyt &p)
+{
+  return p.witness_certificate ==
+           ebmc_propertiest::propertyt::witness_certificatet::NONE &&
+         !p.is_assumption() &&
+         (p.is_exists_path() ? p.is_proved() : p.is_refuted());
+}
+
+void certify_pending_lassos(
+  const cmdlinet &solver_options,
+  const transition_systemt &original_system,
+  property_checker_resultt &result,
+  std::size_t budget,
+  std::optional<std::size_t> bmc_bound,
+  message_handlert &messages,
+  const witness_lasso_observert &observe_lasso)
+{
+  using certificate = property_checker_resultt::propertyt::witness_certificatet;
+  // The candidate engine has finished. Instrument the certification model
+  // privately so linked callers can reuse their model and property batch.
+  auto system = original_system;
+  system.main_symbol =
+    &system.symbol_table.lookup_ref(original_system.main_symbol->name);
+  ebmc_propertiest batch;
+  batch.properties = result.properties;
+  // Model past in active assumptions and goals still requiring a certificate.
+  // A discharged sibling's private history is not part of the original machine.
+  for(auto &p : batch.properties)
+    if(
+      !p.is_assumption() && !p.is_assumed() &&
+      (p.witness_certificate != certificate::NONE ||
+       !(p.is_exists_path() ? p.is_proved() : p.is_refuted())))
+      p.normalized_expr = true_exprt();
+  bool compiled = true;
+  for(const auto &p : batch.properties)
+    if(
+      !p.is_disabled() && p.is_assumption() && p.normalized_expr.is_true() &&
+      has_temporal_operator(to_unary_expr(p.original_expr).op()))
+      compiled = false; // fairness erased by a liveness-to-safety transform
+
+  try
+  {
+    instrument_past(system, batch);
+    instrument_buechi(system, batch, true, messages, true);
+  }
+  catch(const ebmc_errort &error)
+  {
+    messaget{messages}.warning() << error.what() << messaget::eom;
+    compiled = false;
+  }
+  std::vector<const ebmc_propertiest::propertyt *> assumptions;
+  bool supported_assumptions = compiled;
+  for(const auto &p : batch.properties)
+    if(!p.is_disabled() && (p.is_assumption() || p.is_assumed()))
+    {
+      if(p.is_assumed() && invariant(p.normalized_expr))
+        assumptions.push_back(&p);
+      else
+        supported_assumptions = false;
+    }
+
+  // Keep the primary engine's transition system and solver selection intact.
+  // An engine may ignore an output flag and return a real verdict. The
+  // secondary query always needs a solver, never a formula writer.
+  auto trans = system.trans_expr;
+  if(solver_options.isset("cvc5"))
+    split_state_muxes(trans.trans());
+
+  for(auto &p : batch.properties)
+  {
+    // An engine can mark an earlier finite refutation inconclusive after
+    // encountering an unsupported assumption. Do not export that prefix.
+    if(p.is_inconclusive())
+      p.witness_trace.reset();
+    if(!needs_lasso(p))
+      continue;
+
+    auto horizon = bmc_bound;
+    if(
+      !horizon && !invariant(p.normalized_expr) &&
+      bmc_supports_property(p.normalized_expr))
+    {
+      // Checking an unbounded goal on an actual lasso is sound for the
+      // path fragment accepted by native BMC. Branching CTL is excluded.
+      horizon = p.witness_trace && !p.witness_trace->states.empty()
+                  ? std::min(budget, p.witness_trace->states.size() - 1)
+                  : budget;
+    }
+    p.witness_trace.reset();
+    if(!supported_assumptions || (!horizon && !invariant(p.normalized_expr)))
+    {
+      messaget{messages}.status()
+        << p.name << ": witness loop requires invariant monitor predicates"
+        << messaget::eom;
+      p.inconclusive();
+      continue;
+    }
+
+    certify(
+      system,
+      trans,
+      namespacet{original_system.symbol_table},
+      assumptions,
+      p,
+      budget,
+      horizon,
+      ebmc_solver_factory(solver_options),
+      messages,
+      observe_lasso);
+  }
+  auto source = batch.properties.begin();
+  for(auto &p : result.properties)
+    p.copy_results_from(*source++);
+}
 } // namespace
 
 std::optional<std::size_t>
 witness_lasso_budget(const cmdlinet &cmdline, std::optional<std::size_t> depth)
 {
+  (void)witness_memory_budget(cmdline);
   if(cmdline.isset("finite-prefix"))
   {
     if(cmdline.isset("witness-lasso"))
@@ -623,101 +1111,43 @@ void certify_property_witnesses(
   if(!need_witness)
     return;
 
-  // The candidate engine has finished. Instrument the certification model
-  // privately so linked callers can reuse their model and property batch.
-  auto system = original_system;
-  system.main_symbol =
-    &system.symbol_table.lookup_ref(original_system.main_symbol->name);
-  ebmc_propertiest batch;
-  batch.properties = result.properties;
-  // Model past in active assumptions and goals still requiring a certificate.
-  // A discharged sibling's private history is not part of the original machine.
-  for(auto &p : batch.properties)
-    if(
-      !p.is_assumption() && !p.is_assumed() &&
-      (p.witness_certificate != certificate::NONE ||
-       !(p.is_exists_path() ? p.is_proved() : p.is_refuted())))
-      p.normalized_expr = true_exprt();
-  bool compiled = true;
-  for(const auto &p : batch.properties)
-    if(
-      !p.is_disabled() && p.is_assumption() && p.normalized_expr.is_true() &&
-      has_temporal_operator(to_unary_expr(p.original_expr).op()))
-      compiled = false; // fairness erased by a liveness-to-safety transform
-
+  const auto memory_budget = witness_memory_budget(cmdline);
+  const char *reason = "could not start under its address-space limit";
   try
   {
-    instrument_past(system, batch);
-    instrument_buechi(system, batch, true, messages, true);
+    std::optional<lasso_memory_limitt> memory;
+    if(memory_budget)
+      memory.emplace(*memory_budget);
+    if(!memory || memory->available())
+    {
+      certify_pending_lassos(
+        solver_options,
+        original_system,
+        result,
+        *budget,
+        bmc_bound,
+        messages,
+        observe_lasso);
+      return;
+    }
   }
-  catch(const ebmc_errort &error)
+  catch(const std::bad_alloc &)
   {
-    messaget{messages}.warning() << error.what() << messaget::eom;
-    compiled = false;
+    // Report after restoring the caller's address-space limit.
+    reason =
+      memory_budget ? "exhausted its memory budget" : "ran out of memory";
   }
-  std::vector<const ebmc_propertiest::propertyt *> assumptions;
-  bool supported_assumptions = compiled;
-  for(const auto &p : batch.properties)
-    if(!p.is_disabled() && (p.is_assumption() || p.is_assumed()))
-    {
-      if(p.is_assumed() && invariant(p.normalized_expr))
-        assumptions.push_back(&p);
-      else
-        supported_assumptions = false;
-    }
-
-  // Keep the primary engine's transition system and solver selection intact.
-  // An engine may ignore an output flag and return a real verdict. The
-  // secondary query always needs a solver, never a formula writer.
-  auto trans = system.trans_expr;
-  if(cmdline.isset("cvc5"))
-    split_state_muxes(trans.trans());
-
-  for(auto &p : batch.properties)
+  catch(const std::length_error &)
   {
-    // An engine can mark an earlier finite refutation inconclusive after
-    // encountering an unsupported assumption. Do not export that prefix.
-    if(p.is_inconclusive())
-      p.witness_trace.reset();
-    if(
-      p.witness_certificate != certificate::NONE || p.is_assumption() ||
-      !(p.is_exists_path() ? p.is_proved() : p.is_refuted()))
-      continue;
-
-    auto horizon = bmc_bound;
-    if(
-      !horizon && !invariant(p.normalized_expr) &&
-      bmc_supports_property(p.normalized_expr))
-    {
-      // Checking an unbounded goal on an actual lasso is sound for the
-      // path fragment accepted by native BMC. Branching CTL is excluded.
-      horizon = p.witness_trace && !p.witness_trace->states.empty()
-                  ? std::min(*budget, p.witness_trace->states.size() - 1)
-                  : *budget;
-    }
-    p.witness_trace.reset();
-    if(!supported_assumptions || (!horizon && !invariant(p.normalized_expr)))
-    {
-      messaget{messages}.status()
-        << p.name << ": witness loop requires invariant monitor predicates"
-        << messaget::eom;
-      p.inconclusive();
-      continue;
-    }
-
-    certify(
-      system,
-      trans,
-      namespacet{original_system.symbol_table},
-      assumptions,
-      p,
-      *budget,
-      horizon,
-      ebmc_solver_factory(solver_options),
-      messages,
-      observe_lasso);
+    // A requested horizon can exceed the size of a solver container.
+    reason = "exceeded the solver's representable size";
   }
-  auto source = batch.properties.begin();
   for(auto &p : result.properties)
-    p.copy_results_from(*source++);
+    if(needs_lasso(p))
+    {
+      p.witness_trace.reset();
+      p.inconclusive();
+      messaget{messages}.status()
+        << p.name << ": witness lasso " << reason << messaget::eom;
+    }
 }
