@@ -1,0 +1,10 @@
+CORE
+undriven_report_output_slice.sv
+--undriven-report
+^UNDRIVEN\tmain\.partial\[5:4\]\t.*undriven_report_output_slice\.sv:6$
+^EXIT=0$
+^SIGNAL=0$
+--
+^UNDRIVEN\tmain\.partial\[[0-3]
+^UNDRIVEN\tmain\.low_only\b
+Generating Decision Problem
