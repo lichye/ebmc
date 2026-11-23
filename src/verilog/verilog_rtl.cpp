@@ -190,6 +190,7 @@ protected:
   {
     DEFINITION,
     CONSTRAINT,
+    INPUT_PORT,
     OUTPUT_PORT
   };
 
@@ -4844,7 +4845,7 @@ verilog_rtlt::undriven_mapt verilog_rtl_buildert::find_undriven(bool only_reads)
   for(const auto &port : ports)
     if(port.input())
       inputs.insert(port.identifier());
-  for(const auto &id : declared_nets)
+  const auto record_drive_ranges = [&](const irep_idt &id)
   {
     const auto &net = ns.lookup(id);
     const auto kind = net.type.get("#net_kind");
@@ -4853,7 +4854,7 @@ verilog_rtlt::undriven_mapt verilog_rtl_buildert::find_undriven(bool only_reads)
       kind == ID_trireg || kind == ID_supply0 || kind == ID_supply1 ||
       (rtl.forced.count(id) && !net_drivers.count(id) &&
        !rtl.identifier_map.count(id)))
-      continue;
+      return;
     auto &ranges = driven[id];
     auto pending = net_drivers.find(id);
     if(pending != net_drivers.end())
@@ -4864,6 +4865,16 @@ verilog_rtlt::undriven_mapt verilog_rtl_buildert::find_undriven(bool only_reads)
       for(const auto &d : definitions->second)
         ranges.push_back(d.first);
     ranges = merged_ranges(std::move(ranges));
+  };
+  for(const auto &id : declared_nets)
+    record_drive_ranges(id);
+  if(only_reads)
+  {
+    // An output port can turn a variable into a wire while driving only a
+    // slice of it. Report the uncovered reads without changing const lowering.
+    for(const auto &id : rtl.forced)
+      if(rtl.variables.count(id))
+        record_drive_ranges(id);
   }
 
   // A bidirectional port and its actual have the same physical drivers.
@@ -4894,24 +4905,69 @@ verilog_rtlt::undriven_mapt verilog_rtl_buildert::find_undriven(bool only_reads)
 
   if(only_reads)
   {
-    auto read = [&](const exprt &expr)
+    // Forwarding a variable slice into a child input reads only the bits
+    // referenced downstream of that port. In particular, an oversized
+    // input can carry unused padding. Preserve the existing scan for nets.
+    std::map<irep_idt, lhst> forwarded_ports;
+    for(const auto &entry : net_drivers)
+    {
+      const auto &drivers = entry.second;
+      if(
+        drivers.size() != 1 ||
+        drivers.front().kind != net_assignment_kindt::INPUT_PORT)
+        continue;
+      const auto &drive = drivers.front().drive;
+      if(!(drive.slice == whole_slice(ns.lookup(entry.first).symbol_expr())))
+        continue;
+      try
+      {
+        auto actual = decompose(
+          drive.value,
+          [this](const exprt &index) { return constant_index(index); });
+        if(!actual.has_value())
+          continue;
+        const auto &id = actual->symbol.get_identifier();
+        if(
+          id != entry.first && rtl.variables.count(id) && driven.count(id) &&
+          actual->slice.width() == drive.slice.width() &&
+          actual->slice.lower >= 0 &&
+          actual->slice.higher < get_width(actual->symbol.type()))
+          forwarded_ports.emplace(entry.first, std::move(*actual));
+      }
+      catch(const errort &)
+      {
+        // As for a read with unresolved indices, scan the expression below.
+      }
+    }
+
+    auto read = [&](const exprt &expr, const irep_idt &forwarded = irep_idt{})
     {
       std::set<irep_idt> ids;
       expr.visit_pre(
         [&](const exprt &op)
         {
-          if(
-            op.id() == ID_symbol &&
-            driven.count(to_symbol_expr(op).get_identifier()))
-            ids.insert(to_symbol_expr(op).get_identifier());
+          if(op.id() == ID_symbol)
+          {
+            const auto &id = to_symbol_expr(op).get_identifier();
+            if(
+              id != forwarded &&
+              (driven.count(id) || forwarded_ports.count(id)))
+              ids.insert(id);
+          }
         });
       for(const auto &id : ids)
         collect_reads(
           expr, id, whole_slice(ns.lookup(id).symbol_expr()), reads[id]);
     };
     for(const auto &entry : net_drivers)
+    {
+      const auto port = forwarded_ports.find(entry.first);
+      const auto forwarded = port == forwarded_ports.end()
+                               ? irep_idt{}
+                               : port->second.symbol.get_identifier();
       for(const auto &d : entry.second)
-        read(d.drive.value);
+        read(d.drive.value, forwarded);
+    }
     for(const auto &entry : rtl.identifier_map)
       for(const auto &d : entry.second)
         read(d.second.value);
@@ -4925,6 +4981,14 @@ verilog_rtlt::undriven_mapt verilog_rtl_buildert::find_undriven(bool only_reads)
     for(const auto &port : ports)
       if(port.output() && !port.input() && driven.count(port.identifier()))
         read(ns.lookup(port.identifier()).symbol_expr());
+
+    for(const auto &port : forwarded_ports)
+    {
+      const auto &actual = port.second;
+      for(const auto &slice : reads[port.first])
+        reads[actual.symbol.get_identifier()].emplace_back(
+          actual.slice.lower + slice.lower, actual.slice.lower + slice.higher);
+    }
   }
   for(auto &entry : driven)
   {
@@ -5905,12 +5969,16 @@ void verilog_rtl_buildert::build_port_connection(
 
   statet state;
   record_forced(lhs, instance_identifier);
+  auto kind = net_assignment_kindt::CONSTRAINT;
+  if(port.direction() == ID_input)
+    kind = net_assignment_kindt::INPUT_PORT;
+  else if(port.direction() == ID_output)
+    kind = net_assignment_kindt::OUTPUT_PORT;
   net_assignment(
     substitute(std::move(lhs), state),
     substitute(std::move(rhs), state),
     source_location,
-    port.direction() == ID_output ? net_assignment_kindt::OUTPUT_PORT
-                                  : net_assignment_kindt::CONSTRAINT);
+    kind);
 }
 
 /*******************************************************************\
