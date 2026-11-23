@@ -165,9 +165,12 @@ void instrument_buechi(
     {
       namespacet ns(transition_system.symbol_table);
       const auto property_symbol = ns.lookup(property.identifier);
-      if(functional_assertions && !assumed && !uses_local &&
-         !property.is_exists_path() &&
-         instrument_regular_sequence(transition_system, property, property_symbol))
+      // This monitor implements the regular assertion directly and avoids
+      // expanding the SERE in Spot, independently of the checking engine.
+      if(
+        !assumed && !uses_local && !property.is_exists_path() &&
+        instrument_regular_sequence(
+          transition_system, property, property_symbol))
       {
         message.debug() << "Using a functional regular sequence monitor"
                         << messaget::eom;

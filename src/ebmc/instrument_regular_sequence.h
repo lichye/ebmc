@@ -4,7 +4,8 @@
 #include "ebmc_properties.h"
 #include "transition_system.h"
 
-/// Install a functional safety monitor for a nonempty regular assertion.
+/// Install a functional safety monitor for a nonempty regular assertion,
+/// optionally conjoined with current-sample predicates.
 bool instrument_regular_sequence(
   transition_systemt &,
   ebmc_propertiest::propertyt &,

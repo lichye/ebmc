@@ -1,0 +1,7 @@
+CORE
+w10.sv
+--top w10 --reset w10.rst --buechi --k-induction --bound 11
+^w10\.p: finite bad frame 11 has an infinite extension by totality$
+^\[w10\.p\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
