@@ -1,0 +1,13 @@
+CORE
+multidimensional_array_equality.sv
+--systemverilog --top main --bound 1
+^\[main\.packed_hier_eq\] .*: PROVED up to bound 1$
+^\[main\.packed_hier_ne\] .*: PROVED up to bound 1$
+^\[main\.packed_local_eq\] .*: PROVED up to bound 1$
+^\[main\.packed_local_ne\] .*: PROVED up to bound 1$
+^\[main\.unpacked_hier_eq\] .*: PROVED up to bound 1$
+^\[main\.unpacked_hier_ne\] .*: PROVED up to bound 1$
+^\[main\.unpacked_local_eq\] .*: PROVED up to bound 1$
+^\[main\.unpacked_local_ne\] .*: PROVED up to bound 1$
+^EXIT=0$
+^SIGNAL=0$
