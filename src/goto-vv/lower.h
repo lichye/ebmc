@@ -94,6 +94,8 @@ public:
   exprt literal(const SVInt &v, const typet &t) const;
   ConstantValue eval_known(const Expression &e) const;
   exprt expr(const Expression &e, const exprt *compound_target = nullptr);
+  std::optional<exprt>
+  dynamic_packed_write(const AssignmentExpression &assignment);
   exprt stmt(const Statement &s);
   exprt counted_loop(const VariableSymbol &index, const ForLoopStatement &loop);
   exprt declare_automatic(const VariableSymbol &variable);

@@ -1,0 +1,8 @@
+g_lane\[0\].p_selected PROVED up to bound 3
+g_lane\[1\].p_selected PROVED up to bound 3
+g_lane\[2\].p_selected PROVED up to bound 3
+g_lane\[3\].p_selected PROVED up to bound 3
+p_all PROVED up to bound 3
+p_oob PROVED up to bound 3
+p_wrong REFUTED
+p_wrong_oob REFUTED

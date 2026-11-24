@@ -1,4 +1,7 @@
 #include "lower.h"
+
+#include <bit>
+
 namespace vv
 {
 namespace
@@ -75,6 +78,52 @@ ConstantValue compilert::eval_known(const Expression &e) const
     if(local.constant)
       context.createLocal(&variable->as<VariableSymbol>(), local.constant);
   return e.eval(context);
+}
+
+std::optional<exprt>
+compilert::dynamic_packed_write(const AssignmentExpression &assignment)
+{
+  const auto *element = assignment.left().as_if<ElementSelectExpression>();
+  if(
+    !element || !assignment.isNonBlocking() || assignment.timingControl ||
+    element->value().kind != ExpressionKind::NamedValue)
+    return {};
+  const auto *array =
+    element->value().type->getCanonicalType().as_if<PackedArrayType>();
+  if(!array || !has_packed_elements(*array))
+    return {};
+  const auto &selector = element->selector();
+  if(!selector.type->isIntegral() || eval_known(selector).isInteger())
+    return {};
+
+  const auto stride = array->elementType.getBitWidth();
+  // Keep every original index and declared endpoint representable, including
+  // their signed difference and its product with the element width.
+  const auto index_width =
+    std::max<std::size_t>(std::size_t{selector.type->getBitWidth()} + 1, 33);
+  const auto wide_type =
+    signedbv_typet(index_width + 1 + std::bit_width(stride));
+  const auto index =
+    typecast_exprt::conditional_cast(expr(selector), wide_type);
+  auto in_range = and_exprt(
+    binary_relation_exprt(
+      index, ID_ge, from_integer(array->range.lower(), wide_type)),
+    binary_relation_exprt(
+      index, ID_le, from_integer(array->range.upper(), wide_type)));
+  const auto right = from_integer(array->range.right, wide_type);
+  auto offset = array->range.isDescending() ? minus_exprt(index, right)
+                                            : minus_exprt(right, index);
+  auto lhs = verilog_indexed_part_select_plus_or_minus_exprt(
+    ID_verilog_indexed_part_select_plus,
+    expr(element->value()),
+    mult_exprt(std::move(offset), from_integer(stride, wide_type)),
+    index_constant(stride),
+    type(*element->type, element->sourceRange.start()));
+  lhs.add_source_location() = loc(element->sourceRange.start());
+  auto write = item(
+    ID_verilog_non_blocking_assign, {std::move(lhs), expr(assignment.right())});
+  write.add_source_location() = loc(assignment.sourceRange.start());
+  return item(ID_if, {std::move(in_range), std::move(write)});
 }
 
 exprt compilert::expr(const Expression &e, const exprt *compound_target)

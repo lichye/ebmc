@@ -468,6 +468,11 @@ exprt compilert::stmt(const Statement &s)
           a.left().sourceRange.start(),
           "unsupported compound assignment target");
     }
+    if(auto write = dynamic_packed_write(a))
+    {
+      r = std::move(*write);
+      break;
+    }
     auto lhs = expr(a.left());
     // The typed RHS reads this target in the current procedural state.
     auto rhs = expr(a.right(), a.op ? &lhs : nullptr);

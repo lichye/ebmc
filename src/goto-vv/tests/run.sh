@@ -50,15 +50,18 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
   direct_src="$src"
+  direct_flags=()
   if [[ $top == packed_select ]]; then
     direct_src="$front/tests/packed_select_flat.sv"
+  elif [[ $top == packed_write ]]; then
+    direct_flags=(-D NATIVE_STATIC_WRITE_REFERENCE)
   fi
-  run "$top.direct" "$eb" --top "$top" --undriven seq --bound 3 --trace "$direct_src"
+  run "$top.direct" "$eb" --top "$top" --undriven seq --bound 3 --trace "${direct_flags[@]}" "$direct_src"
   run "$top.typed" "$eb" --undriven seq --bound 3 --trace "$top-check.vv"
   while read -r name expected; do
     compare "$top.direct" "$top.typed" "$top.$name" "$expected"
