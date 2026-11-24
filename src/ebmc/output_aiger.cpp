@@ -8,11 +8,20 @@ Author: Daniel Kroening, dkr@amazon.com
 
 #include "output_aiger.h"
 
+#include <util/output_file.h>
+
 #include <solvers/prop/literal_expr.h>
 #include <trans-netlist/netlist.h>
 
+#include "ebmc_error.h"
+#include "ebmc_properties.h"
+
+#include <limits>
+#include <map>
+#include <memory>
 #include <ostream>
 #include <string>
+#include <unordered_set>
 
 extern "C"
 {
@@ -76,9 +85,107 @@ invariant_literal(const std::optional<exprt> &netlist_expr)
   return to_literal_expr(body).get_literal();
 }
 
-void output_aiger(const netlistt &netlist, std::ostream &out)
+struct aiger_initialt
 {
-  aiger *aig = aiger_init();
+  std::map<unsigned, unsigned> resets;
+  bool needs_guard = false;
+};
+
+// A conjunction of signed latch literals can be represented by native resets.
+// Keep any remaining relation, including a contradiction, as a first-frame
+// constraint.
+static aiger_initialt classify_initial(const netlistt &netlist)
+{
+  aiger_initialt result;
+  bvt pending = netlist.initial;
+  std::unordered_set<unsigned> expanded;
+  while(!pending.empty())
+  {
+    const auto literal = pending.back();
+    pending.pop_back();
+    if(literal.is_true())
+      continue;
+
+    if(literal.is_false())
+      result.needs_guard = true;
+    else if(netlist.var_map.latches.count(literal.var_no()) != 0)
+    {
+      const unsigned reset = literal.sign() ? aiger_false : aiger_true;
+      const auto entry = result.resets.emplace(literal.var_no(), reset).first;
+      if(entry->second != reset)
+        result.needs_guard = true;
+    }
+    else if(!literal.sign() && netlist.get_node(literal).is_and())
+    {
+      if(expanded.insert(literal.var_no()).second)
+      {
+        const auto &node = netlist.get_node(literal);
+        pending.push_back(node.a);
+        pending.push_back(node.b);
+      }
+    }
+    else
+      result.needs_guard = true;
+  }
+  return result;
+}
+
+static unsigned fresh_aiger_literal(const aiger &model)
+{
+  if(model.maxvar >= (std::numeric_limits<unsigned>::max() >> 1))
+    throw ebmc_errort{} << "AIGER: no room for initial-state guard literals";
+  return (model.maxvar + 1) << 1;
+}
+
+static void add_initial_guard(aiger *aig, const bvt &initial)
+{
+  const auto started = fresh_aiger_literal(*aig);
+  aiger_add_latch(aig, started, aiger_true, nullptr);
+  aiger_add_reset(aig, started, aiger_false);
+
+  for(auto literal : initial)
+  {
+    if(literal.is_true())
+      continue;
+
+    // started || literal holds unconditionally from frame 1 onward.
+    const auto violated = fresh_aiger_literal(*aig);
+    aiger_add_and(aig, violated, started ^ 1, to_aiger_lit(!literal));
+    aiger_add_constraint(aig, violated ^ 1, nullptr);
+  }
+}
+
+void output_aiger(
+  const netlistt &netlist,
+  const ebmc_propertiest &properties,
+  const std::string &filename)
+{
+  const std::unique_ptr<aiger, decltype(&aiger_reset)> model(
+    aiger_init(), aiger_reset);
+  auto *aig = model.get();
+
+  // The netlist stores normalized expressions without the assume wrapper.
+  for(const auto &property : properties.properties)
+  {
+    if(property.is_disabled())
+      continue;
+
+    auto entry = netlist.properties.find(property.identifier);
+    auto literal = entry == netlist.properties.end()
+                     ? std::nullopt
+                     : invariant_literal(entry->second);
+    if(!literal.has_value() || property.is_exists_path())
+      throw ebmc_errort{}.with_location(property.location)
+        << "AIGER: unsupported "
+        << (property.is_assumption() ? "assumption" : "property") << " '"
+        << property.name << "' (expected always with a non-temporal operand)";
+
+    const auto name = aiger_symbol_name(id2string(property.identifier));
+    if(property.is_assumption())
+      aiger_add_constraint(aig, to_aiger_lit(*literal), name.c_str());
+    else
+      aiger_add_bad(aig, to_aiger_lit(!*literal), name.c_str());
+  }
 
   // Add inputs
   for(auto var_no : netlist.var_map.inputs)
@@ -105,6 +212,7 @@ void output_aiger(const netlistt &netlist, std::ostream &out)
     aiger_add_input(aig, to_aiger_lit(literalt{var_no, false}), nullptr);
 
   // Add latches
+  const auto initial = classify_initial(netlist);
   for(auto var_no : netlist.var_map.latches)
   {
     unsigned lit = to_aiger_lit(literalt{var_no, false});
@@ -114,8 +222,10 @@ void output_aiger(const netlistt &netlist, std::ostream &out)
     literalt next = netlist.var_map.get_next(it->second);
     unsigned next_lit = to_aiger_lit(next);
     aiger_add_latch(aig, lit, next_lit, nullptr);
-    // reset to 0
-    aiger_add_reset(aig, lit, 0);
+    const auto reset = initial.resets.find(var_no);
+    // An AIGER reset equal to the latch literal leaves its value free.
+    aiger_add_reset(
+      aig, lit, reset == initial.resets.end() ? lit : reset->second);
   }
 
   // Add AND gates
@@ -132,11 +242,18 @@ void output_aiger(const netlistt &netlist, std::ostream &out)
   }
 
   // Add constraints
+  for(auto l : netlist.constraints)
+    if(!l.is_true())
+      aiger_add_constraint(aig, to_aiger_lit(l), nullptr);
+
   for(auto l : netlist.transition)
   {
     unsigned lit = to_aiger_lit(l);
     aiger_add_constraint(aig, lit, nullptr);
   }
+
+  if(initial.needs_guard)
+    add_initial_guard(aig, netlist.initial);
 
   // Add module outputs. These are circuit outputs in the AIGER
   // sense (e.g. the product bits of a multiplier), as consumed by
@@ -158,20 +275,9 @@ void output_aiger(const netlistt &netlist, std::ostream &out)
     }
   }
 
-  // Add properties as bad state outputs.
-  // A bad state is a state that violates the property,
-  // i.e., the negation of the property body literal.
-  for(auto &[id, netlist_expr] : netlist.properties)
-  {
-    auto l = invariant_literal(netlist_expr);
-    if(l.has_value())
-    {
-      unsigned bad_lit = to_aiger_lit(!l.value());
-      aiger_add_bad(aig, bad_lit, aiger_symbol_name(id2string(id)).c_str());
-    }
-  }
-
   // Write in ASCII mode to the stream
+  output_filet output_file{filename};
+  auto &out = output_file.stream();
   auto put_fn = [](char ch, void *s) -> int
   {
     auto *os = static_cast<std::ostream *>(s);
@@ -180,6 +286,4 @@ void output_aiger(const netlistt &netlist, std::ostream &out)
   };
 
   aiger_write_generic(aig, aiger_ascii_mode, &out, put_fn);
-
-  aiger_reset(aig);
 }

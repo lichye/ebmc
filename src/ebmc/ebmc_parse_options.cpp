@@ -177,7 +177,9 @@ int ebmc_parse_optionst::doit()
   try
   {
     expand_command_files(cmdline);
-    if(cmdline.isset("undriven-report") || cmdline.isset("btor2"))
+    if(
+      cmdline.isset("undriven-report") || cmdline.isset("btor2") ||
+      cmdline.isset("aiger"))
       ui_message_handler.set_verbosity(messaget::M_WARNING);
     else
       log_version_and_architecture("EBMC", EBMC_VERSION);
@@ -440,11 +442,16 @@ int ebmc_parse_optionst::doit()
 #ifdef _WIN32
       throw ebmc_errort() << "No support for AIGER on Windows";
 #else
+      for(const auto &name : cmdline.get_values("property"))
+        for(const auto &property : properties.properties)
+          if(property.name == name && property.is_assumption())
+            throw ebmc_errort{}.with_location(property.location)
+              << "AIGER: '" << name << "' is an assumption, not an assertion";
+
       auto netlist = make_netlist(
         transition_system, properties, cmdline, ui_message_handler);
-      auto filename = cmdline.value_opt("outfile").value_or("-");
-      output_filet output_file{filename};
-      output_aiger(netlist, output_file.stream());
+      output_aiger(
+        netlist, properties, cmdline.value_opt("outfile").value_or("-"));
       return 0;
 #endif
     }

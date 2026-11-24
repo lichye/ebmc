@@ -1,0 +1,11 @@
+CORE
+assume-count.sv
+--aiger --property main.a_safe
+^aag [0-9]+ 4 2 0 [0-9]+ 1 2$
+^b0 Verilog::\$root.main.a_safe$
+^c0 Verilog::\$root.main.without_wrong$
+^c1 Verilog::\$root.main.with_ready$
+^EXIT=0$
+^SIGNAL=0$
+--
+^b[1-9]

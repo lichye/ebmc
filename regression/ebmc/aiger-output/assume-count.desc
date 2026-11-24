@@ -1,0 +1,13 @@
+CORE
+assume-count.sv
+--aiger
+^aag [0-9]+ 4 2 0 [0-9]+ 3 2$
+^b0 Verilog::\$root.main.z_late$
+^b1 Verilog::\$root.main.a_safe$
+^b2 Verilog::\$root.main.m_immediate$
+^c0 Verilog::\$root.main.without_wrong$
+^c1 Verilog::\$root.main.with_ready$
+^EXIT=0$
+^SIGNAL=0$
+--
+^b[0-9]+ .*main\.(with_ready|without_wrong)
