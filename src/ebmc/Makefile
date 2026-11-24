@@ -31,6 +31,7 @@ SRC = \
       main.cpp \
       netlist.cpp \
       neural_liveness.cpp \
+      output_btor2.cpp \
       output_smv_word_level.cpp \
       output_verilog.cpp \
       property_checker.cpp \
