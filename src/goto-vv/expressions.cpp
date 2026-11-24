@@ -777,13 +777,37 @@ exprt compilert::assertion(
       const auto &repetition = *s.repetition;
       if(
         repetition.kind != SequenceRepetition::Consecutive ||
-        repetition.range.min != 0 || repetition.range.max ||
         s.expr.kind == ExpressionKind::AssertionInstance)
         fail(at, "unsupported sequence repetition");
-      r = sva_sequence_repetition_star_exprt{
-        as_sequence(boolean(expr(s.expr))),
-        from_integer(0, integer_typet{}),
-        infinity_exprt{natural_typet{}}};
+      if(repetition.range.max)
+      {
+        // Slang normalizes [*N] and [*N:N] to the same range.
+        const auto *source_syntax = a.syntax;
+        while(source_syntax && source_syntax->kind ==
+                                 syntax::SyntaxKind::ParenthesizedSequenceExpr)
+          source_syntax =
+            source_syntax->as<syntax::ParenthesizedSequenceExprSyntax>().expr;
+        const auto *simple =
+          source_syntax
+            ? source_syntax->as_if<syntax::SimpleSequenceExprSyntax>()
+            : nullptr;
+        if(
+          !simple || !simple->repetition || !simple->repetition->selector ||
+          simple->repetition->selector->kind != syntax::SyntaxKind::BitSelect)
+          fail(at, "unsupported sequence repetition");
+        r = sva_sequence_repetition_star_exprt{
+          as_sequence(boolean(expr(s.expr))),
+          from_integer(repetition.range.min, integer_typet{})};
+      }
+      else
+      {
+        if(repetition.range.min != 0)
+          fail(at, "unsupported sequence repetition");
+        r = sva_sequence_repetition_star_exprt{
+          as_sequence(boolean(expr(s.expr))),
+          from_integer(0, integer_typet{}),
+          infinity_exprt{natural_typet{}}};
+      }
       break;
     }
     if(const auto *instance = s.expr.as_if<AssertionInstanceExpression>())

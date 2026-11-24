@@ -25,3 +25,7 @@ endmodule
 module sequence_star_ranged_delay(input logic clk, start, keep, finish, result);
   p: assert property (@(posedge clk) (start ##[1:2] keep[*0:$] ##1 finish) |=> result);
 endmodule
+
+module sequence_star_equal_range(input logic clk, start, keep, finish, result);
+  p: assert property (@(posedge clk) (start ##1 keep[*8:8] ##1 finish) |=> result);
+endmodule

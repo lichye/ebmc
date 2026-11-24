@@ -394,37 +394,43 @@ grep -Fq 'named_property_invalid.sv:13:29: named property with assertion-local v
 grep -Fq 'named_property_invalid.sv:18:7: expected an unguarded single posedge' named-property-negedge
 grep -Fq 'named_property_invalid.sv:25:7: multiple clock domains' named-property-second_clock
 grep -qE 'named_property_invalid.sv:33:[0-9]+: unsupported SVA Unary' named-property-body
-star_src="$front/tests/sequence_star.sv"
-compile sequence_star sequence-star.vv "$star_src"
-bind sequence-star.vv empty sequence-star-check.vv
-star_flags=(--undriven seq --finite-prefix)
-run sequence-star.direct "$eb" "${star_flags[@]}" --bound 7 --top sequence_star "$star_src"
-run sequence-star.typed "$eb" "${star_flags[@]}" --bound 7 sequence-star-check.vv
-while read -r name bad_frame; do
-  property="sequence_star.$name"
-  if [[ $bad_frame = pass ]]; then
-    compare sequence-star.direct sequence-star.typed "$property" 'PROVED up to bound 7'
-    continue
-  fi
-  compare sequence-star.direct sequence-star.typed "$property" REFUTED
-  for depth in "$((bad_frame - 1))" "$bad_frame"; do
-    log="sequence-star-$name-d$depth"
-    query=("${star_flags[@]}" --bound "$depth" --property "$property" --numbered-trace)
-    run "$log.direct" "$eb" "${query[@]}" --top sequence_star "$star_src"
-    run "$log.typed" "$eb" "${query[@]}" sequence-star-check.vv
-    if [[ $depth = "$bad_frame" ]]; then
-      compare "$log.direct" "$log.typed" "$property" REFUTED
-      test "$(cat "$log.typed.rc")" = 10
-      grep -Fq "Counterexample with $((bad_frame + 1)) states:" "$log.direct"
-      grep -Fq "Counterexample with $((bad_frame + 1)) states:" "$log.typed"
-    else
-      compare "$log.direct" "$log.typed" "$property" "PROVED up to bound $depth"
-      test "$(cat "$log.typed.rc")" = 0
+for repeat_case in star:7 fixed:13; do
+  repeat_kind=${repeat_case%:*}
+  horizon=${repeat_case#*:}
+  top="sequence_$repeat_kind"
+  prefix="sequence-$repeat_kind"
+  src="$front/tests/$top.sv"
+  compile "$top" "$prefix.vv" "$src"
+  bind "$prefix.vv" empty "$prefix-check.vv"
+  repeat_flags=(--undriven seq --finite-prefix)
+  run "$prefix.direct" "$eb" "${repeat_flags[@]}" --bound "$horizon" --top "$top" "$src"
+  run "$prefix.typed" "$eb" "${repeat_flags[@]}" --bound "$horizon" "$prefix-check.vv"
+  while read -r name bad_frame; do
+    property="$top.$name"
+    if [[ $bad_frame = pass ]]; then
+      compare "$prefix.direct" "$prefix.typed" "$property" "PROVED up to bound $horizon"
+      continue
     fi
-  done
-done <"$front/tests/sequence_star.expected"
+    compare "$prefix.direct" "$prefix.typed" "$property" REFUTED
+    for depth in "$((bad_frame - 1))" "$bad_frame"; do
+      log="$prefix-$name-d$depth"
+      query=("${repeat_flags[@]}" --bound "$depth" --property "$property" --numbered-trace)
+      run "$log.direct" "$eb" "${query[@]}" --top "$top" "$src"
+      run "$log.typed" "$eb" "${query[@]}" "$prefix-check.vv"
+      if [[ $depth = "$bad_frame" ]]; then
+        compare "$log.direct" "$log.typed" "$property" REFUTED
+        test "$(cat "$log.typed.rc")" = 10
+        grep -Fq "Counterexample with $((bad_frame + 1)) states:" "$log.direct"
+        grep -Fq "Counterexample with $((bad_frame + 1)) states:" "$log.typed"
+      else
+        compare "$log.direct" "$log.typed" "$property" "PROVED up to bound $depth"
+        test "$(cat "$log.typed.rc")" = 0
+      fi
+    done
+  done <"$front/tests/$top.expected"
+done
 star_invalid="$front/tests/sequence_star_invalid.sv"
-for test_case in nonconsecutive:2 goto:6 bounded:10 positive_min:14 temporal:18 delay:22 ranged_delay:26; do
+for test_case in nonconsecutive:2 goto:6 bounded:10 positive_min:14 temporal:18 delay:22 ranged_delay:26 equal_range:30; do
   kind=${test_case%:*}
   line=${test_case#*:}
   log="sequence-star-$kind"
