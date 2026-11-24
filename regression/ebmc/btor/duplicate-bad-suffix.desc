@@ -1,0 +1,9 @@
+CORE
+duplicate-bad-suffix.btor2
+--bound 0
+^\[repeated\] : PROVED up to bound 0$
+^\[repeated\$5\$\$\] : REFUTED$
+^\[repeated\$5\] : PROVED up to bound 0$
+^\[repeated\$5\$\] : PROVED up to bound 0$
+^EXIT=10$
+^SIGNAL=0$

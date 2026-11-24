@@ -29,6 +29,7 @@ Author: Daniel Kroening, kroening@kroening.com
 
 #include <fstream>
 #include <iostream>
+#include <set>
 
 /// Convert a BTOR2 sort ID to a CBMC type
 static typet sort_to_type(std::size_t sort_id, const btor2_modelt &model)
@@ -626,6 +627,21 @@ static transition_systemt build_transition_system(const btor2_modelt &model)
     invar_exprs.push_back(constraint_expr);
   }
 
+  const auto property_name = [&](const char *tag, std::size_t id)
+  {
+    const auto &node = model.nodes.at(id);
+    return node.symbol.empty() ? tag + std::to_string(id) : node.symbol;
+  };
+  std::set<std::string> reserved, liveness_names;
+  for(auto id : model.bad_properties)
+    reserved.insert(property_name("bad", id));
+  for(auto id : model.fair_properties)
+    liveness_names.insert(property_name("fair", id));
+  for(auto id : model.justice_properties)
+    liveness_names.insert(property_name("justice", id));
+  reserved.insert(liveness_names.begin(), liveness_names.end());
+
+  const auto property_prefix = id2string(module_id) + "::spec::";
   // Bad state properties: G(!bad)
   for(auto bad_id : model.bad_properties)
   {
@@ -635,9 +651,18 @@ static transition_systemt build_transition_system(const btor2_modelt &model)
     if(bad_expr.type().id() != ID_bool)
       bad_expr = notequal_exprt{bad_expr, from_integer(0, bad_expr.type())};
 
-    std::string name =
-      node.symbol.empty() ? "bad" + std::to_string(bad_id) : node.symbol;
-    irep_idt prop_id = id2string(module_id) + "::spec::" + name;
+    auto name = property_name("bad", bad_id);
+    auto prop_id = property_prefix + name;
+    // BTOR2 identifies bad nodes by position, so optional names can repeat.
+    // Keep unique original spellings available and disambiguate by node ID.
+    if(result.symbol_table.lookup(prop_id) || liveness_names.count(name))
+    {
+      name += '$' + std::to_string(bad_id);
+      while(reserved.count(name) ||
+            result.symbol_table.lookup(property_prefix + name))
+        name += '$';
+      prop_id = property_prefix + name;
+    }
 
     symbolt prop_symbol{prop_id, bool_typet(), mode};
     prop_symbol.base_name = name;

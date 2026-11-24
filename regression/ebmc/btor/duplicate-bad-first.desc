@@ -1,0 +1,9 @@
+CORE
+duplicate-bad.btor2
+--bound 0 --property repeated
+^\[repeated\] : PROVED up to bound 0$
+^EXIT=0$
+^SIGNAL=0$
+--
+^\[repeated\$5\]
+--
