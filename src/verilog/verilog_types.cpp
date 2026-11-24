@@ -63,8 +63,11 @@ mp_integer verilog_array_typet::offset() const
 
 typet verilog_array_typet::index_type() const
 {
-  return unsignedbv_typet{
-    numeric_cast_v<std::size_t>(address_bits((size_int() + offset())))};
+  auto base = offset();
+  // Negative packed bounds still need enough bits for all zero-based slots.
+  if(is_packed() && base < 0)
+    base = 0;
+  return unsignedbv_typet{address_bits(size_int() + base)};
 }
 
 constant_exprt verilog_unsignedbv_typet::all_x_expr() const

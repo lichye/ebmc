@@ -950,6 +950,70 @@ exprt verilog_lowering(exprt expr)
   return verilog_lowering_node(std::move(expr));
 }
 
+/// Map the (lowered) Verilog index of a packed array element select to
+/// the internal, zero-based element index used by from_bitvector.
+/// The lower bound is subtracted in a signed type that holds the full
+/// index value, before any narrowing, so that an index outside the
+/// declared range cannot wrap around onto a valid element. Every
+/// out-of-range index is mapped to the internal index `size`, which is
+/// out of bounds of the internal array; the value read is then the one
+/// the existing index_exprt semantics give for out-of-bounds accesses.
+static exprt packed_array_internal_index(
+  const verilog_array_typet &array_type,
+  const exprt &verilog_index)
+{
+  // The index operand has already been lowered; for a four-valued index
+  // this is an aval/bval encoding, from which the aval part carries the
+  // numeric value (as for unpacked arrays).
+  const exprt index_value =
+    is_aval_bval(verilog_index.type()) ? aval(verilog_index) : verilog_index;
+
+  const auto size = array_type.size_int();
+  const auto offset = array_type.offset();
+
+  // Holds the valid internal indices 0..size-1 and the marker `size`.
+  const unsignedbv_typet internal_type{
+    numeric_cast_v<std::size_t>(address_bits(size + 1))};
+  const auto out_of_range = from_integer(size, internal_type);
+
+  if(index_value.is_constant())
+  {
+    auto index_int = numeric_cast<mp_integer>(to_constant_expr(index_value));
+    if(index_int.has_value())
+    {
+      const mp_integer internal = *index_int - offset;
+      if(internal >= 0 && internal < size)
+        return from_integer(internal, internal_type);
+      else
+        return out_of_range;
+    }
+  }
+
+  // A signed type wide enough for the index value, the bounds and their
+  // difference, so that neither the conversion nor the subtraction wraps.
+  const std::size_t index_width =
+    can_cast_type<bitvector_typet>(index_value.type())
+      ? to_bitvector_type(index_value.type()).get_width()
+      : 1;
+  const mp_integer magnitude = offset < 0 ? -offset : offset;
+  const signedbv_typet wide_type{
+    std::max(
+      index_width,
+      numeric_cast_v<std::size_t>(address_bits(magnitude + size + 1))) +
+    2};
+
+  exprt internal = typecast_exprt{index_value, wide_type};
+  if(offset != 0)
+    internal = minus_exprt{internal, from_integer(offset, wide_type)};
+
+  auto in_range = and_exprt{
+    binary_relation_exprt{internal, ID_ge, from_integer(0, wide_type)},
+    binary_relation_exprt{internal, ID_lt, from_integer(size, wide_type)}};
+
+  return if_exprt{
+    std::move(in_range), typecast_exprt{internal, internal_type}, out_of_range};
+}
+
 exprt verilog_lowering_node(exprt expr)
 {
   const exprt &node = expr;
@@ -1492,6 +1556,15 @@ exprt verilog_lowering_node(exprt expr)
     {
       // Lower to array index expression
       auto &array_type = to_verilog_array_type(src.type());
+
+      if(array_type.is_packed())
+      {
+        return index_exprt{
+          src,
+          packed_array_internal_index(array_type, bit_select.index()),
+          array_type.element_type()};
+      }
+
       auto index_type = array_type.index_type();
 
       // A constant index is converted here; it may have a type that is
@@ -1642,7 +1715,6 @@ exprt verilog_lowering_node(exprt expr)
             std::move(*default_value)};
         }
       }
-
       return index_exprt{src, index, array_type.element_type()};
     }
     else
