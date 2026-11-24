@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read past_depth; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -65,6 +65,7 @@ for top in temporal sampled_sequence wires generate_nested open_outputs local_en
   fi
   depth=3
   if [[ $top == packed_read ]]; then depth=15; fi
+  if [[ $top == past_depth ]]; then depth=6; fi
   run "$top.direct" "$eb" --top "$top" --undriven seq --bound "$depth" --trace "${direct_flags[@]}" "$direct_src"
   run "$top.typed" "$eb" --undriven seq --bound "$depth" --trace "$top-check.vv"
   while read -r name expected; do
@@ -343,6 +344,20 @@ grep -qE 'open_inputs_invalid.sv:1:[0-9]+: unsupported port direction' open-inpu
 grep -qE 'open_inputs_invalid.sv:5:[0-9]+: unsupported port direction' open-inputs-bad-inout
 grep -qE "open_inputs_invalid.sv:29:[0-9]+: error:.*implicit named port 'data'" open-inputs-bad-implicit
 grep -qE "open_inputs_invalid.sv:37:[0-9]+: error:.*port 'typo'" open-inputs-bad-name
+for kind in dynamic gate clock zero negative unknown empty; do
+  log="past-depth-invalid-$kind"
+  run "$log" "$vv" compile "$log.vv" --single-unit --top "past_depth_$kind" \
+    -D "BAD_${kind^^}" "$front/tests/past_depth_invalid.sv"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+done
+grep -Fq "past_depth_invalid.sv:3:53: error: reference to non-constant variable 'depth'" past-depth-invalid-dynamic
+grep -Fq 'past_depth_invalid.sv:8:56: unsupported gate or clock argument to $past' past-depth-invalid-gate
+grep -Fq 'past_depth_invalid.sv:13:58: unsupported gate or clock argument to $past' past-depth-invalid-clock
+grep -Fq "past_depth_invalid.sv:18:53: error: 'number_of_ticks' argument must be greater than or equal to 1" past-depth-invalid-zero
+grep -Fq "past_depth_invalid.sv:23:53: error: 'number_of_ticks' argument must be greater than or equal to 1" past-depth-invalid-negative
+grep -Fq 'past_depth_invalid.sv:28:53: error: value must not have any unknown bits' past-depth-invalid-unknown
+grep -Fq 'past_depth_invalid.sv:33:53: $past depth must be a static positive integer' past-depth-invalid-empty
 echo "assume typo posedge bridge.clk bridge.missing == '0" >bad-contract
 run bad-binding "$vv" constrain bridge-1.vv bad-contract rejected.vv
 grep -q 'bad-contract:1: unbound input bridge.missing' bad-binding

@@ -657,8 +657,38 @@ exprt compilert::expr(
   case ExpressionKind::Call:
   {
     auto &c = e.as<CallExpression>();
-    if(c.getSubroutineName() == "$past" && c.arguments().size() == 1)
-      r = verilog_past_exprt(expr(*c.arguments().front()), index_constant(1));
+    if(c.isSystemCall() && c.getSubroutineName() == "$past")
+    {
+      const auto args = c.arguments();
+      if(args.size() > 2)
+      {
+        const auto &unsupported =
+          args.size() == 4 && args[2]->kind == ExpressionKind::EmptyArgument
+            ? *args[3]
+            : *args[2];
+        fail(
+          unsupported.sourceRange.start(),
+          "unsupported gate or clock argument to $past");
+      }
+
+      if(args.empty())
+        fail(at, "$past requires a sampled expression");
+
+      auto ticks = index_constant(1);
+      if(args.size() == 2)
+      {
+        const auto &depth = *args[1];
+        const auto value = eval_known(depth);
+        const auto n =
+          value.isInteger() ? value.integer().as<int32_t>() : std::nullopt;
+        if(!n || *n <= 0)
+          fail(
+            depth.sourceRange.start(),
+            "$past depth must be a static positive integer");
+        ticks = index_constant(*n);
+      }
+      r = verilog_past_exprt(expr(*args.front()), std::move(ticks));
+    }
     else if(
       c.isSystemCall() && c.arguments().size() == 1 &&
       (c.getSubroutineName() == "$signed" ||
