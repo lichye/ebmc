@@ -486,6 +486,16 @@ for probe in recursive:4 out:11 ref:22 nonlocal:34 static:54 dynamic_loop:61 uns
   esac
   grep -qE "runtime_function_invalid.sv:$line:[0-9]+: $message$" "$log"
 done
+scalar_reductions="$front/tests/scalar_reductions.sv"
+compile scalar_reductions scalar-reductions.vv "$scalar_reductions"
+bind scalar-reductions.vv empty scalar-reductions-check.vv
+reduction_flags=(--undriven seq --yices --k-induction --buechi --bound 2)
+run scalar-reductions.direct "$eb" "${reduction_flags[@]}" --top scalar_reductions "$scalar_reductions"
+run scalar-reductions.typed "$eb" "${reduction_flags[@]}" scalar-reductions-check.vv
+test "$(cat scalar-reductions.typed.rc)" = 0
+for check in scalar_ok wide_ok; do
+  compare scalar-reductions.direct scalar-reductions.typed "scalar_reductions.$check" PROVED
+done
 run stable-clock compile sampled_sequence rejected.vv stable-clock.sv
 grep -q 'stable-clock.sv:[0-9].*\$stable.*posedge' stable-clock
 sed 's/single-posedge\/preponed\/disable-current/single-posedge\/unsampled\/disable-current/' both.vv >bad-sampling.vv

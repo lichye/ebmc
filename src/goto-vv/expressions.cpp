@@ -379,17 +379,18 @@ exprt compilert::expr(
       r = node(t.id() == ID_bool ? ID_not : ID_bitnot, t, {v});
       break;
     case UnaryOperator::BitwiseOr:
-      r = node(ID_reduction_or, t, {v});
-      break;
     case UnaryOperator::BitwiseAnd:
-      r = node(ID_reduction_and, t, {v});
-      break;
     case UnaryOperator::BitwiseXor:
+    {
       // As in the native type checker, a scalar is a one-bit vector.
       if(v.type().id() == ID_bool)
         v = typecast_exprt{std::move(v), unsignedbv_typet{1}};
-      r = node(ID_reduction_xor, t, {v});
+      const auto id = u.op == UnaryOperator::BitwiseAnd  ? ID_reduction_and
+                      : u.op == UnaryOperator::BitwiseOr ? ID_reduction_or
+                                                         : ID_reduction_xor;
+      r = node(id, t, {std::move(v)});
       break;
+    }
     case UnaryOperator::Minus:
       r = node(ID_unary_minus, t, {v});
       break;
