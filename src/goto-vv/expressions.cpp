@@ -546,8 +546,13 @@ exprt compilert::expr(
       el.value().type->getCanonicalType().as_if<PackedArrayType>();
     if(!array || !needs_packed_element_layout(*array))
     {
+      auto base = expr(el.value(), nullptr, lvalue);
+      // Dynamic extraction shifts the source vector by an index of the
+      // same bit width. Native typing keeps a one-bit source as a vector.
+      if(!lvalue && base.type().id() == ID_bool)
+        base = typecast_exprt{std::move(base), unsignedbv_typet{1}};
       r = verilog_bit_select_exprt(
-        expr(el.value(), nullptr, lvalue), expr(el.selector()), t);
+        std::move(base), expr(el.selector()), t);
       break;
     }
 

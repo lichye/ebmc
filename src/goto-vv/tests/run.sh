@@ -505,6 +505,13 @@ test "$(cat one-bit-indexed-read.typed.rc)" = 0
 for check in mask_ok slice_ok; do
   compare one-bit-indexed-read.direct one-bit-indexed-read.typed "one_bit_indexed_read.$check" PROVED
 done
+bit_select_src="$front/tests/scalar_packed_read.sv"
+compile scalar_packed_read scalar-packed-read.vv "$bit_select_src"
+bind scalar-packed-read.vv empty scalar-packed-read-check.vv
+run scalar-packed-read.direct "$eb" "${reduction_flags[@]}" --top scalar_packed_read "$bit_select_src"
+run scalar-packed-read.typed "$eb" "${reduction_flags[@]}" scalar-packed-read-check.vv
+test "$(cat scalar-packed-read.typed.rc)" = 0
+compare scalar-packed-read.direct scalar-packed-read.typed scalar_packed_read.p PROVED
 run stable-clock compile sampled_sequence rejected.vv stable-clock.sv
 grep -q 'stable-clock.sv:[0-9].*\$stable.*posedge' stable-clock
 sed 's/single-posedge\/preponed\/disable-current/single-posedge\/unsampled\/disable-current/' both.vv >bad-sampling.vv
