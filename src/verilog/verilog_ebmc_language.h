@@ -94,6 +94,7 @@ protected:
   transition_systemt create_transition_system(
     verilog_standardt,
     symbol_tablet &&,
+    bool undriven_const,
     const verilog_undriven_reportert &);
 
   void create_reset_logic(const std::string &, transition_systemt &);

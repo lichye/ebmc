@@ -181,7 +181,7 @@ void vv_objectt::validate(bool require_constraints) const
     static_cast<const source_locationt &>(metadata.find(ID_C_source_location));
   if(
     metadata.get("sampling") != "single-posedge/preponed/disable-current" ||
-    metadata.get("undriven") != "seq" ||
+    (metadata.get("undriven") != "seq" && metadata.get("undriven") != "const") ||
     (require_constraints && metadata.get("stage") != "constrained"))
     error(loc, "unsupported sampling model, floating policy, or object stage");
   std::string top = id2string(metadata.get("top"));

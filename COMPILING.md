@@ -47,6 +47,12 @@ with the normal target. For an empty contract and a single-clock design:
     src/goto-vv/build/goto-vv constrain design.vv empty-contract.txt run.vv
     src/ebmc/ebmc --undriven seq --bound 20 run.vv
 
+An omitted or explicitly empty child input uses its undriven formal signal.
+The contract can record `undriven const` to hold floating bits constant across
+steps. An empty contract selects `seq`, which allows them to change each step.
+If EBMC receives an explicit `--undriven` option, it must match the constrained
+object. Use `ebmc --undriven-report run.vv` to list floating reads.
+
 By default each input file is a separate compilation unit. Use `-mfcu`
 (`--single-unit`) to put the primary sources in one compilation unit, in file
 order. Use `-sfcu` (`--single-unit=false`) to explicitly select separate units.

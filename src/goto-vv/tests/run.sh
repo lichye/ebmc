@@ -205,11 +205,60 @@ for probe in wide:3 gap:8 negative:13 lvalue:20; do
   test ! -e "$log.vv"
   grep -qE "packed_read_invalid.sv:$line:[0-9]+: packed element select requires a known constant index" "$log"
 done
-# An explicitly empty input still needs its own supported undriven semantics.
-sed 's/\.a(a), \.forwarded(open_q)/.a(), .forwarded(open_q)/' "$front/tests/open_outputs.sv" >open_input.sv
-run open-input compile open_outputs rejected.vv open_input.sv
-grep -q 'unbound child port a' open-input
-test "$(cat open-input.rc)" != 0
+open_inputs="$front/tests/open_inputs.sv"
+compile open_inputs open-inputs.vv "$open_inputs"
+for mode in seq const; do
+  printf 'undriven %s\n' "$mode" >"open-inputs-$mode.contract"
+  bind open-inputs.vv "open-inputs-$mode.contract" "open-inputs-$mode.vv"
+  flags=(--undriven "$mode" --finite-prefix --bound 1)
+  direct="open-inputs-$mode.direct"
+  typed="open-inputs-$mode.typed"
+  run "$direct" "$eb" "${flags[@]}" --top open_inputs "$open_inputs"
+  run "$typed" "$eb" "${flags[@]}" "open-inputs-$mode.vv"
+  for prop in omitted_shared empty_shared bound default override; do
+    compare "$direct" "$typed" "open_inputs.p_$prop" 'PROVED up to bound 1'
+  done
+  for prop in omitted_zero empty_ones open_default distinct; do
+    compare "$direct" "$typed" "open_inputs.p_$prop" REFUTED
+  done
+  expected=REFUTED
+  if [[ $mode == const ]]; then expected='PROVED up to bound 1'; fi
+  for prop in omitted_hold empty_hold; do
+    compare "$direct" "$typed" "open_inputs.p_$prop" "$expected"
+  done
+done
+run open-inputs-const-metadata "$eb" --finite-prefix --bound 1 open-inputs-const.vv
+compare open-inputs-const.direct open-inputs-const-metadata open_inputs.p_omitted_hold 'PROVED up to bound 1'
+run open-inputs-policy-mismatch "$eb" --undriven const open-inputs-seq.vv
+test "$(cat open-inputs-policy-mismatch.rc)" != 0
+grep -Fq 'floating policy must match the constrained object' open-inputs-policy-mismatch
+run open-inputs-report.direct "$eb" --undriven-report --top open_inputs "$open_inputs"
+run open-inputs-report.typed "$eb" --undriven-report open-inputs-seq.vv
+for route in direct typed; do
+  log="open-inputs-report.$route"
+  test "$(cat "$log.rc")" = 0
+  awk -F '\t' '$1 == "UNDRIVEN" { sub(/^.*open_inputs.sv:/, "", $3); print $2, $3 }' "$log" |
+    sort >"$log.normalized"
+done
+cmp open-inputs-report.{direct,typed}.normalized
+printf '%s\n' 'open_inputs.empty_default.data 6' 'open_inputs.explicit_empty.data 1' 'open_inputs.omitted.data 1' |
+  cmp - open-inputs-report.typed.normalized
+printf 'undriven const\nundriven seq\n' >duplicate-undriven
+run open-inputs-duplicate-policy "$vv" constrain open-inputs.vv duplicate-undriven duplicate-undriven.vv
+test "$(cat open-inputs-duplicate-policy.rc)" = 2
+test ! -e duplicate-undriven.vv
+grep -Fq 'duplicate-undriven:2: expected a single undriven' open-inputs-duplicate-policy
+for kind in ref inout implicit name; do
+  log="open-inputs-bad-$kind"
+  run "$log" "$vv" compile "$log.vv" --single-unit --top "open_input_bad_$kind" \
+    -D "BAD_${kind^^}" "$front/tests/open_inputs_invalid.sv"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+done
+grep -qE 'open_inputs_invalid.sv:1:[0-9]+: unsupported port direction' open-inputs-bad-ref
+grep -qE 'open_inputs_invalid.sv:5:[0-9]+: unsupported port direction' open-inputs-bad-inout
+grep -qE "open_inputs_invalid.sv:29:[0-9]+: error:.*implicit named port 'data'" open-inputs-bad-implicit
+grep -qE "open_inputs_invalid.sv:37:[0-9]+: error:.*port 'typo'" open-inputs-bad-name
 echo "assume typo posedge bridge.clk bridge.missing == '0" >bad-contract
 run bad-binding "$vv" constrain bridge-1.vv bad-contract rejected.vv
 grep -q 'bad-contract:1: unbound input bridge.missing' bad-binding

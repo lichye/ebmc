@@ -329,18 +329,42 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       inner.add_source_location() = loc(child.location);
       for(auto *c : child.getPortConnections())
       {
+        if(c->port.kind != SymbolKind::Port)
+          fail(
+            child.location,
+            "unsupported child port " + std::string(c->port.name));
         auto &p = c->port.as<PortSymbol>();
+        if(!p.internalSymbol || p.isNullPort)
+          fail(child.location, "unbound child port " + std::string(p.name));
+        if(
+          p.direction != ArgumentDirection::In &&
+          p.direction != ArgumentDirection::Out)
+          fail(p.location, "unsupported port direction");
         auto *e = c->getExpression();
         // An open output has a formal and its original driver inside the
         // child, but no receiving expression in the parent.
-        if(!e && p.internalSymbol && p.direction == ArgumentDirection::Out)
+        if(!e && p.direction == ArgumentDirection::Out)
           continue;
-        if(!e || !p.internalSymbol)
-          fail(child.location, "unbound child port " + std::string(p.name));
+        auto formal = symbol_exprt(name(*p.internalSymbol), type(p.getType()));
+        if(!e)
+        {
+          const auto ports = child.body.getPortList();
+          if(std::find(ports.begin(), ports.end(), &p) == ports.end())
+            fail(child.location, "unbound child port " + std::string(p.name));
+          // Slang returns a value when an input default applies. Here the
+          // formal itself is the undriven net, with no parent-side actual.
+          formal.add_source_location() = loc(p.location);
+          inner.operands().push_back(
+            item(ID_verilog_named_port_connection, {formal, nil_exprt{}})
+              .with_source_location(loc(child.location)));
+          continue;
+        }
+        if(e->bad())
+          fail(
+            e->sourceRange.start(), "unbound child port " + std::string(p.name));
         if(e->kind == ExpressionKind::Assignment)
           e = &e->as<AssignmentExpression>().left();
         auto v = p.direction == ArgumentDirection::In ? expr(*e) : lhs(*e);
-        auto formal = symbol_exprt(name(*p.internalSymbol), type(p.getType()));
         if(v.id() == ID_symbol)
           clock_alias[id2string(formal.get_identifier())] =
             id2string(v.get(ID_identifier));
