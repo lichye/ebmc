@@ -1,0 +1,7 @@
+p_descending PROVED up to bound 3
+p_ascending PROVED up to bound 3
+p_offset PROVED up to bound 3
+p_nested PROVED up to bound 3
+p_signed PROVED up to bound 3
+p_four_state PROVED up to bound 3
+p_wrong REFUTED

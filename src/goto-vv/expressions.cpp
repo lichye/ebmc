@@ -245,9 +245,34 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
   }
   case ExpressionKind::ElementSelect:
   {
-    auto &el = e.as<ElementSelectExpression>();
-    check_select(el.value());
-    r = verilog_bit_select_exprt(expr(el.value()), expr(el.selector()), t);
+    const auto &el = e.as<ElementSelectExpression>();
+    const auto *array =
+      el.value().type->getCanonicalType().as_if<PackedArrayType>();
+    if(
+      !array || (array->range.isDescending() && array->range.right == 0 &&
+                 array->elementType.getBitWidth() == 1 &&
+                 array->elementType.getCanonicalType().kind !=
+                   SymbolKind::PackedArrayType))
+    {
+      r = verilog_bit_select_exprt(expr(el.value()), expr(el.selector()), t);
+      break;
+    }
+
+    const auto index_at = el.selector().sourceRange.start();
+    EvalContext context(*scope);
+    const auto selected = el.selector().eval(context);
+    if(!selected.isInteger() || selected.integer().hasUnknown())
+      fail(index_at, "packed element select requires a known constant index");
+    const auto index = selected.integer().as<int32_t>();
+    if(!index || !array->range.containsPoint(*index))
+      fail(index_at, "packed element select index is out of range");
+    const auto stride = array->elementType.getBitWidth();
+    const auto offset = uint64_t(array->range.translateIndex(*index)) * stride;
+    r = slice(
+      expr(el.value()),
+      index_constant(offset + stride - 1),
+      index_constant(offset),
+      t);
     break;
   }
   case ExpressionKind::SimpleAssignmentPattern:

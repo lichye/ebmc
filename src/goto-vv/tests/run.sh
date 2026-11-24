@@ -50,11 +50,15 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
-  run "$top.direct" "$eb" --top "$top" --undriven seq --bound 3 --trace "$src"
+  direct_src="$src"
+  if [[ $top == packed_select ]]; then
+    direct_src="$front/tests/packed_select_flat.sv"
+  fi
+  run "$top.direct" "$eb" --top "$top" --undriven seq --bound 3 --trace "$direct_src"
   run "$top.typed" "$eb" --undriven seq --bound 3 --trace "$top-check.vv"
   while read -r name expected; do
     compare "$top.direct" "$top.typed" "$top.$name" "$expected"
@@ -123,6 +127,16 @@ for kind in empty standalone; do
 done
 grep -qE 'zero_replication_invalid.sv:2:[0-9]+: error: .*concatenation' zero-replication-empty
 grep -qE 'zero_replication_invalid.sv:7:[0-9]+: error: replication constant can only be zero inside' zero-replication-standalone
+run packed-select-dynamic compile packed_select_dynamic packed-dynamic.vv "$front/tests/packed_select_dynamic.sv"
+grep -qE 'packed_select_dynamic.sv:2:[0-9]+: packed element select requires a known constant index' packed-select-dynamic
+test "$(cat packed-select-dynamic.rc)" = 2
+test ! -e packed-dynamic.vv
+run packed-select-oob "$vv" compile packed-oob.vv --top packed_select_oob -Wno-error=index-oob "$front/tests/packed_select_oob.sv"
+grep -qE 'packed_select_oob.sv:2:[0-9]+: packed element select index is out of range' packed-select-oob
+test "$(cat packed-select-oob.rc)" = 2
+test ! -e packed-oob.vv
+grep -Fqx '"1z" 0 0' packed_select.vv
+grep -Fqx '"x1" 0 0' packed_select.vv
 # An explicitly empty input still needs its own supported undriven semantics.
 sed 's/\.a(a), \.forwarded(open_q)/.a(), .forwarded(open_q)/' "$front/tests/open_outputs.sv" >open_input.sv
 run open-input compile open_outputs rejected.vv open_input.sv
