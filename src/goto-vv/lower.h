@@ -74,6 +74,15 @@ public:
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
   std::map<std::string, std::string> clock_alias;
   std::map<const Symbol *, exprt> locals;
+  struct automatic_localt
+  {
+    symbol_exprt ref;
+    bool assigned = false;
+    ConstantValue constant;
+  };
+  std::map<const Symbol *, automatic_localt> automatic_locals;
+  std::map<const Symbol *, ConstantValue> expanded_indices;
+  std::size_t next_automatic_local = 0;
   explicit compilert(SourceManager &sm, analysis::AnalysisManager &am)
     : sm(sm), am(am)
   {
@@ -83,8 +92,11 @@ public:
   irept describe_type(const Type &type) const;
   typet type(const Type &t, SourceLocation fallback = {}) const;
   exprt literal(const SVInt &v, const typet &t) const;
+  ConstantValue eval_known(const Expression &e) const;
   exprt expr(const Expression &e, const exprt *compound_target = nullptr);
   exprt stmt(const Statement &s);
+  exprt counted_loop(const VariableSymbol &index, const ForLoopStatement &loop);
+  exprt declare_automatic(const VariableSymbol &variable);
   exprt clock_reset_block(const TimedStatement &block);
   exprt immediate(const ImmediateAssertionStatement &s, const Symbol *label);
   exprt assertion(const AssertionExpr &a, SourceLocation at);

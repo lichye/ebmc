@@ -28,6 +28,29 @@ exprt as_property(exprt e)
   return e;
 }
 } // namespace
+
+ConstantValue compilert::eval_known(const Expression &e) const
+{
+  if(!automatic_locals.empty())
+    e.visitSymbolReferences(
+      [&](const Expression &reference, const Symbol &symbol)
+      {
+        const auto local = automatic_locals.find(&symbol);
+        if(local != automatic_locals.end() && !local->second.assigned)
+          fail(
+            reference.sourceRange.start(),
+            "automatic local read before assignment: " +
+              std::string(symbol.name));
+      });
+  EvalContext context(*scope);
+  for(const auto &[index, value] : expanded_indices)
+    context.createLocal(&index->as<VariableSymbol>(), value);
+  for(const auto &[variable, local] : automatic_locals)
+    if(local.constant)
+      context.createLocal(&variable->as<VariableSymbol>(), local.constant);
+  return e.eval(context);
+}
+
 exprt compilert::expr(const Expression &e, const exprt *compound_target)
 {
   const auto at = e.sourceRange.start();
@@ -57,6 +80,20 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
       fail(at, "unbound expression");
     if(auto l = locals.find(s); l != locals.end())
       return l->second;
+    if(auto l = expanded_indices.find(s); l != expanded_indices.end())
+    {
+      r = literal(l->second.integer(), t);
+      break;
+    }
+    if(auto l = automatic_locals.find(s); l != automatic_locals.end())
+    {
+      if(!l->second.assigned)
+        fail(
+          at,
+          "automatic local read before assignment: " + std::string(s->name));
+      r = l->second.ref;
+      break;
+    }
     if(s->kind == SymbolKind::Parameter || s->kind == SymbolKind::EnumValue)
     {
       const auto &v = s->kind == SymbolKind::Parameter
@@ -259,8 +296,7 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
     }
 
     const auto index_at = el.selector().sourceRange.start();
-    EvalContext context(*scope);
-    const auto selected = el.selector().eval(context);
+    const auto selected = eval_known(el.selector());
     if(!selected.isInteger() || selected.integer().hasUnknown())
       fail(index_at, "packed element select requires a known constant index");
     const auto index = selected.integer().as<int32_t>();

@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -137,6 +137,17 @@ test "$(cat packed-select-oob.rc)" = 2
 test ! -e packed-oob.vv
 grep -Fqx '"1z" 0 0' packed_select.vv
 grep -Fqx '"x1" 0 0' packed_select.vv
+automatic_invalid="$front/tests/automatic_locals_invalid.sv"
+for kind in unassigned partial dynamic oob; do
+  log="automatic-$kind"
+  run "$log" compile "automatic_$kind" "$log.vv" "$automatic_invalid"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+done
+grep -qE 'automatic_locals_invalid.sv:8:[0-9]+: automatic local read before assignment: tmp' automatic-unassigned
+grep -qE 'automatic_locals_invalid.sv:19:[0-9]+: unsupported assignment to an automatic local' automatic-partial
+grep -qE 'automatic_locals_invalid.sv:31:[0-9]+: packed element select requires a known constant index' automatic-dynamic
+grep -qE 'automatic_locals_invalid.sv:42:[0-9]+: packed element select index is out of range' automatic-oob
 # An explicitly empty input still needs its own supported undriven semantics.
 sed 's/\.a(a), \.forwarded(open_q)/.a(), .forwarded(open_q)/' "$front/tests/open_outputs.sv" >open_input.sv
 run open-input compile open_outputs rejected.vv open_input.sv

@@ -1,3 +1,5 @@
+#include <slang/ast/ASTVisitor.h>
+
 #include "lower.h"
 namespace vv
 {
@@ -16,6 +18,36 @@ bool static_compound_target(const Expression &e)
   const auto *symbol = e.getSymbolReference();
   return symbol && VariableSymbol::isKind(symbol->kind) &&
          symbol->as<VariableSymbol>().lifetime == VariableLifetime::Static;
+}
+
+class automatic_local_visitort
+  : public ASTVisitor<automatic_local_visitort, VisitFlags::Statements>
+{
+public:
+  std::set<const VariableSymbol *> declared;
+  std::set<const VariableSymbol *> indices;
+
+  void handle(const VariableDeclStatement &declaration)
+  {
+    if(declaration.symbol.lifetime == VariableLifetime::Automatic)
+      declared.insert(&declaration.symbol);
+  }
+
+  void handle(const ForLoopStatement &loop)
+  {
+    indices.insert(loop.loopVars.begin(), loop.loopVars.end());
+    visitDefault(loop);
+  }
+};
+
+bool needs_expanded_loop(const Statement &body)
+{
+  automatic_local_visitort visitor;
+  body.visit(visitor);
+  return std::any_of(
+    visitor.declared.begin(),
+    visitor.declared.end(),
+    [&](const auto *declared) { return !visitor.indices.count(declared); });
 }
 } // namespace
 
@@ -111,6 +143,120 @@ exprt compilert::clock_reset_block(const TimedStatement &block)
   return guard;
 }
 
+exprt compilert::counted_loop(
+  const VariableSymbol &v,
+  const ForLoopStatement &loop)
+{
+  const auto at = loop.sourceRange.start();
+  const auto *init = v.getInitializer();
+  if(
+    !init || !loop.stopExpr || !loop.initializers.empty() ||
+    loop.steps.size() != 1 || loop.steps[0]->kind != ExpressionKind::UnaryOp)
+    fail(at, "requires a statically bounded counted loop");
+  const auto &step = loop.steps[0]->as<UnaryExpression>();
+  if(
+    step.op != UnaryOperator::Postincrement ||
+    step.operand().getSymbolReference() != &v)
+    fail(at, "expected an increment of the loop-local index");
+
+  EvalContext context(v);
+  for(const auto &[index, value] : expanded_indices)
+    context.createLocal(&index->as<VariableSymbol>(), value);
+  const auto first = init->eval(context);
+  if(!first.isInteger() || first.integer().hasUnknown())
+    fail(v.location, "nonconstant loop initializer");
+  context.createLocal(&v, first);
+  const bool expand =
+    !expanded_indices.empty() || needs_expanded_loop(loop.body);
+  auto expanded = item(ID_block);
+  for(unsigned count = 0;; ++count)
+  {
+    const auto condition = loop.stopExpr->eval(context);
+    if(!condition.isInteger() || condition.integer().hasUnknown())
+      fail(at, "nonconstant loop guard");
+    if(!condition.isTrue())
+      break;
+    if(count >= 65536)
+      fail(at, "static loop exceeds the expansion limit");
+    if(expand)
+    {
+      // Lower this iteration with its actual typed induction value. A packed
+      // index must resolve to an in-range value in every emitted iteration.
+      expanded_indices.emplace(&v, *context.findLocal(&v));
+      expanded.operands().push_back(stmt(loop.body));
+      expanded_indices.erase(&v);
+    }
+    const auto updated = loop.steps[0]->eval(context);
+    if(!updated.isInteger())
+      fail(at, "cannot evaluate loop step");
+  }
+  if(expand)
+    return expanded.with_source_location(loc(at));
+
+  // Let the RTL builder unroll the other checked loops. Its loop frame
+  // merges data-dependent break paths.
+  const auto where = loc(v.location);
+  const auto id = name(*scope) + ".$for_" + id2string(where.get_line()) + "_" +
+                  id2string(where.get_column()) + "." + std::string(v.name);
+  const auto t = type(v.getType());
+  symbolt index(id, t, ID_Verilog);
+  index.base_name = std::string(v.name);
+  index.module = root;
+  index.location = where;
+  index.is_lvalue = true;
+  if(object.symbols.add(index))
+    fail(v.location, "duplicate loop index " + id);
+  const auto ref = index.symbol_expr();
+  locals.emplace(&v, ref);
+  auto initialization =
+    item(ID_verilog_blocking_assign, {ref, literal(first.integer(), t)});
+  auto result = item(
+    ID_for,
+    {item(ID_empty_string, {std::move(initialization)}),
+     boolean(expr(*loop.stopExpr)),
+     item(ID_postincrement, {ref}),
+     stmt(loop.body)});
+  locals.erase(&v);
+  return result.with_source_location(loc(at));
+}
+
+exprt compilert::declare_automatic(const VariableSymbol &v)
+{
+  if(v.getType().isString())
+    fail(v.location, "unsupported runtime string variable");
+  if(
+    expanded_indices.empty() || v.lifetime != VariableLifetime::Automatic ||
+    !v.getType().isSimpleBitVector())
+    fail(v.location, "unsupported procedural local declaration");
+
+  auto t = type(v.getType(), v.location);
+  t.set("#vv_cycle_local", true);
+  const auto id = name(*scope) + ".$local_" +
+                  std::to_string(next_automatic_local++) + "." +
+                  std::string(v.name);
+  symbolt symbol(id, t, ID_Verilog);
+  symbol.base_name = std::string(v.name);
+  symbol.module = root;
+  symbol.location = loc(v.location);
+  symbol.is_lvalue = true;
+  if(object.symbols.add(symbol))
+    fail(v.location, "duplicate automatic local " + id);
+  auto [entry, inserted] = automatic_locals.emplace(
+    &v, automatic_localt{symbol.symbol_expr(), false, {}});
+  if(!inserted)
+    fail(v.location, "automatic local scope overlaps a previous declaration");
+  auto &local = entry->second;
+  if(const auto *init = v.getInitializer())
+  {
+    auto value = expr(*init);
+    local.constant = eval_known(*init);
+    local.assigned = true;
+    return item(ID_verilog_blocking_assign, {local.ref, std::move(value)})
+      .with_source_location(symbol.location);
+  }
+  return item(ID_skip).with_source_location(symbol.location);
+}
+
 exprt compilert::stmt(const Statement &s)
 {
   const auto at = s.sourceRange.start();
@@ -128,12 +274,18 @@ exprt compilert::stmt(const Statement &s)
       block.body.kind == StatementKind::ImmediateAssertion)
       return immediate(
         block.body.as<ImmediateAssertionStatement>(), block.blockSymbol);
+    const auto entered = automatic_locals;
     r = stmt(block.body);
+    std::erase_if(
+      automatic_locals,
+      [&](const auto &entry) { return !entered.count(entry.first); });
   }
   break;
   case StatementKind::ImmediateAssertion:
     r = immediate(s.as<ImmediateAssertionStatement>(), nullptr);
     break;
+  case StatementKind::VariableDeclaration:
+    return declare_automatic(s.as<VariableDeclStatement>().symbol);
   case StatementKind::List:
   {
     r = item(ID_block);
@@ -145,73 +297,28 @@ exprt compilert::stmt(const Statement &s)
         r.operands().push_back(stmt(*list[n]));
         continue;
       }
-      auto &v = list[n]->as<VariableDeclStatement>().symbol;
-      if(v.getType().isString())
-        fail(v.location, "unsupported runtime string variable");
-      if(n + 1 >= list.size() || list[n + 1]->kind != StatementKind::ForLoop)
-        fail(v.location, "unsupported procedural local outside a counted loop");
-      auto &loop = list[++n]->as<ForLoopStatement>();
-      auto init = v.getInitializer();
-      if(
-        !init || !loop.stopExpr || !loop.initializers.empty() ||
-        loop.steps.size() != 1 ||
-        loop.steps[0]->kind != ExpressionKind::UnaryOp)
-        fail(at, "requires a statically bounded counted loop");
-      auto &step = loop.steps[0]->as<UnaryExpression>();
-      if(
-        step.op != UnaryOperator::Postincrement ||
-        step.operand().getSymbolReference() != &v)
-        fail(at, "expected an increment of the loop-local index");
-      EvalContext context(v);
-      auto first = init->eval(context);
-      if(!first.isInteger())
-        fail(v.location, "nonconstant loop initializer");
-      context.createLocal(&v, first);
-      for(unsigned count = 0;; count++)
+      const auto &v = list[n]->as<VariableDeclStatement>().symbol;
+      const auto *loop =
+        n + 1 < list.size() ? list[n + 1]->as_if<ForLoopStatement>() : nullptr;
+      if(loop && loop->loopVars.size() == 1 && loop->loopVars.front() == &v)
       {
-        auto condition = loop.stopExpr->eval(context);
-        if(!condition.isInteger() || condition.integer().hasUnknown())
-          fail(at, "nonconstant loop guard");
-        if(!condition.isTrue())
-          break;
-        if(count >= 65536)
-          fail(at, "static loop exceeds the expansion limit");
-        auto updated = loop.steps[0]->eval(context);
-        if(!updated.isInteger())
-          fail(at, "cannot evaluate loop step");
+        r.operands().push_back(counted_loop(v, *loop));
+        ++n;
       }
-      // Let the RTL builder unroll the checked loop. Its loop frame merges
-      // data-dependent break paths and retains the statement evaluation order.
-      auto where = loc(v.location);
-      auto id = name(*scope) + ".$for_" + id2string(where.get_line()) + "_" +
-                id2string(where.get_column()) + "." + std::string(v.name);
-      auto t = type(v.getType());
-      symbolt index(id, t, ID_Verilog);
-      index.base_name = std::string(v.name);
-      index.module = root;
-      index.location = where;
-      index.is_lvalue = true;
-      if(object.symbols.add(index))
-        fail(v.location, "duplicate loop index " + id);
-      auto ref = index.symbol_expr();
-      locals.emplace(&v, ref);
-      auto initialization =
-        item(ID_verilog_blocking_assign, {ref, literal(first.integer(), t)});
-      r.operands().push_back(item(
-        ID_for,
-        {item(ID_empty_string, {initialization}),
-         boolean(expr(*loop.stopExpr)),
-         item(ID_postincrement, {ref}),
-         stmt(loop.body)}));
-      locals.erase(&v);
+      else
+        r.operands().push_back(declare_automatic(v));
     }
     break;
   }
   case StatementKind::Break:
+    if(!expanded_indices.empty())
+      fail(at, "unsupported break in a loop with automatic locals");
     r = item(ID_break);
     break;
   case StatementKind::Case:
   {
+    if(!automatic_locals.empty())
+      fail(at, "unsupported case with active automatic locals");
     const auto &c = s.as<CaseStatement>();
     if(
       (c.condition != CaseStatementCondition::Normal &&
@@ -251,6 +358,8 @@ exprt compilert::stmt(const Statement &s)
   }
   case StatementKind::Timed:
   {
+    if(!expanded_indices.empty())
+      fail(at, "unsupported timing in a loop with automatic locals");
     auto &ts = s.as<TimedStatement>();
     clock(&ts.timing, at);
     auto &ev = ts.timing.as<SignalEventControl>();
@@ -265,9 +374,23 @@ exprt compilert::stmt(const Statement &s)
     auto &c = s.as<ConditionalStatement>();
     if(c.conditions.size() != 1 || c.conditions[0].pattern)
       fail(at, "unsupported statement condition");
-    r = item(ID_if, {boolean(expr(*c.conditions[0].expr)), stmt(c.ifTrue)});
+    auto condition = boolean(expr(*c.conditions[0].expr));
+    const auto entered = automatic_locals;
+    auto when_true = stmt(c.ifTrue);
+    const auto after_true = std::move(automatic_locals);
+    automatic_locals = entered;
+    r = item(ID_if, {std::move(condition), std::move(when_true)});
     if(c.ifFalse)
       r.operands().push_back(stmt(*c.ifFalse));
+    for(const auto &entry : entered)
+    {
+      const auto *symbol = entry.first;
+      auto &after = automatic_locals.at(symbol);
+      const auto &other = after_true.at(symbol);
+      after.assigned &= other.assigned;
+      if(!after.assigned || !(after.constant == other.constant))
+        after.constant = {};
+    }
     break;
   }
   case StatementKind::ExpressionStatement:
@@ -282,7 +405,7 @@ exprt compilert::stmt(const Statement &s)
     {
       auto &u = e.as<UnaryExpression>();
       if(
-        u.op == UnaryOperator::Postincrement &&
+        u.op == UnaryOperator::Postincrement && expanded_indices.empty() &&
         !locals.count(u.operand().getSymbolReference()))
       {
         r = item(ID_postincrement, {expr(u.operand())});
@@ -292,8 +415,36 @@ exprt compilert::stmt(const Statement &s)
     if(e.kind != ExpressionKind::Assignment)
       fail(at, "expected assignment");
     auto &a = e.as<AssignmentExpression>();
-    if(locals.count(a.left().getSymbolReference()))
+    const auto *target = a.left().getSymbolReference();
+    if(locals.count(target) || expanded_indices.count(target))
       fail(at, "write to a statically expanded loop index");
+    if(auto entry = automatic_locals.find(target);
+       entry != automatic_locals.end())
+    {
+      if(
+        a.left().kind != ExpressionKind::NamedValue || a.isNonBlocking() ||
+        a.op || a.timingControl)
+        fail(at, "unsupported assignment to an automatic local");
+      auto rhs = expr(a.right());
+      auto &local = entry->second;
+      local.constant = eval_known(a.right());
+      local.assigned = true;
+      r = item(ID_verilog_blocking_assign, {local.ref, std::move(rhs)});
+      break;
+    }
+    const auto contains_local_target =
+      [&](auto &&self, const Expression &lhs) -> bool
+    {
+      if(const auto *concat = lhs.as_if<ConcatenationExpression>())
+        return std::any_of(
+          concat->operands().begin(),
+          concat->operands().end(),
+          [&](const Expression *operand) { return self(self, *operand); });
+      const auto *symbol = lhs.getSymbolReference();
+      return automatic_locals.count(symbol) || expanded_indices.count(symbol);
+    };
+    if(contains_local_target(contains_local_target, a.left()))
+      fail(at, "unsupported assignment target containing a procedural local");
     if(a.op)
     {
       if(

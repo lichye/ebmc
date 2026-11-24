@@ -337,7 +337,9 @@ protected:
     for(auto &prefix : cycle_local_prefixes)
       if(identifier.starts_with(prefix))
         return true;
-    return false;
+    const symbolt *symbol;
+    return !ns.lookup(identifier, symbol) &&
+           symbol->type.get_bool("#vv_cycle_local");
   }
 
   /// the property kind of the given assert, assume or cover
@@ -4368,7 +4370,7 @@ void verilog_rtl_buildert::commit(
   {
     auto &identifier = value_entry.first;
 
-    // function and task locals are not part of the RTL representation
+    // Cycle-local values are visible during the process, with no committed state.
     if(is_cycle_local(identifier))
       continue;
 
