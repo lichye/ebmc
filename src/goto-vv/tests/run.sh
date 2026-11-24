@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -60,6 +60,8 @@ for top in temporal sampled_sequence wires generate_nested open_outputs local_en
     direct_src="$front/tests/packed_select_flat.sv"
   elif [[ $top == packed_write ]]; then
     direct_flags=(-D NATIVE_STATIC_WRITE_REFERENCE)
+  elif [[ $top == counted_packed ]]; then
+    direct_flags=(-D NATIVE_FLAT_LOOP_REFERENCE)
   fi
   run "$top.direct" "$eb" --top "$top" --undriven seq --bound 3 --trace "${direct_flags[@]}" "$direct_src"
   run "$top.typed" "$eb" --undriven seq --bound 3 --trace "$top-check.vv"
@@ -173,6 +175,14 @@ run packed-range-oob "$vv" compile packed-range-oob.vv --top packed_range_oob -W
 grep -qE 'packed_range_oob.sv:2:[0-9]+: packed range select is out of range' packed-range-oob
 test "$(cat packed-range-oob.rc)" = 2
 test ! -e packed-range-oob.vv
+for kind in dynamic oob; do
+  log="counted-packed-$kind"
+  run "$log" compile "counted_packed_$kind" "$log.vv" "$front/tests/counted_packed_invalid.sv"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+done
+grep -qE 'counted_packed_invalid.sv:6:[0-9]+: packed element select requires a known constant index' counted-packed-dynamic
+grep -qE 'counted_packed_invalid.sv:16:[0-9]+: packed element select index is out of range' counted-packed-oob
 # An explicitly empty input still needs its own supported undriven semantics.
 sed 's/\.a(a), \.forwarded(open_q)/.a(), .forwarded(open_q)/' "$front/tests/open_outputs.sv" >open_input.sv
 run open-input compile open_outputs rejected.vv open_input.sv

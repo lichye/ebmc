@@ -20,12 +20,24 @@ bool static_compound_target(const Expression &e)
          symbol->as<VariableSymbol>().lifetime == VariableLifetime::Static;
 }
 
-class automatic_local_visitort
-  : public ASTVisitor<automatic_local_visitort, VisitFlags::Statements>
+class loop_expansion_visitort
+  : public ASTVisitor<loop_expansion_visitort, VisitFlags::AllGood>
 {
-public:
+  const VariableSymbol &index;
+  bool packed_index = false;
   std::set<const VariableSymbol *> declared;
   std::set<const VariableSymbol *> indices;
+
+  void check_bound(const Expression &bound)
+  {
+    bound.visitSymbolReferences([&](const Expression &, const Symbol &reference)
+                                { packed_index |= &reference == &index; });
+  }
+
+public:
+  explicit loop_expansion_visitort(const VariableSymbol &index) : index(index)
+  {
+  }
 
   void handle(const VariableDeclStatement &declaration)
   {
@@ -38,17 +50,36 @@ public:
     indices.insert(loop.loopVars.begin(), loop.loopVars.end());
     visitDefault(loop);
   }
-};
 
-bool needs_expanded_loop(const Statement &body)
-{
-  automatic_local_visitort visitor;
-  body.visit(visitor);
-  return std::any_of(
-    visitor.declared.begin(),
-    visitor.declared.end(),
-    [&](const auto *declared) { return !visitor.indices.count(declared); });
-}
+  void handle(const ElementSelectExpression &select)
+  {
+    if(const auto *array =
+         select.value().type->getCanonicalType().as_if<PackedArrayType>();
+       array && needs_packed_element_layout(*array))
+      check_bound(select.selector());
+    visitDefault(select);
+  }
+
+  void handle(const RangeSelectExpression &select)
+  {
+    if(const auto *array =
+         select.value().type->getCanonicalType().as_if<PackedArrayType>();
+       array && has_packed_elements(*array))
+    {
+      check_bound(select.left());
+      check_bound(select.right());
+    }
+    visitDefault(select);
+  }
+
+  bool needs_expansion() const
+  {
+    return packed_index || std::any_of(
+                             declared.begin(),
+                             declared.end(),
+                             [&](const auto *v) { return !indices.count(v); });
+  }
+};
 } // namespace
 
 exprt compilert::immediate(
@@ -166,8 +197,10 @@ exprt compilert::counted_loop(
   if(!first.isInteger() || first.integer().hasUnknown())
     fail(v.location, "nonconstant loop initializer");
   context.createLocal(&v, first);
-  const bool expand =
-    !expanded_indices.empty() || needs_expanded_loop(loop.body);
+  loop_expansion_visitort visitor(v);
+  if(expanded_indices.empty())
+    loop.body.visit(visitor);
+  const bool expand = !expanded_indices.empty() || visitor.needs_expansion();
   auto expanded = item(ID_block);
   for(unsigned count = 0;; ++count)
   {
@@ -312,7 +345,7 @@ exprt compilert::stmt(const Statement &s)
   }
   case StatementKind::Break:
     if(!expanded_indices.empty())
-      fail(at, "unsupported break in a loop with automatic locals");
+      fail(at, "unsupported break in a statically expanded loop");
     r = item(ID_break);
     break;
   case StatementKind::Case:
@@ -359,7 +392,7 @@ exprt compilert::stmt(const Statement &s)
   case StatementKind::Timed:
   {
     if(!expanded_indices.empty())
-      fail(at, "unsupported timing in a loop with automatic locals");
+      fail(at, "unsupported timing in a statically expanded loop");
     auto &ts = s.as<TimedStatement>();
     clock(&ts.timing, at);
     auto &ev = ts.timing.as<SignalEventControl>();

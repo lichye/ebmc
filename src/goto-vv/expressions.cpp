@@ -18,13 +18,6 @@ exprt slice(exprt base, exprt hi, exprt lo, const typet &t)
     {std::move(base), std::move(hi), std::move(lo)});
 }
 
-bool has_packed_elements(const PackedArrayType &array)
-{
-  return array.elementType.getBitWidth() != 1 ||
-         array.elementType.getCanonicalType().kind ==
-           SymbolKind::PackedArrayType;
-}
-
 exprt packed_slice(
   exprt base,
   const PackedArrayType &array,
@@ -397,9 +390,7 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
     const auto &el = e.as<ElementSelectExpression>();
     const auto *array =
       el.value().type->getCanonicalType().as_if<PackedArrayType>();
-    if(
-      !array || (array->range.isDescending() && array->range.right == 0 &&
-                 !has_packed_elements(*array)))
+    if(!array || !needs_packed_element_layout(*array))
     {
       r = verilog_bit_select_exprt(expr(el.value()), expr(el.selector()), t);
       break;

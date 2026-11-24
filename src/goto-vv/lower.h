@@ -63,6 +63,19 @@ inline exprt boolean(exprt e)
   return typecast_exprt::conditional_cast(e, bool_typet());
 }
 
+inline bool has_packed_elements(const PackedArrayType &array)
+{
+  return array.elementType.getBitWidth() != 1 ||
+         array.elementType.getCanonicalType().kind ==
+           SymbolKind::PackedArrayType;
+}
+
+inline bool needs_packed_element_layout(const PackedArrayType &array)
+{
+  return has_packed_elements(array) || !array.range.isDescending() ||
+         array.range.right != 0;
+}
+
 class compilert
 {
 public:
