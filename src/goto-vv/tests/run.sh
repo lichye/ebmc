@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -106,6 +106,14 @@ grep -qE 'packed_pattern_target.sv:3:[0-9]+: unsupported assignment pattern' pac
 test "$(cat packed-pattern-target.rc)" = 2
 test ! -e packed-pattern-rejected.vv
 grep -Fqx '"1xz" 0 0' packed_pattern.vv
+run empty-member-strict "$vv" compile empty-strict.vv --top empty_member -Werror=empty-member "$front/tests/empty_member.sv"
+grep -qE 'empty_member.sv:7:[0-9]+: error: .*\[-Wempty-member\]' empty-member-strict
+test "$(cat empty-member-strict.rc)" = 2
+test ! -e empty-strict.vv
+run empty-member-clocking compile empty_member_clocking empty-clocking.vv "$front/tests/empty_member_clocking.sv"
+grep -qE 'empty_member_clocking.sv:2:[0-9]+: unsupported module member ClockingBlock' empty-member-clocking
+test "$(cat empty-member-clocking.rc)" = 2
+test ! -e empty-clocking.vv
 # An explicitly empty input still needs its own supported undriven semantics.
 sed 's/\.a(a), \.forwarded(open_q)/.a(), .forwarded(open_q)/' "$front/tests/open_outputs.sv" >open_input.sv
 run open-input compile open_outputs rejected.vv open_input.sv
