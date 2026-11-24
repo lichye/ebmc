@@ -96,6 +96,13 @@ permits a variable to be written by an `initial` block and an `always_ff`
 block. Each option is independent. The stock slang 11.0.0 build command
 above remains valid for strict builds.
 
+Elaboration may use constant `string` parameters for generate branches and
+value choices. goto-vv preserves each elaborated parameter as a constant
+symbol, including empty values, instance overrides and forwarded values.
+Use `ebmc --show-symbol-table run.vv` to inspect these parameters and their
+declaration locations. Reachable runtime string operations and file tasks
+remain unsupported.
+
 An empty contract is a zero-length file. Contract lines can specify
 `reset top.rst` or `assume label posedge top.clk top.input_bus == '0`.
 Run the cross-process interface fixtures with

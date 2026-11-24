@@ -149,7 +149,10 @@ void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
       net.netType.netKind != NetType::UWire)
       fail(s.location, "unsupported net kind " + std::string(net.netType.name));
   }
-  auto t = type(s.getType(), s.location);
+  const bool string_parameter =
+    s.kind == SymbolKind::Parameter && s.getType().isString();
+  auto t =
+    string_parameter ? typet(ID_verilog_string) : type(s.getType(), s.location);
   auto &symbol = add(s, t);
   auto &info = object.metadata.add("signals").add(symbol.name);
   info.id("declaration");
@@ -160,10 +163,17 @@ void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
   if(s.kind == SymbolKind::Parameter)
   {
     auto &v = s.as<ParameterSymbol>().getValue();
-    if(!v.isInteger())
-      fail(s.location, "unsupported parameter value");
     symbol.is_macro = true;
-    symbol.value = literal(v.integer(), t);
+    if(string_parameter)
+    {
+      if(!v.isString())
+        fail(s.location, "unsupported nonconstant string parameter");
+      symbol.value = constant_exprt(v.str(), t);
+    }
+    else if(v.isInteger())
+      symbol.value = literal(v.integer(), t);
+    else
+      fail(s.location, "unsupported parameter value");
     return;
   }
   symbol.is_lvalue = s.kind == SymbolKind::Variable;

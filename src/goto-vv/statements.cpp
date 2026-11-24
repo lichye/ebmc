@@ -128,6 +128,8 @@ exprt compilert::stmt(const Statement &s)
         continue;
       }
       auto &v = list[n]->as<VariableDeclStatement>().symbol;
+      if(v.getType().isString())
+        fail(v.location, "unsupported runtime string variable");
       if(n + 1 >= list.size() || list[n + 1]->kind != StatementKind::ForLoop)
         fail(v.location, "unsupported procedural local outside a counted loop");
       auto &loop = list[++n]->as<ForLoopStatement>();
@@ -253,6 +255,11 @@ exprt compilert::stmt(const Statement &s)
   case StatementKind::ExpressionStatement:
   {
     auto &e = s.as<ExpressionStatement>().expr;
+    if(e.kind == ExpressionKind::Call)
+      fail(
+        at,
+        "unsupported procedural call " +
+          std::string(e.as<CallExpression>().getSubroutineName()));
     if(e.kind == ExpressionKind::UnaryOp)
     {
       auto &u = e.as<UnaryExpression>();

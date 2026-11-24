@@ -115,8 +115,19 @@ exprt compilert::expr(const Expression &e)
   case ExpressionKind::BinaryOp:
   {
     auto &b = e.as<BinaryExpression>();
-    auto l = expr(b.left()), v = expr(b.right());
     using O = BinaryOperator;
+    if(
+      (b.op == O::Equality || b.op == O::Inequality) &&
+      (b.left().type->isString() || b.right().type->isString()))
+    {
+      EvalContext context(*scope);
+      auto value = b.eval(context);
+      if(!value.isInteger())
+        fail(at, "unsupported runtime string comparison");
+      r = literal(value.integer(), t);
+      break;
+    }
+    auto l = expr(b.left()), v = expr(b.right());
     static const std::map<O, irep_idt> op = {
       {O::Equality, ID_equal},
       {O::Inequality, ID_notequal},
