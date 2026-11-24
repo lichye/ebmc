@@ -644,6 +644,22 @@ exprt verilog_sample_drive(
         : concatenation_exprt{std::move(parts), unsignedbv_typet{width}};
     return typecast_exprt::conditional_cast(std::move(bits), type);
   }
+  if(e.id() == ID_struct && e.type().get_bool(ID_packed))
+  {
+    const auto &components = to_struct_type(e.type()).components();
+    exprt result = e;
+    for(std::size_t i = 0; i < components.size(); ++i)
+    {
+      const auto &member_type = components[i].type();
+      if(member_type.id() == ID_struct || is_four_state_vector(member_type))
+      {
+        auto &member = result.operands()[i];
+        member = typecast_exprt::conditional_cast(
+          verilog_sample_drive(member, fresh), member_type);
+      }
+    }
+    return result;
+  }
   if(e.id() == ID_if)
   {
     const auto &mux = to_if_expr(e);

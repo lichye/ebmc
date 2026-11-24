@@ -1,0 +1,12 @@
+CORE
+packed_pattern_xz.sv
+--finite-prefix --bound 0
+^\[main\.p_layout\].*: PROVED up to bound 0$
+^\[main\.p_consistent\].*: PROVED up to bound 0$
+^\[main\.p_connected\].*: PROVED up to bound 0$
+^\[main\.p_x_zero\].*: REFUTED$
+^\[main\.p_x_one\].*: REFUTED$
+^\[main\.p_z_zero\].*: REFUTED$
+^\[main\.p_z_one\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
