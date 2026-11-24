@@ -1,4 +1,5 @@
 #include <slang/ast/ASTVisitor.h>
+#include <slang/ast/expressions/Operator.h>
 
 #include "lower.h"
 namespace vv
@@ -428,8 +429,20 @@ exprt compilert::stmt(const Statement &s)
     if(c.conditions.size() != 1 || c.conditions[0].pattern)
       fail(at, "unsupported statement condition");
     const auto &test = *c.conditions[0].expr;
-    EvalContext context(*scope);
-    const auto constant = test.eval(context);
+    if(!expanded_indices.empty() || !procedural_locals.empty())
+    {
+      // Constant evaluation would perform these writes on temporary copies.
+      test.visit(makeVisitor(
+        [this](auto &, const AssignmentExpression &e)
+        { fail(e.sourceRange.start(), "unsupported write in a condition"); },
+        [this](auto &visitor, const UnaryExpression &e)
+        {
+          if(OpInfo::isLValue(e.op))
+            fail(e.sourceRange.start(), "unsupported write in a condition");
+          visitor.visitDefault(e);
+        }));
+    }
+    const auto constant = eval_known(test);
     if(constant.isInteger() && !constant.integer().hasUnknown())
     {
       if(constant.isTrue())
