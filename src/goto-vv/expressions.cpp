@@ -244,6 +244,12 @@ exprt compilert::expr(
     case UnaryOperator::BitwiseAnd:
       r = node(ID_reduction_and, t, {v});
       break;
+    case UnaryOperator::BitwiseXor:
+      // As in the native type checker, a scalar is a one-bit vector.
+      if(v.type().id() == ID_bool)
+        v = typecast_exprt{std::move(v), unsignedbv_typet{1}};
+      r = node(ID_reduction_xor, t, {v});
+      break;
     case UnaryOperator::Minus:
       r = node(ID_unary_minus, t, {v});
       break;

@@ -1,0 +1,13 @@
+p_parity PROVED up to bound 3
+p_concat PROVED up to bound 3
+p_single PROVED up to bound 3
+p_wrong REFUTED
+p_x_zero REFUTED
+p_x_one REFUTED
+p_z_zero REFUTED
+p_z_one REFUTED
+p_z_driven REFUTED
+p_x_single_zero REFUTED
+p_x_single_one REFUTED
+p_z_single_zero REFUTED
+p_z_single_one REFUTED
