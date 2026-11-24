@@ -118,6 +118,11 @@ public:
   }
   std::optional<exprt>
   dynamic_packed_write(const AssignmentExpression &assignment);
+  std::optional<exprt>
+  dynamic_packed_bank_write(const AssignmentExpression &assignment);
+  ConstantRange
+  packed_range(const RangeSelectExpression &, const PackedArrayType &) const;
+  void require_read_only(const Expression &expr, const char *diagnostic) const;
   void require_empty_final(const Statement &s) const;
   exprt stmt(const Statement &s);
   exprt counted_loop(

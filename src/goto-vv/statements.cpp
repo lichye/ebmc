@@ -69,23 +69,6 @@ bool is_module_variable(const Symbol &symbol)
          parent->asSymbol().kind == SymbolKind::InstanceBody;
 }
 
-void require_read_only(
-  const compilert &compiler,
-  const Expression &expr,
-  const char *diagnostic)
-{
-  // Constant evaluation would perform these writes on temporary copies.
-  expr.visit(makeVisitor(
-    [&](auto &, const AssignmentExpression &e)
-    { compiler.fail(e.sourceRange.start(), diagnostic); },
-    [&](auto &visitor, const UnaryExpression &e)
-    {
-      if(OpInfo::isLValue(e.op))
-        compiler.fail(e.sourceRange.start(), diagnostic);
-      visitor.visitDefault(e);
-    }));
-}
-
 class loop_expansion_visitort
   : public ASTVisitor<loop_expansion_visitort, VisitFlags::AllGood>
 {
@@ -151,6 +134,22 @@ public:
   }
 };
 } // namespace
+
+void compilert::require_read_only(
+  const Expression &expr,
+  const char *diagnostic) const
+{
+  // Constant evaluation would perform these writes on temporary copies.
+  expr.visit(makeVisitor(
+    [&](auto &, const AssignmentExpression &e)
+    { fail(e.sourceRange.start(), diagnostic); },
+    [&](auto &visitor, const UnaryExpression &e)
+    {
+      if(OpInfo::isLValue(e.op))
+        fail(e.sourceRange.start(), diagnostic);
+      visitor.visitDefault(e);
+    }));
+}
 
 exprt compilert::immediate(
   const ImmediateAssertionStatement &a,
@@ -279,8 +278,8 @@ exprt compilert::counted_loop(
       expanded_indices.end(),
       [](const auto &entry) { return is_module_variable(*entry.first); }))
   {
-    require_read_only(*this, *init, "unsupported write in a loop initializer");
-    require_read_only(*this, *loop.stopExpr, "unsupported write in a loop guard");
+    require_read_only(*init, "unsupported write in a loop initializer");
+    require_read_only(*loop.stopExpr, "unsupported write in a loop guard");
   }
 
   EvalContext context(v);
@@ -630,7 +629,7 @@ exprt compilert::stmt(const Statement &s)
       fail(at, "unsupported statement condition");
     const auto &test = *c.conditions[0].expr;
     if(!expanded_indices.empty() || !procedural_locals.empty())
-      require_read_only(*this, test, "unsupported write in a condition");
+      require_read_only(test, "unsupported write in a condition");
     const auto constant = eval_known(test);
     if(constant.isInteger() && !constant.integer().hasUnknown())
     {
@@ -729,7 +728,8 @@ exprt compilert::stmt(const Statement &s)
           a.left().sourceRange.start(),
           "unsupported compound assignment target");
     }
-    if(auto write = dynamic_packed_write(a))
+    if(auto write = a.isNonBlocking() ? dynamic_packed_write(a)
+                                     : dynamic_packed_bank_write(a))
     {
       r = std::move(*write);
       break;

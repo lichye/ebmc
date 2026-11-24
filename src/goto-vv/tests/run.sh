@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -218,6 +218,16 @@ grep -qE 'module_loop_index_invalid.sv:30:[0-9]+: nonconstant loop initializer' 
 grep -qE 'module_loop_index_invalid.sv:41:[0-9]+: packed element select index is out of range' module-loop-oob
 grep -qE 'module_loop_index_invalid.sv:50:[0-9]+: unsupported write in a loop guard' module-loop-guard_write
 grep -qE 'module_loop_index_invalid.sv:61:[0-9]+: unsupported write in a loop initializer' module-loop-nested_init
+for kind in wide dynamic_inner oob_inner; do
+  log="packed-bank-write-$kind"
+  run "$log" "$vv" compile "$log.vv" --single-unit --top "packed_bank_write_$kind" \
+    -Wno-error=range-oob "$front/tests/packed_bank_write_invalid.sv"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+done
+grep -qE 'packed_bank_write_invalid.sv:5:[0-9]+: runtime packed bank write requires an index whose value domain matches the declared range' packed-bank-write-wide
+grep -qE 'packed_bank_write_invalid.sv:15:[0-9]+: packed range select requires known constant bounds' packed-bank-write-dynamic_inner
+grep -qE 'packed_bank_write_invalid.sv:24:[0-9]+: packed range select is out of range' packed-bank-write-oob_inner
 run final-control-compile "$vv" compile final-control.vv --single-unit --top empty_final \
   -D OMIT_FINAL "$front/tests/empty_final.sv"
 test "$(cat final-control-compile.rc)" = 0

@@ -18,17 +18,25 @@ exprt slice(exprt base, exprt hi, exprt lo, const typet &t)
     {std::move(base), std::move(hi), std::move(lo)});
 }
 
+std::pair<uint64_t, uint64_t> packed_slice_layout(
+  const PackedArrayType &array,
+  ConstantRange selection)
+{
+  const auto stride = array.elementType.getBitWidth();
+  const auto first = array.range.translateIndex(selection.left);
+  const auto last = array.range.translateIndex(selection.right);
+  return {
+    uint64_t(std::min(first, last)) * stride,
+    uint64_t(selection.fullWidth()) * stride};
+}
+
 exprt packed_slice(
   exprt base,
   const PackedArrayType &array,
   ConstantRange selection,
   const typet &type)
 {
-  const auto stride = array.elementType.getBitWidth();
-  const auto first = array.range.translateIndex(selection.left);
-  const auto last = array.range.translateIndex(selection.right);
-  const auto offset = uint64_t(std::min(first, last)) * stride;
-  const auto width = selection.fullWidth() * stride;
+  const auto [offset, width] = packed_slice_layout(array, selection);
   return slice(
     std::move(base),
     index_constant(offset + width - 1),
@@ -58,6 +66,15 @@ exprt packed_element_offset(const PackedArrayType &array, exprt index)
                   : minus_exprt(std::move(right), std::move(index));
   return mult_exprt(
     std::move(offset), from_integer(array.elementType.getBitWidth(), type));
+}
+
+typet full_packed_offset_type(
+  const PackedArrayType &array,
+  const Type &selector)
+{
+  const auto width = std::bit_width(array.getBitWidth()) + 1;
+  return selector.isSigned() ? typet(signedbv_typet(width))
+                             : typet(unsignedbv_typet(width));
 }
 
 exprt as_sequence(exprt e)
@@ -98,6 +115,97 @@ ConstantValue compilert::eval_known(const Expression &e) const
     if(local.constant)
       context.createLocal(&variable->as<VariableSymbol>(), local.constant);
   return e.eval(context);
+}
+
+ConstantRange compilert::packed_range(
+  const RangeSelectExpression &rs,
+  const PackedArrayType &array) const
+{
+  const auto at = rs.sourceRange.start();
+  auto bound = [&](const Expression &operand)
+  {
+    const auto selected = eval_known(operand);
+    if(!selected.isInteger() || selected.integer().hasUnknown())
+      fail(
+        operand.sourceRange.start(),
+        "packed range select requires known constant bounds");
+    return selected.integer().as<int32_t>();
+  };
+  const auto left = bound(rs.left());
+  const auto right = bound(rs.right());
+  const auto selection_kind = rs.getSelectionKind();
+  std::optional<ConstantRange> selection;
+  if(left && right)
+  {
+    if(selection_kind == RangeSelectionKind::Simple)
+      selection = ConstantRange{*left, *right};
+    else if(*right > 0)
+      selection = ConstantRange::getIndexedRange(
+        *left,
+        *right,
+        array.range.isDescending(),
+        selection_kind == RangeSelectionKind::IndexedUp);
+  }
+  if(!selection || !array.range.contains(*selection))
+    fail(at, "packed range select is out of range");
+  if(
+    selection->left != selection->right &&
+    selection->isDescending() != array.range.isDescending())
+    fail(at, "packed range select goes against the declared direction");
+  return *selection;
+}
+
+std::optional<exprt>
+compilert::dynamic_packed_bank_write(const AssignmentExpression &assignment)
+{
+  if(assignment.isNonBlocking() || assignment.op || assignment.timingControl)
+    return {};
+  const auto *range = assignment.left().as_if<RangeSelectExpression>();
+  const auto *bank = range ? range->value().as_if<ElementSelectExpression>()
+                           : nullptr;
+  if(!bank || bank->value().kind != ExpressionKind::NamedValue)
+    return {};
+  const auto *outer =
+    bank->value().type->getCanonicalType().as_if<PackedArrayType>();
+  const auto *inner =
+    bank->type->getCanonicalType().as_if<PackedArrayType>();
+  if(!outer || !inner)
+    return {};
+
+  const auto &selector = bank->selector();
+  const auto index_at = selector.sourceRange.start();
+  require_read_only(selector, "unsupported write in a packed bank index");
+  if(eval_known(selector))
+    return {};
+  if(!covers_packed_dimension(*selector.type, outer->range))
+    fail(
+      index_at,
+      "runtime packed bank write requires an index whose value domain "
+      "matches the declared range");
+
+  require_read_only(range->left(), "unsupported write in a packed bank bound");
+  require_read_only(range->right(), "unsupported write in a packed bank bound");
+  const auto [inner_offset, width] =
+    packed_slice_layout(*inner, packed_range(*range, *inner));
+  const auto offset_type = full_packed_offset_type(*outer, *selector.type);
+  auto offset = packed_element_offset(
+    *outer, typecast_exprt::conditional_cast(expr(selector), offset_type));
+  auto start = plus_exprt(
+    std::move(offset), from_integer(inner_offset, offset_type));
+
+  // Feed a single flat slice to the ordinary blocking partial-write lowering.
+  // It reads both the index and the RHS in the current procedural state.
+  const auto at = range->sourceRange.start();
+  auto lhs = verilog_indexed_part_select_plus_or_minus_exprt(
+    ID_verilog_indexed_part_select_plus,
+    expr(bank->value()),
+    std::move(start),
+    index_constant(width),
+    type(*range->type, at));
+  lhs.add_source_location() = loc(at);
+  auto write = item(
+    ID_verilog_blocking_assign, {std::move(lhs), expr(assignment.right())});
+  return write.with_source_location(loc(assignment.sourceRange.start()));
 }
 
 std::optional<exprt>
@@ -359,37 +467,8 @@ exprt compilert::expr(
          rs.value().type->getCanonicalType().as_if<PackedArrayType>();
        array && has_packed_elements(*array))
     {
-      auto bound = [&](const Expression &operand)
-      {
-        const auto selected = eval_known(operand);
-        if(!selected.isInteger() || selected.integer().hasUnknown())
-          fail(
-            operand.sourceRange.start(),
-            "packed range select requires known constant bounds");
-        return selected.integer().as<int32_t>();
-      };
-      const auto left = bound(rs.left());
-      const auto right = bound(rs.right());
-      const auto selection_kind = rs.getSelectionKind();
-      std::optional<ConstantRange> selection;
-      if(left && right)
-      {
-        if(selection_kind == RangeSelectionKind::Simple)
-          selection = ConstantRange{*left, *right};
-        else if(*right > 0)
-          selection = ConstantRange::getIndexedRange(
-            *left,
-            *right,
-            array->range.isDescending(),
-            selection_kind == RangeSelectionKind::IndexedUp);
-      }
-      if(!selection || !array->range.contains(*selection))
-        fail(at, "packed range select is out of range");
-      if(
-        selection->left != selection->right &&
-        selection->isDescending() != array->range.isDescending())
-        fail(at, "packed range select goes against the declared direction");
-      r = packed_slice(expr(rs.value(), nullptr, lvalue), *array, *selection, t);
+      const auto selection = packed_range(rs, *array);
+      r = packed_slice(expr(rs.value(), nullptr, lvalue), *array, selection, t);
       break;
     }
     check_select(rs.value());
@@ -447,12 +526,10 @@ exprt compilert::expr(
           "runtime read index whose value domain matches the declared range");
       // The selector's whole numeric domain fits. Widen before translating
       // from the declared right bound and scaling by the inner width.
-      const auto width = std::bit_width(array->getBitWidth()) + 1;
-      const typet offset_type = selector.type->isSigned()
-                                  ? typet(signedbv_typet(width))
-                                  : typet(unsignedbv_typet(width));
       auto offset = packed_element_offset(
-        *array, typecast_exprt::conditional_cast(expr(selector), offset_type));
+        *array,
+        typecast_exprt::conditional_cast(
+          expr(selector), full_packed_offset_type(*array, *selector.type)));
       auto base = expr(el.value());
       if(t.id() == ID_bool)
         r = verilog_bit_select_exprt(std::move(base), std::move(offset), t);
