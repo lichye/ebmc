@@ -42,6 +42,9 @@ for config in empty reset env both; do
   expected=REFUTED; if [[ $config = both ]]; then expected='PROVED up to bound 2'; fi
   compare "$config.direct" "$config.typed" bridge.u.p_clean "$expected"
 done
+run typed-symbols "$eb" --show-symbol-table both.vv
+test "$(cat typed-symbols.rc)" = 0
+grep -Fq 'Verilog::$root.bridge.u.q' typed-symbols
 compile bridge live.vv "$front/tests/bridge-cover.sv"
 bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
@@ -83,6 +86,12 @@ sed 's/if (rst) q/if (data) q/' "$front/tests/clock_reset.sv" >wrong-reset.sv
 run wrong-reset compile clock_reset rejected.vv wrong-reset.sv
 grep -q 'wrong-reset.sv:[0-9].*posedge reset tested by the outer if' wrong-reset
 test "$(cat wrong-reset.rc)" != 0
+# A semantic analysis error must stop compilation before an object is written.
+sed '/always_ff/i\  initial q = 0;' "$front/tests/bridge.sv" >driver-conflict.sv
+run driver-conflict compile bridge driver-rejected.vv driver-conflict.sv
+grep -qE 'driver-conflict.sv:[0-9]+:[0-9]+:.*always_ff.*(written|driv)' driver-conflict
+test "$(cat driver-conflict.rc)" = 2
+test ! -e driver-rejected.vv
 # An explicitly empty input still needs its own supported undriven semantics.
 sed 's/\.a(a), \.forwarded(open_q)/.a(), .forwarded(open_q)/' "$front/tests/open_outputs.sv" >open_input.sv
 run open-input compile open_outputs rejected.vv open_input.sv

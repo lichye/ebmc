@@ -775,17 +775,30 @@ std::optional<transition_systemt> verilog_ebmc_languaget::transition_system(
   return transition_system;
 }
 
-transition_systemt verilog_ebmc_languaget::receive(vv_objectt object)
+std::optional<transition_systemt>
+verilog_ebmc_languaget::receive(vv_objectt object)
 {
   object.validate(true);
   const auto top = object.metadata.get("top");
   if(cmdline.isset("top") && cmdline.get_value("top") != id2string(top))
     throw ebmc_errort{} << "goto-vv top does not match --top";
-  if(cmdline.isset("reset") || (cmdline.isset("undriven") && cmdline.get_value("undriven")!="seq"))
-    throw ebmc_errort{} << "goto-vv reset and floating policy must match the constrained object";
+  if(
+    cmdline.isset("reset") ||
+    (cmdline.isset("undriven") && cmdline.get_value("undriven") != "seq"))
+    throw ebmc_errort{}
+      << "goto-vv reset and floating policy must match the constrained object";
   create_root_module({top}, object.symbols);
-  auto result=create_transition_system(verilog_standardt::SV2023,std::move(object.symbols),{});
-  const auto reset=object.metadata.get("reset");
-  if(!reset.empty()) create_reset_logic(id2string(reset),result);
+
+  if(cmdline.isset("show-symbol-table"))
+  {
+    std::cout << object.symbols;
+    return {};
+  }
+
+  auto result = create_transition_system(
+    verilog_standardt::SV2023, std::move(object.symbols), {});
+  const auto reset = object.metadata.get("reset");
+  if(!reset.empty())
+    create_reset_logic(id2string(reset), result);
   return result;
 }

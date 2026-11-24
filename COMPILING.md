@@ -78,6 +78,24 @@ Put the unit setting and sources in `rtl/units/decoder.f`.
 Slang's `-C FILE` lists an explicitly separate unit, and library input is
 separate from primary source units.
 
+The compile stage is strict by default. Slang's
+`--allow-use-before-declare` permits forward references to declared names.
+For the two additional PLENA compatibility flags, start with a separate
+checkout of slang 11.0.0 at `7ddf4059f79eff508dd486eb42fd650cdf320d52`.
+From the EBMC repository root, apply the local patch and build goto-vv using
+that checkout.
+
+    slang_plena=/path/to/slang-v11-plena
+    git -C "$slang_plena" apply --check --index "$PWD/src/goto-vv/slang-v11-plena.patch"
+    git -C "$slang_plena" apply "$PWD/src/goto-vv/slang-v11-plena.patch"
+    make -C src goto-vv SLANG_SOURCE="$slang_plena" CMAKE_ARGS=-DCMAKE_BUILD_TYPE=Release
+
+`--allow-enum-literal-width-mismatch` permits explicit sized enum literals
+whose values fit the enum base type. `--allow-initial-always-ff-drivers`
+permits a variable to be written by an `initial` block and an `always_ff`
+block. Each option is independent. The stock slang 11.0.0 build command
+above remains valid for strict builds.
+
 An empty contract is a zero-length file. Contract lines can specify
 `reset top.rst` or `assume label posedge top.clk top.input_bus == '0`.
 Run the cross-process interface fixtures with

@@ -441,9 +441,13 @@ int compile_design(int argc, char **argv)
       return 2;
     auto c = driver.createCompilation();
     driver.reportCompilation(*c, true);
-    if(!driver.reportDiagnostics(true))
+    if(driver.diagEngine.getNumErrors() != 0)
+    {
+      (void)driver.reportDiagnostics(true);
       return 2;
-    analysis::AnalysisManager am;
+    }
+    analysis::AnalysisManager am(
+      driver.getAnalysisOptions(), driver.threadPool);
     compilert lower(driver.sourceManager, am);
     std::mutex lock;
     am.addListener(
@@ -457,7 +461,12 @@ int compile_design(int argc, char **argv)
           lower.clocks[*p] = a.getSemanticLeadingClock();
         }
       });
+    c->freeze();
     am.analyze(*c);
+    c->unfreeze();
+    driver.diagEngine.issue(am.getDiagnostics());
+    if(!driver.reportDiagnostics(true))
+      return 2;
     auto tops = c->getRoot().topInstances;
     if(tops.size() != 1)
       throw std::runtime_error("expected a single top");

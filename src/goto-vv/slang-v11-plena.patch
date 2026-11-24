@@ -1,0 +1,149 @@
+diff --git a/include/slang/analysis/AnalysisOptions.h b/include/slang/analysis/AnalysisOptions.h
+index 0e94342..c7a3e70 100644
+--- a/include/slang/analysis/AnalysisOptions.h
++++ b/include/slang/analysis/AnalysisOptions.h
+@@ -68,8 +68,11 @@ enum class SLANG_EXPORT AnalysisFlags {
+     /// variable for any partial select -- i.e. the sensitivity is derived from
+     /// identifiers only, not from LSPs.
+     ContAssignUsesLSPs = 1 << 8,
++
++    /// Allow an initial block to write a variable also written by an always_ff block.
++    AllowInitialAlwaysFFDrivers = 1 << 9,
+ };
+-SLANG_BITMASK(AnalysisFlags, ContAssignUsesLSPs)
++SLANG_BITMASK(AnalysisFlags, AllowInitialAlwaysFFDrivers)
+
+ /// Contains various options that can control analysis behavior.
+ struct SLANG_EXPORT AnalysisOptions {
+diff --git a/include/slang/ast/Compilation.h b/include/slang/ast/Compilation.h
+index 90d2253..e1f005a 100644
+--- a/include/slang/ast/Compilation.h
++++ b/include/slang/ast/Compilation.h
+@@ -130,9 +130,12 @@ enum class SLANG_EXPORT CompilationFlags {
+     AllowLibModuleRedefinition = 1 << 16,
+
+     /// Don't instantiate unreferenced modules to perform semantic checking on them.
+-    IgnoreUninstantiatedModules = 1 << 17
++    IgnoreUninstantiatedModules = 1 << 17,
++
++    /// Allow a sized enum initializer to differ in width when its value fits the base type.
++    AllowEnumLiteralWidthMismatch = 1 << 18
+ };
+-SLANG_BITMASK(CompilationFlags, IgnoreUninstantiatedModules)
++SLANG_BITMASK(CompilationFlags, AllowEnumLiteralWidthMismatch)
+
+ /// Contains various options that can control compilation behavior.
+ struct SLANG_EXPORT CompilationOptions {
+diff --git a/source/analysis/DriverTracker.cpp b/source/analysis/DriverTracker.cpp
+index 7f10918..920c314 100644
+--- a/source/analysis/DriverTracker.cpp
++++ b/source/analysis/DriverTracker.cpp
+@@ -446,6 +446,8 @@ void DriverTracker::addDriver(AnalysisContext& context, DriverAlloc& driverAlloc
+
+     const bool allowDupInitialDrivers = context.manager->hasFlag(
+         AnalysisFlags::AllowDupInitialDrivers);
++    const bool allowInitialAlwaysFFDrivers = context.manager->hasFlag(
++        AnalysisFlags::AllowInitialAlwaysFFDrivers);
+
+     auto shouldIgnore = [&](const ValueDriver& vd) {
+         // We ignore drivers from subroutines and from initializers.
+@@ -454,6 +456,12 @@ void DriverTracker::addDriver(AnalysisContext& context, DriverAlloc& driverAlloc
+                (vd.source == DriverSource::Initial && allowDupInitialDrivers);
+     };
+
++    auto allowDriverPair = [&](DriverSource lhs, DriverSource rhs) {
++        return allowInitialAlwaysFFDrivers &&
++               ((lhs == DriverSource::Initial && rhs == DriverSource::AlwaysFF) ||
++                (lhs == DriverSource::AlwaysFF && rhs == DriverSource::Initial));
++    };
++
+     auto end = driverMap.end();
+     for (auto it = driverMap.find(bounds); it != end; ++it) {
+         // Check whether this pair of drivers overlapping constitutes a problem.
+@@ -474,7 +482,7 @@ void DriverTracker::addDriver(AnalysisContext& context, DriverAlloc& driverAlloc
+                 isProblem = true;
+             }
+             else if (curr->containingSymbol != driver.containingSymbol && !shouldIgnore(*curr) &&
+-                     !shouldIgnore(driver) &&
++                     !shouldIgnore(driver) && !allowDriverPair(curr->source, driver.source) &&
+                      (curr->isInSingleDriverProcedure() || driver.isInSingleDriverProcedure())) {
+                 isProblem = true;
+             }
+diff --git a/source/ast/types/AllTypes.cpp b/source/ast/types/AllTypes.cpp
+index ed6616d..171636a 100644
+--- a/source/ast/types/AllTypes.cpp
++++ b/source/ast/types/AllTypes.cpp
+@@ -397,19 +397,24 @@ const Type& EnumType::fromSyntax(Compilation& comp, const EnumTypeSyntax& syntax
+             return;
+         }
+
+-        if (bitWidth != rt.getBitWidth() && initExpr->kind == ExpressionKind::IntegerLiteral &&
+-            !initExpr->as<IntegerLiteral>().isDeclaredUnsized) {
++        const bool widthMismatch = bitWidth != rt.getBitWidth() &&
++                                   initExpr->kind == ExpressionKind::IntegerLiteral &&
++                                   !initExpr->as<IntegerLiteral>().isDeclaredUnsized;
++        const bool allowWidthMismatch =
++            widthMismatch && comp.hasFlag(CompilationFlags::AllowEnumLiteralWidthMismatch);
++        if (widthMismatch && !allowWidthMismatch) {
+             auto& diag = context.addDiag(diag::EnumValueSizeMismatch, previousRange);
+             diag << rt.getBitWidth() << bitWidth;
+         }
+
+         ev.getValue();
+-        if (!initExpr->getConstant())
++        const auto* constant = initExpr->getConstant();
++        if (!constant)
+             return;
+
+         // An enumerated name with x or z assignments assigned to an enum with no explicit data type
+         // or an explicit 2-state declaration shall be a syntax error.
+-        auto& value = initExpr->getConstant()->integer();
++        auto& value = constant->integer();
+         if (!base->isFourState() && value.hasUnknown()) {
+             context.addDiag(diag::EnumValueUnknownBits, previousRange) << value << *base;
+             return;
+@@ -420,7 +425,19 @@ const Type& EnumType::fromSyntax(Compilation& comp, const EnumTypeSyntax& syntax
+         // value and any of the discarded bits are nonzero. For a signed base type, this occurs if
+         // the cast truncates the value and any of the discarded bits are not equal to the sign bit
+         // of the result.
+-        if (value.getBitWidth() > bitWidth) {
++        if (allowWidthMismatch) {
++            // Compare before and after conversion using each type's signedness.
++            auto converted = value.resize(bitWidth);
++            converted.setSigned(cb->isSigned());
++            const auto commonWidth = std::max(value.getBitWidth(), bitWidth);
++            auto isNegative = [](const SVInt& v) { return v.isSigned() && v.isNegative(); };
++            if (isNegative(value) != isNegative(converted) ||
++                !exactlyEqual(value.resize(commonWidth), converted.resize(commonWidth))) {
++                context.addDiag(diag::EnumValueOutOfRange, previousRange) << value << *base;
++                return;
++            }
++        }
++        else if (value.getBitWidth() > bitWidth) {
+             bool good = true;
+             if (!base->isSigned()) {
+                 good = exactlyEqual(value[int32_t(bitWidth)], logic_t(false)) &&
+diff --git a/source/driver/Driver.cpp b/source/driver/Driver.cpp
+index 044234a..871bfa1 100644
+--- a/source/driver/Driver.cpp
++++ b/source/driver/Driver.cpp
+@@ -212,6 +212,10 @@ void Driver::addStandardArgs() {
+                 "interface, and programs");
+     addCompFlag(CompilationFlags::RelaxEnumConversions, "--relax-enum-conversions",
+                 "Allow all integral types to convert implicitly to enum types");
++    addCompFlag(CompilationFlags::AllowEnumLiteralWidthMismatch,
++                "--allow-enum-literal-width-mismatch",
++                "Allow sized enum literals of differing widths when the base type can represent "
++                "their values");
+     addCompFlag(CompilationFlags::RelaxStringConversions, "--relax-string-conversions",
+                 "Allow string types to convert implicitly to integral types");
+     addCompFlag(CompilationFlags::AllowHierarchicalConst, "--allow-hierarchical-const",
+@@ -478,6 +482,8 @@ void Driver::addStandardArgs() {
+     addAnalysisFlag(AnalysisFlags::AllowDupInitialDrivers, "--allow-dup-initial-drivers",
+                     "Allow signals driven in an always_comb or always_ff block to also be driven "
+                     "by initial blocks");
++    addAnalysisFlag(AnalysisFlags::AllowInitialAlwaysFFDrivers, "--allow-initial-always-ff-drivers",
++                    "Allow an initial block to write variables also written by an always_ff block");
+
+     cmdLine.add("--max-case-analysis-steps", options.maxCaseAnalysisSteps,
+                 "Maximum number of steps that can occur during case analysis before giving up",
