@@ -1,0 +1,9 @@
+CORE
+duplicate-bad.btor2
+--bound 0 --property 'repeated$5'
+^\[repeated\$5\] : REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^\[repeated\]
+--
