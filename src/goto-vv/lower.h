@@ -83,7 +83,7 @@ public:
   irept describe_type(const Type &type) const;
   typet type(const Type &t, SourceLocation fallback = {}) const;
   exprt literal(const SVInt &v, const typet &t) const;
-  exprt expr(const Expression &e);
+  exprt expr(const Expression &e, const exprt *compound_target = nullptr);
   exprt stmt(const Statement &s);
   exprt clock_reset_block(const TimedStatement &block);
   exprt immediate(const ImmediateAssertionStatement &s, const Symbol *label);

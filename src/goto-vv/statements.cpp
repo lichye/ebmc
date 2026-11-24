@@ -1,6 +1,24 @@
 #include "lower.h"
 namespace vv
 {
+namespace
+{
+bool static_compound_target(const Expression &e)
+{
+  if(const auto *field = e.as_if<MemberAccessExpression>())
+    return field->member.kind == SymbolKind::Field &&
+           field->value().type->getCanonicalType().kind ==
+             SymbolKind::PackedStructType &&
+           static_compound_target(field->value());
+
+  if(e.kind != ExpressionKind::NamedValue)
+    return false;
+  const auto *symbol = e.getSymbolReference();
+  return symbol && VariableSymbol::isKind(symbol->kind) &&
+         symbol->as<VariableSymbol>().lifetime == VariableLifetime::Static;
+}
+} // namespace
+
 exprt compilert::immediate(
   const ImmediateAssertionStatement &a,
   const Symbol *label)
@@ -277,11 +295,23 @@ exprt compilert::stmt(const Statement &s)
     if(locals.count(a.left().getSymbolReference()))
       fail(at, "write to a statically expanded loop index");
     if(a.op)
-      fail(at, "unsupported compound assignment");
+    {
+      if(
+        (*a.op != BinaryOperator::Add && *a.op != BinaryOperator::Subtract) ||
+        a.isNonBlocking() || a.timingControl)
+        fail(at, "unsupported compound assignment");
+      if(!a.left().type->isIntegral() || !static_compound_target(a.left()))
+        fail(
+          a.left().sourceRange.start(),
+          "unsupported compound assignment target");
+    }
+    auto lhs = expr(a.left());
+    // The typed RHS reads this target in the current procedural state.
+    auto rhs = expr(a.right(), a.op ? &lhs : nullptr);
     r = item(
       a.isNonBlocking() ? ID_verilog_non_blocking_assign
                         : ID_verilog_blocking_assign,
-      {expr(a.left()), expr(a.right())});
+      {std::move(lhs), std::move(rhs)});
     break;
   }
   default:

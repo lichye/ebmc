@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -97,6 +97,10 @@ run string-file compile string_parameter string-file.vv string-file.sv
 grep -qE 'string-file.sv:[0-9]+:[0-9]+: unsupported procedural call \$readmemh$' string-file
 test "$(cat string-file.rc)" = 2
 test ! -e string-file.vv
+run compound-target compile compound_target compound-rejected.vv "$front/tests/compound_target.sv"
+grep -qE 'compound_target.sv:4:[0-9]+: unsupported compound assignment target' compound-target
+test "$(cat compound-target.rc)" = 2
+test ! -e compound-rejected.vv
 # An explicitly empty input still needs its own supported undriven semantics.
 sed 's/\.a(a), \.forwarded(open_q)/.a(), .forwarded(open_q)/' "$front/tests/open_outputs.sv" >open_input.sv
 run open-input compile open_outputs rejected.vv open_input.sv

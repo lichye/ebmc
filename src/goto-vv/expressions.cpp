@@ -28,7 +28,7 @@ exprt as_property(exprt e)
   return e;
 }
 } // namespace
-exprt compilert::expr(const Expression &e)
+exprt compilert::expr(const Expression &e, const exprt *compound_target)
 {
   const auto at = e.sourceRange.start();
   auto t = type(*e.type, at);
@@ -76,6 +76,11 @@ exprt compilert::expr(const Expression &e)
     r = symbol_exprt(name(*s), t);
     break;
   }
+  case ExpressionKind::LValueReference:
+    if(!compound_target)
+      fail(at, "unbound compound assignment target");
+    r = typecast_exprt::conditional_cast(*compound_target, t);
+    break;
   case ExpressionKind::IntegerLiteral:
     r = literal(e.as<IntegerLiteral>().getValue(), t);
     break;
@@ -84,7 +89,7 @@ exprt compilert::expr(const Expression &e)
     break;
   case ExpressionKind::Conversion:
     r = typecast_exprt::conditional_cast(
-      expr(e.as<ConversionExpression>().operand()), t);
+      expr(e.as<ConversionExpression>().operand(), compound_target), t);
     break;
   case ExpressionKind::UnaryOp:
   {
@@ -127,7 +132,8 @@ exprt compilert::expr(const Expression &e)
       r = literal(value.integer(), t);
       break;
     }
-    auto l = expr(b.left()), v = expr(b.right());
+    auto l = expr(b.left(), compound_target);
+    auto v = expr(b.right(), compound_target);
     static const std::map<O, irep_idt> op = {
       {O::Equality, ID_equal},
       {O::Inequality, ID_notequal},
