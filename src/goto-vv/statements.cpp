@@ -62,6 +62,30 @@ bool is_unit_assignment_step(
   return amount.isInteger() && amount.integer().as<int64_t>() == 1;
 }
 
+bool is_module_variable(const Symbol &symbol)
+{
+  const auto *parent = symbol.getParentScope();
+  return symbol.kind == SymbolKind::Variable && parent &&
+         parent->asSymbol().kind == SymbolKind::InstanceBody;
+}
+
+void require_read_only(
+  const compilert &compiler,
+  const Expression &expr,
+  const char *diagnostic)
+{
+  // Constant evaluation would perform these writes on temporary copies.
+  expr.visit(makeVisitor(
+    [&](auto &, const AssignmentExpression &e)
+    { compiler.fail(e.sourceRange.start(), diagnostic); },
+    [&](auto &visitor, const UnaryExpression &e)
+    {
+      if(OpInfo::isLValue(e.op))
+        compiler.fail(e.sourceRange.start(), diagnostic);
+      visitor.visitDefault(e);
+    }));
+}
+
 class loop_expansion_visitort
   : public ASTVisitor<loop_expansion_visitort, VisitFlags::AllGood>
 {
@@ -222,12 +246,13 @@ exprt compilert::clock_reset_block(const TimedStatement &block)
 
 exprt compilert::counted_loop(
   const VariableSymbol &v,
-  const ForLoopStatement &loop)
+  const ForLoopStatement &loop,
+  const AssignmentExpression *external_init)
 {
   const auto at = loop.sourceRange.start();
-  const auto *init = v.getInitializer();
+  const auto *init = external_init ? &external_init->right() : v.getInitializer();
   if(
-    !init || !loop.stopExpr || !loop.initializers.empty() ||
+    !init || !loop.stopExpr || (!external_init && !loop.initializers.empty()) ||
     loop.steps.size() != 1)
     fail(at, "requires a statically bounded counted loop");
   const auto &step = *loop.steps.front();
@@ -247,20 +272,44 @@ exprt compilert::counted_loop(
       fail(step_at, "expected an increment of the loop-local index");
   }
 
+  if(
+    external_init ||
+    std::any_of(
+      expanded_indices.begin(),
+      expanded_indices.end(),
+      [](const auto &entry) { return is_module_variable(*entry.first); }))
+  {
+    require_read_only(*this, *init, "unsupported write in a loop initializer");
+    require_read_only(*this, *loop.stopExpr, "unsupported write in a loop guard");
+  }
+
   EvalContext context(v);
   for(const auto &[index, value] : expanded_indices)
     context.createLocal(&index->as<VariableSymbol>(), value);
   const auto first = init->eval(context);
   if(!first.isInteger() || first.integer().hasUnknown())
-    fail(v.location, "nonconstant loop initializer");
+    fail(init->sourceRange.start(), "nonconstant loop initializer");
   context.createLocal(&v, first);
   const bool expand_nested =
-    !expanded_indices.empty() || !procedural_locals.empty();
+    external_init || !expanded_indices.empty() || !procedural_locals.empty();
   loop_expansion_visitort visitor(v, in_always_comb);
   if(!expand_nested)
     loop.body.visit(visitor);
   const bool expand = expand_nested || visitor.needs_expansion();
   auto expanded = item(ID_block);
+  const auto *external_symbol =
+    external_init ? &object.symbols.lookup_ref(name(v)) : nullptr;
+  const auto write_index = [&](const ConstantValue &value, SourceLocation where)
+  {
+    auto write = item(
+      ID_verilog_blocking_assign,
+      {external_symbol->symbol_expr(),
+       literal(value.integer(), external_symbol->type)});
+    write.add_source_location() = loc(where);
+    expanded.operands().push_back(std::move(write));
+  };
+  if(external_symbol)
+    write_index(first, external_init->sourceRange.start());
   for(unsigned count = 0;; ++count)
   {
     const auto condition = loop.stopExpr->eval(context);
@@ -296,6 +345,8 @@ exprt compilert::counted_loop(
         actual.isSigned() != expected->isSigned() || actual != *expected)
         fail(step_at, "loop step does not preserve a typed unit increment");
     }
+    if(external_symbol)
+      write_index(*context.findLocal(&v), step_at);
   }
   if(expand)
     return expanded.with_source_location(loc(at));
@@ -486,6 +537,33 @@ exprt compilert::stmt(const Statement &s)
     }
     break;
   }
+  case StatementKind::ForLoop:
+  {
+    const auto &loop = s.as<ForLoopStatement>();
+    if(!loop.loopVars.empty() || loop.initializers.size() != 1)
+      fail(at, "requires one direct initializer for a module loop index");
+    const auto *init =
+      loop.initializers.front()->as_if<AssignmentExpression>();
+    if(
+      !init || init->isNonBlocking() || init->timingControl || init->op ||
+      init->left().kind != ExpressionKind::NamedValue)
+      fail(
+        loop.initializers.front()->sourceRange.start(),
+        "requires a direct blocking initializer for a module loop index");
+    const auto *target = init->left().getSymbolReference();
+    const auto where = init->left().sourceRange.start();
+    if(
+      !target || !is_module_variable(*target) ||
+      !target->as<VariableSymbol>().getType().isSimpleBitVector())
+      fail(where, "requires a module variable as the loop index");
+    if(expanded_indices.count(target))
+      fail(where, "write to a statically expanded loop index");
+    const auto *symbol = object.symbols.lookup(name(*target));
+    if(!symbol || !symbol->is_lvalue)
+      fail(where, "requires a writable module loop index");
+    r = counted_loop(target->as<VariableSymbol>(), loop, init);
+    break;
+  }
   case StatementKind::Break:
     if(!expanded_indices.empty())
       fail(at, "unsupported break in a statically expanded loop");
@@ -552,18 +630,7 @@ exprt compilert::stmt(const Statement &s)
       fail(at, "unsupported statement condition");
     const auto &test = *c.conditions[0].expr;
     if(!expanded_indices.empty() || !procedural_locals.empty())
-    {
-      // Constant evaluation would perform these writes on temporary copies.
-      test.visit(makeVisitor(
-        [this](auto &, const AssignmentExpression &e)
-        { fail(e.sourceRange.start(), "unsupported write in a condition"); },
-        [this](auto &visitor, const UnaryExpression &e)
-        {
-          if(OpInfo::isLValue(e.op))
-            fail(e.sourceRange.start(), "unsupported write in a condition");
-          visitor.visitDefault(e);
-        }));
-    }
+      require_read_only(*this, test, "unsupported write in a condition");
     const auto constant = eval_known(test);
     if(constant.isInteger() && !constant.integer().hasUnknown())
     {

@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -206,6 +206,18 @@ for probe in other_target:5 other_source:14 nonunit:22; do
   grep -qE "assignment_step_invalid.sv:$line:[0-9]+: expected a blocking unit increment" "assignment-step-$kind"
 done
 grep -qE 'assignment_step_invalid.sv:30:[0-9]+: static loop exceeds the expansion limit' assignment-step-nonterminating
+for kind in write break runtime oob guard_write nested_init; do
+  log="module-loop-$kind"
+  run "$log" compile "module_loop_index_$kind" "$log.vv" "$front/tests/module_loop_index_invalid.sv"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+done
+grep -qE 'module_loop_index_invalid.sv:7:[0-9]+: write to a statically expanded loop index' module-loop-write
+grep -qE 'module_loop_index_invalid.sv:19:[0-9]+: unsupported break in a statically expanded loop' module-loop-break
+grep -qE 'module_loop_index_invalid.sv:30:[0-9]+: nonconstant loop initializer' module-loop-runtime
+grep -qE 'module_loop_index_invalid.sv:41:[0-9]+: packed element select index is out of range' module-loop-oob
+grep -qE 'module_loop_index_invalid.sv:50:[0-9]+: unsupported write in a loop guard' module-loop-guard_write
+grep -qE 'module_loop_index_invalid.sv:61:[0-9]+: unsupported write in a loop initializer' module-loop-nested_init
 run final-control-compile "$vv" compile final-control.vv --single-unit --top empty_final \
   -D OMIT_FINAL "$front/tests/empty_final.sv"
 test "$(cat final-control-compile.rc)" = 0

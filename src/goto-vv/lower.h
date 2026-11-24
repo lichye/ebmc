@@ -120,7 +120,10 @@ public:
   dynamic_packed_write(const AssignmentExpression &assignment);
   void require_empty_final(const Statement &s) const;
   exprt stmt(const Statement &s);
-  exprt counted_loop(const VariableSymbol &index, const ForLoopStatement &loop);
+  exprt counted_loop(
+    const VariableSymbol &index,
+    const ForLoopStatement &loop,
+    const AssignmentExpression *external_init = nullptr);
   exprt declare_local(const VariableSymbol &variable);
   exprt clock_reset_block(const TimedStatement &block);
   exprt immediate(const ImmediateAssertionStatement &s, const Symbol *label);
