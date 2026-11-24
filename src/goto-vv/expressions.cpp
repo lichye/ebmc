@@ -524,12 +524,18 @@ exprt compilert::expr(
       auto direction = rs.getSelectionKind() == RangeSelectionKind::IndexedUp
                          ? ID_verilog_indexed_part_select_plus
                          : ID_verilog_indexed_part_select_minus;
+      // An indexed read produces a vector even at width one. The native
+      // lowering uses a bit-vector extract and a same-width padding value.
+      const auto slice_type =
+        !lvalue && t.id() == ID_bool ? typet(unsignedbv_typet{1}) : t;
       r = verilog_indexed_part_select_plus_or_minus_exprt(
         direction,
         expr(rs.value(), nullptr, lvalue),
         expr(rs.left()),
         constant_bound(rs.right()),
-        t);
+        slice_type);
+      if(!lvalue)
+        r = typecast_exprt::conditional_cast(std::move(r), t);
     }
     break;
   }
