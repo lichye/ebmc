@@ -47,6 +47,37 @@ with the normal target. For an empty contract and a single-clock design:
     src/goto-vv/build/goto-vv constrain design.vv empty-contract.txt run.vv
     src/ebmc/ebmc --undriven seq --bound 20 run.vv
 
+By default each input file is a separate compilation unit. Use `-mfcu`
+(`--single-unit`) to put the primary sources in one compilation unit, in file
+order. Use `-sfcu` (`--single-unit=false`) to explicitly select separate units.
+The two spellings of each setting use the same slang option. A second setting
+on the command line is an error, including when the first setting came from a
+file list. Slang ignores a second setting it encounters inside a file list. Put
+the setting on the command line before the file list to override a value in the
+list.
+
+Use `-f FILE` for paths relative to the working directory or `-F FILE` for
+paths relative to that list. These options can nest and accept compiler options
+including `+define+`, `+incdir+`, `-y`, and `-v`. This example reads a nested
+list and compiles its two source files in the listed order as one unit.
+
+    src/goto-vv/build/goto-vv compile design.vv --top top -F rtl/design.f
+
+Put the following line in `rtl/design.f`.
+
+    -F units/decoder.f
+
+Put the unit setting and sources in `rtl/units/decoder.f`.
+
+    -mfcu
+    +define+SYNTHESIS
+    +incdir+../include
+    ../decoder.sv
+    ../top.sv
+
+Slang's `-C FILE` lists an explicitly separate unit, and library input is
+separate from primary source units.
+
 An empty contract is a zero-length file. Contract lines can specify
 `reset top.rst` or `assume label posedge top.clk top.input_bus == '0`.
 Run the cross-process interface fixtures with

@@ -106,4 +106,5 @@ grep -q 'bridge.sv:[0-9].*unsupported sampling model' bad-sampling
 grep -q '^"0110" 0 0$' wires.vv
 awk '/^Transition system state 0/{in0=1;next} /^Transition system state 1/{in0=0} in0 && /temporal.started = 0/{seen=1} END{exit !seen}' temporal.typed
 for k in bad-binding bad-version bad-clock stable-clock bad-sampling; do test "$(cat "$k.rc")" != 0; done
+EBMC="$eb" VV_BIN="$vv" bash "$front/tests/compilation_units.sh" "$work/compilation-units"
 echo PASS

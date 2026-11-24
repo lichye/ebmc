@@ -12,7 +12,8 @@ int main(int argc, char **argv)
     if(command == "constrain")
       return constrain_design(argc - 1, argv + 1);
   }
-  std::cerr << "usage: goto-vv compile OUTPUT [slang options] INPUT\n"
+  std::cerr << "usage: goto-vv compile OUTPUT [-mfcu|-sfcu] [slang options] "
+               "INPUT...\n"
                "       goto-vv constrain INPUT CONTRACT OUTPUT\n";
   return 2;
 }

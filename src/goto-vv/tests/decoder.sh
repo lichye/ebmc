@@ -28,17 +28,18 @@ for mode in raw adapted contract cover typed-cover; do
   if [[ $mode = cover || $mode = typed-cover ]]; then
     sed -i '/^endmodule/i\  m1_live: cover property (@(posedge clk) !rst && instruction_ready);' "$dir/decode_spec.sv"
   fi
-  printf '\x60include "%s"\n' "$dir/${rtl[0]}" "$dir/${rtl[1]}" "$dir/decode_spec.sv" >"$dir/unit.sv"
+  # EBMC -f and slang -F both resolve paths from the list's directory.
+  printf '%s\n' '-D SYNTHESIS' '-I src/definitions' "${rtl[@]}" decode_spec.sv >"$dir/decoder.f"
 done
 : >inputs/original.txt
 printf '%s\n' 'reset decode_spec.rst' "assume m1_env_addr_zero posedge decode_spec.clk decode_spec.instruction_addr_from_imem == '0" >inputs/external.txt
-flags=(--single-unit --top decode_spec -DSYNTHESIS)
-if "$vv" compile out/strict.vv "${flags[@]}" -I inputs/raw/src/definitions inputs/raw/unit.sv >log/strict.log 2>&1; then
+flags=(-mfcu --top decode_spec)
+if "$vv" compile out/strict.vv "${flags[@]}" -F inputs/raw/decoder.f >log/strict.log 2>&1; then
   echo 'Original RTL unexpectedly passed strict elaboration' >&2; exit 1
 fi
 grep -q 'load_instr_valid.*used before its declaration' log/strict.log
 compile() {
-  /usr/bin/time -f '%e %M %x' -o "log/$2.time" "$vv" compile "out/$2.vv" "${flags[@]}" --allow-use-before-declare -I "inputs/$1/src/definitions" "inputs/$1/unit.sv" >"log/$2.log" 2>&1
+  /usr/bin/time -f '%e %M %x' -o "log/$2.time" "$vv" compile "out/$2.vv" "${flags[@]}" --allow-use-before-declare -F "inputs/$1/decoder.f" >"log/$2.log" 2>&1
 }
 compile adapted decode
 compile typed-cover cover-compiled
@@ -49,9 +50,9 @@ run() {
   local label=$1 route=$2 mode=$3; shift 3
   local -a args=(--undriven seq --bound 20)
   if [[ $route = direct ]]; then
-    args+=(--top decode_spec --systemverilog -D SYNTHESIS -I "inputs/$mode/src/definitions")
+    args+=(--top decode_spec --systemverilog)
     if [[ $mode = contract || $mode = cover ]]; then args+=(--reset decode_spec.rst); fi
-    args+=("inputs/$mode/unit.sv")
+    args+=(-f "inputs/$mode/decoder.f")
   else
     args+=("out/$mode.vv")
   fi
