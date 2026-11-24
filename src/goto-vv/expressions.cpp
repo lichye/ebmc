@@ -237,15 +237,43 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
     r = verilog_bit_select_exprt(expr(el.value()), expr(el.selector()), t);
     break;
   }
+  case ExpressionKind::SimpleAssignmentPattern:
   case ExpressionKind::StructuredAssignmentPattern:
   {
-    auto &pattern = e.as<StructuredAssignmentPatternExpression>();
+    const auto *simple = e.as_if<SimpleAssignmentPatternExpression>();
+    const auto elements =
+      simple ? simple->elements()
+             : e.as<StructuredAssignmentPatternExpression>().elements();
     if(
-      t.id() != ID_struct ||
-      pattern.elements().size() != to_struct_type(t).components().size())
+      const auto *packed = e.type->getCanonicalType().as_if<PackedStructType>())
+    {
+      if((simple && simple->isLValue) || elements.empty())
+        fail(at, "unsupported assignment pattern");
+      // Slang resolves setters in member order and recursively expands defaults.
+      exprt::operandst operands;
+      auto element = elements.begin();
+      for(const auto &field : packed->membersOfType<FieldSymbol>())
+      {
+        if(element == elements.end())
+          fail(at, "unsupported assignment pattern");
+        operands.push_back(typecast_exprt::conditional_cast(
+          expr(**element), type(field.getType(), field.location)));
+        ++element;
+      }
+      if(element != elements.end())
+        fail(at, "unsupported assignment pattern");
+      if(operands.size() == 1)
+        r = typecast_exprt::conditional_cast(std::move(operands.front()), t);
+      else
+        r = node(ID_concatenation, t, std::move(operands));
+      break;
+    }
+    if(
+      simple || t.id() != ID_struct ||
+      elements.size() != to_struct_type(t).components().size())
       fail(at, "unsupported assignment pattern");
     r = node(ID_struct, t);
-    for(auto *field : pattern.elements())
+    for(auto *field : elements)
       r.operands().push_back(expr(*field));
     break;
   }
