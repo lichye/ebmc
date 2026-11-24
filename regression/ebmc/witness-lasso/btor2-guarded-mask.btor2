@@ -1,0 +1,103 @@
+1 sort bitvec 2
+2 sort bitvec 8
+3 sort array 1 2
+4 state 3 Verilog::$root.main.mem
+5 sort bitvec 1
+6 input 5 Verilog::$root.main.wr
+7 input 1 Verilog::$root.main.addr
+8 sort bitvec 4
+9 uext 8 7 2
+10 const 8 0000
+11 sgte 5 9 10
+12 const 8 0100
+13 slt 5 9 12
+14 and 5 11 13
+15 read 2 4 7
+16 const 2 00000000
+17 ite 2 14 15 16
+18 const 2 00001111
+19 sll 2 18 16
+20 not 2 19
+21 and 2 17 20
+22 input 8 Verilog::$root.main.data
+23 uext 2 22 4
+24 and 2 23 18
+25 sll 2 24 16
+26 or 2 21 25
+27 write 3 4 7 26
+28 ite 3 6 27 4
+29 next 3 4 28
+30 const 5 1
+31 state 5 Verilog::$root.main.first
+32 init 5 31 30
+33 const 5 0
+34 next 5 31 33
+35 state 5 Verilog::$root.main.valid
+36 init 5 35 33
+37 next 5 35 6
+38 state 1 Verilog::$root.main.addr_q
+39 ite 1 6 7 38
+40 next 1 38 39
+41 state 8 Verilog::$root.main.low_q
+42 ite 8 6 22 41
+43 next 8 41 42
+44 state 8 Verilog::$root.main.high_q
+45 slice 8 17 7 4
+46 ite 8 6 45 44
+47 next 8 44 46
+48 state 5
+49 init 5 48 33
+50 next 5 48 30
+51 const 1 00
+52 read 2 4 51
+53 const 2 00010010
+54 eq 5 52 53
+55 or 5 48 54
+56 constraint 55
+57 const 1 01
+58 read 2 4 57
+59 const 2 00110100
+60 eq 5 58 59
+61 or 5 48 60
+62 constraint 61
+63 const 1 10
+64 read 2 4 63
+65 const 2 01010110
+66 eq 5 64 65
+67 or 5 48 66
+68 constraint 67
+69 const 1 11
+70 read 2 4 69
+71 const 2 01111000
+72 eq 5 70 71
+73 or 5 48 72
+74 constraint 73
+75 not 5 31
+76 and 5 54 60
+77 and 5 76 66
+78 and 5 77 72
+79 or 5 75 78
+80 not 5 79
+81 bad 80 main.initialized
+82 not 5 35
+83 uext 8 38 2
+84 sgte 5 83 10
+85 slt 5 83 12
+86 and 5 84 85
+87 read 2 4 38
+88 ite 2 86 87 16
+89 slice 8 88 3 0
+90 eq 5 89 41
+91 or 5 82 90
+92 not 5 91
+93 bad 92 main.low
+94 slice 8 88 7 4
+95 eq 5 94 44
+96 or 5 82 95
+97 not 5 96
+98 bad 97 main.high
+99 concat 2 41 44
+100 eq 5 88 99
+101 or 5 82 100
+102 not 5 101
+103 bad 102 main.swapped

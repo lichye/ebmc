@@ -1,0 +1,10 @@
+CORE
+btor2-guarded-init.btor2
+--bound 1
+^switched: finite bad frame 1 has an infinite extension by totality$
+^\[switched\] : REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+certifying witness loop
+--

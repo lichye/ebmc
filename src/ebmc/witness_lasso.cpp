@@ -23,6 +23,7 @@
 #include "instrument_past.h"
 #include "property_checker.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cstdint>
 #include <fstream>
@@ -490,8 +491,8 @@ private:
 // Sufficient syntactic totality criterion. A freely chosen next value is
 // allowed for an unassigned latch; written latches are distinct and each RHS
 // is a total function of the current frame and sampled history. Initial
-// conditions do not constrain successors. Unrecognised operators or state
-// constraints fail closed.
+// conditions do not constrain successors. State constraints that are not
+// discharged by a forced successor value must pass the definition check.
 bool total_transition(
   const transition_systemt &system,
   const transt &tr,
@@ -540,6 +541,33 @@ bool total_transition(
     }
     return true;
   };
+  std::set<irep_idt> successor_true;
+  if(!all_conjuncts(
+       tr.trans(),
+       [&](const exprt &clause)
+       {
+         if(clause.id() != ID_equal)
+           return false;
+         const auto &eq = to_equal_expr(clause);
+         if(
+           eq.lhs().id() != ID_next_symbol ||
+           eq.lhs().type() != eq.rhs().type())
+           return false;
+         const auto id = eq.lhs().get(ID_identifier);
+         const auto *sym = system.symbol_table.lookup(id);
+         const bool stutter =
+           eq.rhs().id() == ID_symbol && eq.rhs().get(ID_identifier) == id;
+         if(
+           !sym || !sym->is_state_var || !assigned.insert(id).second ||
+           (!stutter && !total_value(eq.rhs())))
+           return false;
+         if(eq.rhs().is_true())
+           successor_true.insert(id);
+         return true;
+       },
+       true))
+    return false;
+
   const auto writable_wire =
     [&](const exprt &lhs) -> std::optional<wire_locationt>
   {
@@ -581,6 +609,20 @@ bool total_transition(
        tr.invar(),
        [&](const exprt &clause)
        {
+         // A BTOR2 import can retain initial conditions as constraints
+         // guarded by a latch that is always true after the first step.
+         // The prefix still checks the original invariant in every frame.
+         if(
+           clause.id() == ID_or &&
+           std::any_of(
+             clause.operands().begin(),
+             clause.operands().end(),
+             [&](const exprt &op)
+             {
+               return op.id() == ID_symbol && op.is_boolean() &&
+                      successor_true.count(to_symbol_expr(op).identifier());
+             }))
+           return true;
          if(clause.id() != ID_equal)
            return false;
          const auto &eq = to_equal_expr(clause);
@@ -627,25 +669,7 @@ bool total_transition(
       aliases.pop_back();
     }
   }
-  if(!acyclic_wire_definitions(wires))
-    return false;
-  return all_conjuncts(
-    tr.trans(),
-    [&](const exprt &clause)
-    {
-      if(clause.id() != ID_equal)
-        return false;
-      const auto &eq = to_equal_expr(clause);
-      if(eq.lhs().id() != ID_next_symbol || eq.lhs().type() != eq.rhs().type())
-        return false;
-      auto id = eq.lhs().get(ID_identifier);
-      auto sym = system.symbol_table.lookup(id);
-      const bool stutter =
-        eq.rhs().id() == ID_symbol && eq.rhs().get(ID_identifier) == id;
-      return sym && sym->is_state_var && assigned.insert(id).second &&
-             (stutter || total_value(eq.rhs()));
-    },
-    true);
+  return acyclic_wire_definitions(wires);
 }
 
 // Match values on both sides of the repeated frame. This includes the

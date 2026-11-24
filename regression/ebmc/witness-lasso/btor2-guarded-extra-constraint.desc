@@ -1,0 +1,11 @@
+CORE
+btor2-guarded-extra-constraint.btor2
+--bound 0
+^finite_bad: certifying witness loop within 48 transitions$
+^finite_bad: no witness loop within 48 transitions$
+^\[finite_bad\] : INCONCLUSIVE$
+^EXIT=10$
+^SIGNAL=0$
+--
+infinite extension by totality
+--

@@ -1,0 +1,14 @@
+1 sort bitvec 1
+2 zero 1
+3 one 1
+4 state 1 initialized
+5 init 1 4 2
+6 next 1 4 3
+7 not 1 4
+8 next 1 4 7
+9 state 1 data
+10 next 1 9 3
+11 not 1 9
+12 or 1 4 11
+13 constraint 12
+14 bad 3 finite_bad
