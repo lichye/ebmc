@@ -57,6 +57,27 @@ bool covers_packed_dimension(const Type &selector, ConstantRange range)
          range.upper() == limit - 1;
 }
 
+bool modulo_covers_packed_dimension(
+  const Expression &selector,
+  ConstantRange range,
+  const Symbol &scope)
+{
+  const auto *modulo = selector.as_if<BinaryExpression>();
+  const auto is_unsigned = [](const Type &type)
+  { return type.isIntegral() && !type.isSigned(); };
+  if(
+    range.lower() != 0 || !modulo || modulo->op != BinaryOperator::Mod ||
+    !is_unsigned(*selector.type) || !is_unsigned(*modulo->left().type) ||
+    !is_unsigned(*modulo->right().type))
+    return false;
+
+  EvalContext context(scope);
+  const auto divisor = modulo->right().eval(context);
+  // An unsigned remainder by the positive bank count is in [0, count-1].
+  return divisor.isInteger() &&
+         divisor.integer().as<uint64_t>() == range.fullWidth();
+}
+
 exprt packed_element_offset(const PackedArrayType &array, exprt index)
 {
   auto type = index.type();
@@ -519,13 +540,14 @@ exprt compilert::expr(
     {
       if(
         lvalue || selected ||
-        !covers_packed_dimension(*selector.type, array->range))
+        (!covers_packed_dimension(*selector.type, array->range) &&
+         !modulo_covers_packed_dimension(selector, array->range, *scope)))
         fail(
           index_at,
           "packed element select requires a known constant index or a "
           "runtime read index whose value domain matches the declared range");
-      // The selector's whole numeric domain fits. Widen before translating
-      // from the declared right bound and scaling by the inner width.
+      // Evaluate the selector at its original type before converting its
+      // proven in-range result for the packed layout calculation.
       auto offset = packed_element_offset(
         *array,
         typecast_exprt::conditional_cast(

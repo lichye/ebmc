@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -228,6 +228,20 @@ done
 grep -qE 'packed_bank_write_invalid.sv:5:[0-9]+: runtime packed bank write requires an index whose value domain matches the declared range' packed-bank-write-wide
 grep -qE 'packed_bank_write_invalid.sv:15:[0-9]+: packed range select requires known constant bounds' packed-bank-write-dynamic_inner
 grep -qE 'packed_bank_write_invalid.sv:24:[0-9]+: packed range select is out of range' packed-bank-write-oob_inner
+run modulo-flat.direct "$eb" --top modulo_bank_read --undriven seq --bound 3 \
+  -D NATIVE_FLAT "$front/tests/modulo_bank_read.sv"
+while read -r name expected; do
+  compare modulo-flat.direct modulo_bank_read.typed "modulo_bank_read.$name" "$expected"
+done <"$front/tests/modulo_bank_read.expected"
+for probe in signed:3 zero:9 dynamic:15 wrong_count:21 nonzero_base:27; do
+  kind=${probe%:*}
+  line=${probe#*:}
+  log="modulo-read-$kind"
+  run "$log" compile "modulo_bank_read_$kind" "$log.vv" "$front/tests/modulo_bank_read_invalid.sv"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+  grep -qE "modulo_bank_read_invalid.sv:$line:[0-9]+: packed element select requires a known constant index" "$log"
+done
 run final-control-compile "$vv" compile final-control.vv --single-unit --top empty_final \
   -D OMIT_FINAL "$front/tests/empty_final.sv"
 test "$(cat final-control-compile.rc)" = 0
