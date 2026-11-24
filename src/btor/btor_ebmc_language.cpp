@@ -457,6 +457,10 @@ static transition_systemt build_transition_system(const btor2_modelt &model)
 
   // Map from BTOR2 node ID to CBMC expression
   std::map<std::size_t, exprt> expr_map;
+  std::map<std::size_t, std::size_t> fanout;
+  for(const auto &[id, node] : model.nodes)
+    for(auto arg : node.args)
+      ++fanout[static_cast<std::size_t>(arg < 0 ? -arg : arg)];
 
   // First pass: create symbols for inputs and states
   for(auto &[id, node] : model.nodes)
@@ -498,6 +502,7 @@ static transition_systemt build_transition_system(const btor2_modelt &model)
   }
 
   // Second pass: build expressions for all nodes in order
+  exprt::operandst invar_exprs;
   for(auto &[id, node] : model.nodes)
   {
     if(expr_map.count(id))
@@ -556,11 +561,31 @@ static transition_systemt build_transition_system(const btor2_modelt &model)
     // Cast unsignedbv[1] back to bool when the node's sort is bitvec 1
     if(type.id() == ID_bool && op_result.type().id() != ID_bool)
       op_result = typecast_exprt{op_result, bool_typet{}};
+
+    // Keep fanout in the word-level model. An inlined DAG may become an
+    // exponentially larger tree when instantiated for each time frame.
+    if(fanout[id] > 1)
+    {
+      std::string name = "$node" + std::to_string(id);
+      std::string identifier = id2string(module_id) + "::" + name;
+      while(result.symbol_table.lookup(identifier))
+      {
+        name += '$';
+        identifier += '$';
+      }
+      symbolt wire{identifier, type, mode};
+      wire.base_name = name;
+      wire.module = module_id;
+      wire.is_auxiliary = true;
+      auto wire_expr = wire.symbol_expr();
+      result.symbol_table.add(wire);
+      invar_exprs.emplace_back(equal_exprt{wire_expr, std::move(op_result)});
+      op_result = std::move(wire_expr);
+    }
     expr_map[id] = std::move(op_result);
   }
 
   // Third pass: build init and trans constraints
-  exprt::operandst invar_exprs;
   exprt::operandst init_exprs;
   exprt::operandst trans_exprs;
 

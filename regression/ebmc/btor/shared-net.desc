@@ -1,0 +1,6 @@
+CORE
+shared-net.btor2
+--bound 2
+^\[bad53\] : PROVED up to bound 2$
+^EXIT=0$
+^SIGNAL=0$
