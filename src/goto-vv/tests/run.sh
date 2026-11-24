@@ -352,6 +352,33 @@ grep -q 'bad-version.vv:1: unsupported goto-vv schema' bad-version
 sed 's/posedge clk/negedge clk/' "$front/tests/bridge.sv" >bad-clock.sv
 run bad-clock compile bridge rejected.vv bad-clock.sv
 grep -q 'bad-clock.sv:[0-9].*posedge' bad-clock
+named_property="$front/tests/named_property.sv"
+compile named_property named-property.vv "$named_property"
+bind named-property.vv empty named-property-check.vv
+named_flags=(--undriven seq --finite-prefix --bound 3)
+run named-property.direct "$eb" "${named_flags[@]}" --top named_property -D NATIVE_INLINE_REMOTE "$named_property"
+run named-property.typed "$eb" "${named_flags[@]}" named-property-check.vv
+while read -r name expected; do
+  compare named-property.direct named-property.typed "named_property.$name" "$expected"
+done <"$front/tests/named_property.expected"
+test "$(cat named-property.typed.rc)" = 10
+run named-property-list "$eb" --show-properties named-property-check.vv
+test "$(cat named-property-list.rc)" = 0
+sed -n 's/^\(named_property\.[^:]*\): .*/\1/p' named-property-list |
+  sort >named-property-labels
+awk '{ print "named_property." $1 }' "$front/tests/named_property.expected" |
+  sort | cmp - named-property-labels
+for kind in formal local negedge second_clock body; do
+  log="named-property-$kind"
+  run "$log" compile "named_property_$kind" "$log.vv" "$front/tests/named_property_invalid.sv"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+done
+grep -Fq 'named_property_invalid.sv:5:29: named property with formal arguments' named-property-formal
+grep -Fq 'named_property_invalid.sv:13:29: named property with assertion-local variables' named-property-local
+grep -Fq 'named_property_invalid.sv:18:7: expected an unguarded single posedge' named-property-negedge
+grep -Fq 'named_property_invalid.sv:25:7: multiple clock domains' named-property-second_clock
+grep -qE 'named_property_invalid.sv:33:[0-9]+: unsupported SVA Unary' named-property-body
 sed 's/\$stable(zero)/$stable(zero, @(negedge clk))/' "$front/tests/sampled_sequence.sv" >stable-clock.sv
 run stable-clock compile sampled_sequence rejected.vv stable-clock.sv
 grep -q 'stable-clock.sv:[0-9].*\$stable.*posedge' stable-clock

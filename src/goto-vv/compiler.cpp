@@ -313,6 +313,9 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
     case SymbolKind::TypeAlias:
     case SymbolKind::EmptyMember:
       break;
+    case SymbolKind::Property:
+      // Slang expands the body at each reference in the assertion AST.
+      break;
     case SymbolKind::TransparentMember:
       // Names hoisted from a local enum refer to its existing value symbols.
       if(s.as<TransparentMemberSymbol>().wrapped.kind != SymbolKind::EnumValue)

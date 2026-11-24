@@ -132,7 +132,7 @@ public:
   exprt declare_local(const VariableSymbol &variable);
   exprt clock_reset_block(const TimedStatement &block);
   exprt immediate(const ImmediateAssertionStatement &s, const Symbol *label);
-  exprt assertion(const AssertionExpr &a, SourceLocation at);
+  exprt assertion(const AssertionExpr &a, SourceLocation at, irept &references);
   std::string clock(const TimingControl *ev, SourceLocation at);
   void module(const InstanceSymbol &inst, bool top);
   using port_mapt = std::map<const Symbol *, const PortSymbol *>;

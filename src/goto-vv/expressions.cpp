@@ -720,7 +720,10 @@ std::string compilert::clock(const TimingControl *tc, SourceLocation at)
   meta.set("clock", id);
   return id;
 }
-exprt compilert::assertion(const AssertionExpr &a, SourceLocation at)
+exprt compilert::assertion(
+  const AssertionExpr &a,
+  SourceLocation at,
+  irept &references)
 {
   if(a.syntax)
     at = a.syntax->sourceRange().start();
@@ -731,7 +734,7 @@ exprt compilert::assertion(const AssertionExpr &a, SourceLocation at)
   {
     auto &c = a.as<ClockingAssertionExpr>();
     clock(&c.clocking, at);
-    r = assertion(c.expr, at);
+    r = assertion(c.expr, at, references);
     break;
   }
   case AssertionExprKind::Simple:
@@ -739,6 +742,31 @@ exprt compilert::assertion(const AssertionExpr &a, SourceLocation at)
     auto &s = a.as<SimpleAssertionExpr>();
     if(s.repetition)
       fail(at, "unsupported sequence repetition");
+    if(const auto *instance = s.expr.as_if<AssertionInstanceExpression>())
+    {
+      const auto reference_at = instance->sourceRange.start();
+      const auto *definition = instance->symbol.as_if<PropertySymbol>();
+      if(!definition)
+        fail(reference_at, "unsupported named assertion item");
+      if(!definition->ports.empty() || !instance->arguments.empty())
+        fail(reference_at, "named property with formal arguments");
+      if(instance->isRecursiveProperty)
+        fail(reference_at, "unsupported recursive named property");
+      if(!instance->localVars.empty())
+        fail(reference_at, "named property with assertion-local variables");
+
+      irept reference("property_reference");
+      reference.set(ID_identifier, name(*definition));
+      reference.add(ID_C_source_location) = loc(reference_at);
+      reference.add("definition_location") = loc(definition->location);
+      references.get_sub().push_back(std::move(reference));
+
+      const auto *enclosing_scope = scope;
+      scope = definition;
+      auto body = assertion(instance->body, definition->location, references);
+      scope = enclosing_scope;
+      return body;
+    }
     r = boolean(expr(s.expr));
     break;
   }
@@ -748,7 +776,8 @@ exprt compilert::assertion(const AssertionExpr &a, SourceLocation at)
     r = node(
       ID_sva_disable_iff,
       verilog_sva_property_typet(),
-      {boolean(expr(d.condition)), as_property(assertion(d.expr, at))});
+      {boolean(expr(d.condition)),
+       as_property(assertion(d.expr, at, references))});
     break;
   }
   case AssertionExprKind::Binary:
@@ -760,7 +789,8 @@ exprt compilert::assertion(const AssertionExpr &a, SourceLocation at)
       r = node(
         ID_sva_sequence_throughout,
         verilog_sva_sequence_typet(),
-        {assertion(b.left, at), as_sequence(assertion(b.right, at))});
+        {assertion(b.left, at, references),
+         as_sequence(assertion(b.right, at, references))});
       break;
     }
     if(
@@ -772,8 +802,8 @@ exprt compilert::assertion(const AssertionExpr &a, SourceLocation at)
         ? ID_sva_overlapped_implication
         : ID_sva_non_overlapped_implication,
       verilog_sva_property_typet(),
-      {as_sequence(assertion(b.left, at)),
-       as_property(assertion(b.right, at))});
+      {as_sequence(assertion(b.left, at, references)),
+       as_property(assertion(b.right, at, references))});
     break;
   }
   case AssertionExprKind::SequenceConcat:
@@ -784,7 +814,7 @@ exprt compilert::assertion(const AssertionExpr &a, SourceLocation at)
     {
       if(!part.delay.max)
         fail(at, "unbounded sequence");
-      auto atom = as_sequence(assertion(*part.sequence, at));
+      auto atom = as_sequence(assertion(*part.sequence, at, references));
       if(r.is_nil() && part.delay.min == 0 && *part.delay.max == 0)
         r = atom;
       else
@@ -810,7 +840,9 @@ void compilert::property(
   exprt &items)
 {
   auto at = a.sourceRange.start();
-  auto actual = clock(clocks.count(&a) ? clocks.at(&a) : nullptr, at);
+  const auto *timing = clocks.count(&a) ? clocks.at(&a) : nullptr;
+  auto timing_at = timing ? timing->sourceRange.start() : SourceLocation{};
+  auto actual = clock(timing, timing_at ? timing_at : at);
   if(
     (a.ifTrue && a.ifTrue->kind != StatementKind::Empty) ||
     (a.ifFalse && a.ifFalse->kind != StatementKind::Empty))
@@ -827,8 +859,9 @@ void compilert::property(
     id = ID_verilog_cover_property;
   else
     fail(at, "unsupported assertion kind");
+  irept references("property_references");
   in_clocked_property = true;
-  auto property_expr = as_property(assertion(a.propertySpec, at));
+  auto property_expr = as_property(assertion(a.propertySpec, at, references));
   in_clocked_property = false;
   auto entry = item(
     id,
@@ -845,5 +878,7 @@ void compilert::property(
   info.set("origin", "source");
   info.set("kind", id);
   info.add(ID_C_source_location) = s.location;
+  if(!references.get_sub().empty())
+    info.add("references") = std::move(references);
 }
 } // namespace vv
