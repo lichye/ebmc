@@ -1,3 +1,5 @@
+#include <verilog/sva_expr.h>
+
 #include "lower.h"
 
 #include <bit>
@@ -741,7 +743,19 @@ exprt compilert::assertion(
   {
     auto &s = a.as<SimpleAssertionExpr>();
     if(s.repetition)
-      fail(at, "unsupported sequence repetition");
+    {
+      const auto &repetition = *s.repetition;
+      if(
+        repetition.kind != SequenceRepetition::Consecutive ||
+        repetition.range.min != 0 || repetition.range.max ||
+        s.expr.kind == ExpressionKind::AssertionInstance)
+        fail(at, "unsupported sequence repetition");
+      r = sva_sequence_repetition_star_exprt{
+        as_sequence(boolean(expr(s.expr))),
+        from_integer(0, integer_typet{}),
+        infinity_exprt{natural_typet{}}};
+      break;
+    }
     if(const auto *instance = s.expr.as_if<AssertionInstanceExpression>())
     {
       const auto reference_at = instance->sourceRange.start();
@@ -810,21 +824,39 @@ exprt compilert::assertion(
   {
     const auto &c = a.as<SequenceConcatExpr>();
     r = nil_exprt();
+    bool lhs_admits_empty = false;
     for(const auto &part : c.elements)
     {
       if(!part.delay.max)
         fail(at, "unbounded sequence");
       auto atom = as_sequence(assertion(*part.sequence, at, references));
-      if(r.is_nil() && part.delay.min == 0 && *part.delay.max == 0)
+      const auto fixed_delay = part.delay.min == *part.delay.max;
+      const auto rhs_admits_empty =
+        part.sequence->checkNondegeneracy().status.has(
+          NondegeneracyStatus::AdmitsEmpty);
+      if(r.is_nil() && fixed_delay && part.delay.min == 0)
+      {
+        lhs_admits_empty = rhs_admits_empty;
         r = atom;
+      }
       else
+      {
+        // The sequence rewriter handles empty matches at a fixed delay.
+        if(!fixed_delay && (lhs_admits_empty || rhs_admits_empty))
+          fail(
+            part.delayRange.start() ? part.delayRange.start() : at,
+            "ranged sequence delay next to a sequence admitting an empty "
+            "match");
         r = node(
           ID_sva_cycle_delay,
           verilog_sva_sequence_typet(),
           {r,
            index_constant(part.delay.min),
-           index_constant(*part.delay.max),
+           fixed_delay ? nil_exprt{} : index_constant(*part.delay.max),
            atom});
+        lhs_admits_empty =
+          lhs_admits_empty && rhs_admits_empty && part.delay.min != 0;
+      }
     }
     break;
   }

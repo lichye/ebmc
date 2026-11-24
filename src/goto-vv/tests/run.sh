@@ -379,6 +379,51 @@ grep -Fq 'named_property_invalid.sv:13:29: named property with assertion-local v
 grep -Fq 'named_property_invalid.sv:18:7: expected an unguarded single posedge' named-property-negedge
 grep -Fq 'named_property_invalid.sv:25:7: multiple clock domains' named-property-second_clock
 grep -qE 'named_property_invalid.sv:33:[0-9]+: unsupported SVA Unary' named-property-body
+star_src="$front/tests/sequence_star.sv"
+compile sequence_star sequence-star.vv "$star_src"
+bind sequence-star.vv empty sequence-star-check.vv
+star_flags=(--undriven seq --finite-prefix)
+run sequence-star.direct "$eb" "${star_flags[@]}" --bound 7 --top sequence_star "$star_src"
+run sequence-star.typed "$eb" "${star_flags[@]}" --bound 7 sequence-star-check.vv
+while read -r name bad_frame; do
+  property="sequence_star.$name"
+  if [[ $bad_frame = pass ]]; then
+    compare sequence-star.direct sequence-star.typed "$property" 'PROVED up to bound 7'
+    continue
+  fi
+  compare sequence-star.direct sequence-star.typed "$property" REFUTED
+  for depth in "$((bad_frame - 1))" "$bad_frame"; do
+    log="sequence-star-$name-d$depth"
+    query=("${star_flags[@]}" --bound "$depth" --property "$property" --numbered-trace)
+    run "$log.direct" "$eb" "${query[@]}" --top sequence_star "$star_src"
+    run "$log.typed" "$eb" "${query[@]}" sequence-star-check.vv
+    if [[ $depth = "$bad_frame" ]]; then
+      compare "$log.direct" "$log.typed" "$property" REFUTED
+      test "$(cat "$log.typed.rc")" = 10
+      grep -Fq "Counterexample with $((bad_frame + 1)) states:" "$log.direct"
+      grep -Fq "Counterexample with $((bad_frame + 1)) states:" "$log.typed"
+    else
+      compare "$log.direct" "$log.typed" "$property" "PROVED up to bound $depth"
+      test "$(cat "$log.typed.rc")" = 0
+    fi
+  done
+done <"$front/tests/sequence_star.expected"
+star_invalid="$front/tests/sequence_star_invalid.sv"
+for test_case in nonconsecutive:2 goto:6 bounded:10 positive_min:14 temporal:18 delay:22 ranged_delay:26; do
+  kind=${test_case%:*}
+  line=${test_case#*:}
+  log="sequence-star-$kind"
+  run "$log" compile "sequence_star_$kind" "$log.vv" "$star_invalid"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+  case "$kind" in
+    temporal) message='unsupported SVA SequenceWithMatch';;
+    delay) message='unbounded sequence';;
+    ranged_delay) message='ranged sequence delay next to a sequence admitting an empty match';;
+    *) message='unsupported sequence repetition';;
+  esac
+  grep -qE "sequence_star_invalid.sv:$line:[0-9]+: $message$" "$log"
+done
 sed 's/\$stable(zero)/$stable(zero, @(negedge clk))/' "$front/tests/sampled_sequence.sv" >stable-clock.sv
 run stable-clock compile sampled_sequence rejected.vv stable-clock.sv
 grep -q 'stable-clock.sv:[0-9].*\$stable.*posedge' stable-clock
