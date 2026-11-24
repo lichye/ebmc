@@ -374,7 +374,19 @@ exprt compilert::stmt(const Statement &s)
     auto &c = s.as<ConditionalStatement>();
     if(c.conditions.size() != 1 || c.conditions[0].pattern)
       fail(at, "unsupported statement condition");
-    auto condition = boolean(expr(*c.conditions[0].expr));
+    const auto &test = *c.conditions[0].expr;
+    EvalContext context(*scope);
+    const auto constant = test.eval(context);
+    if(constant.isInteger() && !constant.integer().hasUnknown())
+    {
+      if(constant.isTrue())
+        return stmt(c.ifTrue);
+      if(c.ifFalse)
+        return stmt(*c.ifFalse);
+      r = item(ID_skip);
+      break;
+    }
+    auto condition = boolean(expr(test));
     const auto entered = automatic_locals;
     auto when_true = stmt(c.ifTrue);
     const auto after_true = std::move(automatic_locals);

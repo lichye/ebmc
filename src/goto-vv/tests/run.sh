@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -148,6 +148,20 @@ grep -qE 'automatic_locals_invalid.sv:8:[0-9]+: automatic local read before assi
 grep -qE 'automatic_locals_invalid.sv:19:[0-9]+: unsupported assignment to an automatic local' automatic-partial
 grep -qE 'automatic_locals_invalid.sv:31:[0-9]+: packed element select requires a known constant index' automatic-dynamic
 grep -qE 'automatic_locals_invalid.sv:42:[0-9]+: packed element select index is out of range' automatic-oob
+run constant-guard-indivisible "$vv" compile indivisible.vv --top constant_guard \
+  -G MLEN=7 "$front/tests/constant_guard.sv"
+grep -qE 'constant_guard.sv:6:[0-9]+: unsupported procedural call \$error' constant-guard-indivisible
+test "$(cat constant-guard-indivisible.rc)" = 2
+test ! -e indivisible.vv
+for kind in dynamic_error dynamic_finish unknown; do
+  log="constant-guard-$kind"
+  run "$log" compile "constant_guard_$kind" "$log.vv" "$front/tests/constant_guard_invalid.sv"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+done
+grep -qE 'constant_guard_invalid.sv:4:[0-9]+: unsupported procedural call \$error' constant-guard-dynamic_error
+grep -qE 'constant_guard_invalid.sv:15:[0-9]+: unsupported procedural call \$finish' constant-guard-dynamic_finish
+grep -qE 'constant_guard_invalid.sv:23:[0-9]+: unsupported procedural call \$error' constant-guard-unknown
 # An explicitly empty input still needs its own supported undriven semantics.
 sed 's/\.a(a), \.forwarded(open_q)/.a(), .forwarded(open_q)/' "$front/tests/open_outputs.sv" >open_input.sv
 run open-input compile open_outputs rejected.vv open_input.sv
