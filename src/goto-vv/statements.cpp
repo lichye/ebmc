@@ -302,6 +302,55 @@ exprt compilert::declare_local(const VariableSymbol &v)
   return item(ID_skip).with_source_location(symbol.location);
 }
 
+void compilert::require_empty_final(const Statement &s) const
+{
+  switch(s.kind)
+  {
+  case StatementKind::Empty:
+    return;
+  case StatementKind::Block:
+  {
+    const auto &block = s.as<BlockStatement>();
+    if(block.blockKind != StatementBlockKind::Sequential)
+      break;
+    require_empty_final(block.body);
+    return;
+  }
+  case StatementKind::List:
+    for(const auto *statement : s.as<StatementList>().list)
+      require_empty_final(*statement);
+    return;
+  case StatementKind::Conditional:
+  {
+    const auto &conditional = s.as<ConditionalStatement>();
+    if(conditional.conditions.size() != 1 || conditional.conditions[0].pattern)
+      fail(s.sourceRange.start(), "unsupported condition in final");
+    const auto &test = *conditional.conditions[0].expr;
+    const auto value = eval_known(test);
+    if(!value.isInteger() || value.integer().hasUnknown())
+      fail(test.sourceRange.start(), "final condition must be a known constant");
+    if(value.isTrue())
+      require_empty_final(conditional.ifTrue);
+    else if(conditional.ifFalse)
+      require_empty_final(*conditional.ifFalse);
+    return;
+  }
+  case StatementKind::ExpressionStatement:
+    if(const auto *call =
+         s.as<ExpressionStatement>().expr.as_if<CallExpression>())
+      fail(
+        call->sourceRange.start(),
+        "unsupported reachable final call " +
+          std::string(call->getSubroutineName()));
+    break;
+  default:
+    break;
+  }
+  fail(
+    s.sourceRange.start(),
+    "unsupported reachable final statement " + std::string(toString(s.kind)));
+}
+
 exprt compilert::stmt(const Statement &s)
 {
   const auto at = s.sourceRange.start();

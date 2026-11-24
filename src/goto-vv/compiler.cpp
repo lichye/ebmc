@@ -396,6 +396,11 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
     {
       auto &p = s.as<ProceduralBlockSymbol>();
       auto &body = p.getBody();
+      if(p.procedureKind == ProceduralBlockKind::Final)
+      {
+        require_empty_final(body);
+        break;
+      }
       if(body.kind == StatementKind::Block)
       {
         auto &block = body.as<BlockStatement>();

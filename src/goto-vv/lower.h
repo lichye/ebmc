@@ -118,6 +118,7 @@ public:
   }
   std::optional<exprt>
   dynamic_packed_write(const AssignmentExpression &assignment);
+  void require_empty_final(const Statement &s) const;
   exprt stmt(const Statement &s);
   exprt counted_loop(const VariableSymbol &index, const ForLoopStatement &loop);
   exprt declare_local(const VariableSymbol &variable);

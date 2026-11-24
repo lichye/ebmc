@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -194,6 +194,33 @@ done
 grep -qE 'counted_guard_invalid.sv:7:[0-9]+: packed element select index is out of range' counted-guard-live
 grep -qE 'counted_guard_invalid.sv:18:[0-9]+: packed element select index is out of range' counted-guard-dynamic
 grep -qE 'counted_guard_invalid.sv:29:[0-9]+: unsupported write in a condition' counted-guard-write
+run final-control-compile "$vv" compile final-control.vv --single-unit --top empty_final \
+  -D OMIT_FINAL "$front/tests/empty_final.sv"
+test "$(cat final-control-compile.rc)" = 0
+bind final-control.vv empty final-control-check.vv
+for variant in empty_final final-control; do
+  log="$variant.trans"
+  run "$log" "$eb" --undriven seq --show-trans "$variant-check.vv"
+  test "$(cat "$log.rc")" = 0
+  grep -q '^State variables:' "$log"
+  sed -n '/^State variables:/,$p' "$log" >"$log.model"
+done
+cmp empty_final.trans.model final-control.trans.model
+if grep -Fq -e verilog_final -e '$writememh' empty_final-check.vv; then exit 1; fi
+run final-nonempty compile final_nonempty final-nonempty.vv "$front/tests/empty_final.sv"
+test "$(cat final-nonempty.rc)" = 2
+test ! -e final-nonempty.vv
+grep -qE 'empty_final.sv:17:[0-9]+: unsupported reachable final call \$writememh' final-nonempty
+for kind in dynamic unknown assignment; do
+  log="final-$kind"
+  run "$log" compile "final_$kind" "$log.vv" "$front/tests/empty_final_invalid.sv"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+done
+grep -qE 'empty_final_invalid.sv:4:[0-9]+: final condition must be a known constant' final-dynamic
+grep -qE 'empty_final_invalid.sv:12:[0-9]+: final condition must be a known constant' final-unknown
+grep -qE 'empty_final_invalid.sv:22:[0-9]+: unsupported reachable final statement ExpressionStatement' final-assignment
+test ! -e final-guard-dump.hex
 for kind in static_init automatic_init unassigned partial missing; do
   log="comb-local-$kind"
   run "$log" compile "comb_local_$kind" "$log.vv" "$front/tests/combinational_locals_invalid.sv"
