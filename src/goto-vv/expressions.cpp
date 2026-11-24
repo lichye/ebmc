@@ -36,6 +36,30 @@ exprt packed_slice(
     type);
 }
 
+bool covers_packed_dimension(const Type &selector, ConstantRange range)
+{
+  const auto width = selector.getBitWidth();
+  // Slang's declared bounds are int32_t. No wider domain can match them.
+  if(!selector.isSimpleBitVector() || width == 0 || width > 32)
+    return false;
+  const bool is_signed = selector.isSigned();
+  const auto value_bits = is_signed ? width - 1 : width;
+  const auto limit = int64_t{1} << value_bits;
+  return range.lower() == (is_signed ? -limit : 0) &&
+         range.upper() == limit - 1;
+}
+
+exprt packed_element_offset(const PackedArrayType &array, exprt index)
+{
+  auto type = index.type();
+  auto right = from_integer(array.range.right, type);
+  auto offset = array.range.isDescending()
+                  ? minus_exprt(std::move(index), std::move(right))
+                  : minus_exprt(std::move(right), std::move(index));
+  return mult_exprt(
+    std::move(offset), from_integer(array.elementType.getBitWidth(), type));
+}
+
 exprt as_sequence(exprt e)
 {
   if(e.type().id() == ID_bool)
@@ -106,13 +130,10 @@ compilert::dynamic_packed_write(const AssignmentExpression &assignment)
       index, ID_ge, from_integer(array->range.lower(), wide_type)),
     binary_relation_exprt(
       index, ID_le, from_integer(array->range.upper(), wide_type)));
-  const auto right = from_integer(array->range.right, wide_type);
-  auto offset = array->range.isDescending() ? minus_exprt(index, right)
-                                            : minus_exprt(right, index);
   auto lhs = verilog_indexed_part_select_plus_or_minus_exprt(
     ID_verilog_indexed_part_select_plus,
     expr(element->value()),
-    mult_exprt(std::move(offset), from_integer(stride, wide_type)),
+    packed_element_offset(*array, index),
     index_constant(stride),
     type(*element->type, element->sourceRange.start()));
   lhs.add_source_location() = loc(element->sourceRange.start());
@@ -122,7 +143,10 @@ compilert::dynamic_packed_write(const AssignmentExpression &assignment)
   return item(ID_if, {std::move(in_range), std::move(write)});
 }
 
-exprt compilert::expr(const Expression &e, const exprt *compound_target)
+exprt compilert::expr(
+  const Expression &e,
+  const exprt *compound_target,
+  bool lvalue)
 {
   const auto at = e.sourceRange.start();
   auto t = type(*e.type, at);
@@ -200,7 +224,7 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
     break;
   case ExpressionKind::Conversion:
     r = typecast_exprt::conditional_cast(
-      expr(e.as<ConversionExpression>().operand(), compound_target), t);
+      expr(e.as<ConversionExpression>().operand(), compound_target, lvalue), t);
     break;
   case ExpressionKind::UnaryOp:
   {
@@ -312,7 +336,7 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
         if(count && count->isInteger() && count->integer().as<int32_t>() == 0)
           continue;
       }
-      operands.push_back(expr(*arg));
+      operands.push_back(expr(*arg, nullptr, lvalue));
     }
     if(packed && operands.empty())
       fail(at, "unsupported empty concatenation");
@@ -359,7 +383,7 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
         selection->left != selection->right &&
         selection->isDescending() != array->range.isDescending())
         fail(at, "packed range select goes against the declared direction");
-      r = packed_slice(expr(rs.value()), *array, *selection, t);
+      r = packed_slice(expr(rs.value(), nullptr, lvalue), *array, *selection, t);
       break;
     }
     check_select(rs.value());
@@ -373,7 +397,7 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
     };
     if(rs.getSelectionKind() == RangeSelectionKind::Simple)
       r = slice(
-        expr(rs.value()),
+        expr(rs.value(), nullptr, lvalue),
         constant_bound(rs.left()),
         constant_bound(rs.right()),
         t);
@@ -384,7 +408,7 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
                          : ID_verilog_indexed_part_select_minus;
       r = verilog_indexed_part_select_plus_or_minus_exprt(
         direction,
-        expr(rs.value()),
+        expr(rs.value(), nullptr, lvalue),
         expr(rs.left()),
         constant_bound(rs.right()),
         t);
@@ -398,18 +422,48 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
       el.value().type->getCanonicalType().as_if<PackedArrayType>();
     if(!array || !needs_packed_element_layout(*array))
     {
-      r = verilog_bit_select_exprt(expr(el.value()), expr(el.selector()), t);
+      r = verilog_bit_select_exprt(
+        expr(el.value(), nullptr, lvalue), expr(el.selector()), t);
       break;
     }
 
-    const auto index_at = el.selector().sourceRange.start();
-    const auto selected = eval_known(el.selector());
+    const auto &selector = el.selector();
+    const auto index_at = selector.sourceRange.start();
+    const auto selected = eval_known(selector);
     if(!selected.isInteger() || selected.integer().hasUnknown())
-      fail(index_at, "packed element select requires a known constant index");
+    {
+      if(
+        lvalue || selected ||
+        !covers_packed_dimension(*selector.type, array->range))
+        fail(
+          index_at,
+          "packed element select requires a known constant index or a "
+          "runtime read index whose value domain matches the declared range");
+      // The selector's whole numeric domain fits. Widen before translating
+      // from the declared right bound and scaling by the inner width.
+      const auto width = std::bit_width(array->getBitWidth()) + 1;
+      const typet offset_type = selector.type->isSigned()
+                                  ? typet(signedbv_typet(width))
+                                  : typet(unsignedbv_typet(width));
+      auto offset = packed_element_offset(
+        *array, typecast_exprt::conditional_cast(expr(selector), offset_type));
+      auto base = expr(el.value());
+      if(t.id() == ID_bool)
+        r = verilog_bit_select_exprt(std::move(base), std::move(offset), t);
+      else
+        r = verilog_indexed_part_select_plus_or_minus_exprt(
+          ID_verilog_indexed_part_select_plus,
+          std::move(base),
+          std::move(offset),
+          index_constant(array->elementType.getBitWidth()),
+          t);
+      break;
+    }
     const auto index = selected.integer().as<int32_t>();
     if(!index || !array->range.containsPoint(*index))
       fail(index_at, "packed element select index is out of range");
-    r = packed_slice(expr(el.value()), *array, {*index, *index}, t);
+    r = packed_slice(
+      expr(el.value(), nullptr, lvalue), *array, {*index, *index}, t);
     break;
   }
   case ExpressionKind::SimpleAssignmentPattern:
@@ -432,7 +486,8 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
         if(element == elements.end())
           fail(at, "unsupported assignment pattern");
         operands.push_back(typecast_exprt::conditional_cast(
-          expr(**element), type(field.getType(), field.location)));
+          expr(**element, nullptr, lvalue),
+          type(field.getType(), field.location)));
         ++element;
       }
       if(element != elements.end())
@@ -449,7 +504,7 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
       fail(at, "unsupported assignment pattern");
     r = node(ID_struct, t);
     for(auto *field : elements)
-      r.operands().push_back(expr(*field));
+      r.operands().push_back(expr(*field, nullptr, lvalue));
     break;
   }
   case ExpressionKind::Replication:
@@ -461,7 +516,7 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
     auto count = n->integer().as<unsigned>();
     if(!count || *count > 65536 || !*count)
       fail(at, "unsupported replication count");
-    auto pattern = expr(rep.concat());
+    auto pattern = expr(rep.concat(), nullptr, lvalue);
     if(*count == 1 && t.id() == ID_bool)
       r = typecast_exprt::conditional_cast(std::move(pattern), t);
     else
@@ -478,14 +533,15 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
       m.member.kind == SymbolKind::Field &&
       m.value().type->getCanonicalType().kind == SymbolKind::UnpackedStructType)
     {
-      r = member_exprt(expr(m.value()), std::string(m.member.name), t);
+      r = member_exprt(
+        expr(m.value(), nullptr, lvalue), std::string(m.member.name), t);
       break;
     }
     if(m.member.kind != SymbolKind::Field || !m.value().type->isIntegral())
       fail(at, "unsupported member");
     auto off = m.member.as<FieldSymbol>().bitOffset;
     r = slice(
-      expr(m.value()),
+      expr(m.value(), nullptr, lvalue),
       index_constant(off + e.type->getBitWidth() - 1),
       index_constant(off),
       t);

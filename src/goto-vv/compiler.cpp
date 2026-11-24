@@ -339,7 +339,7 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
           fail(child.location, "unbound child port " + std::string(p.name));
         if(e->kind == ExpressionKind::Assignment)
           e = &e->as<AssignmentExpression>().left();
-        auto v = expr(*e);
+        auto v = p.direction == ArgumentDirection::In ? expr(*e) : lhs(*e);
         auto formal = symbol_exprt(name(*p.internalSymbol), type(p.getType()));
         if(v.id() == ID_symbol)
           clock_alias[id2string(formal.get_identifier())] =
@@ -363,7 +363,7 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       if(ca.getDelay())
         fail(s.location, "delayed continuous assign");
       auto assign = item(
-        ID_continuous_assign, {equal_exprt(expr(a.left()), expr(a.right()))});
+        ID_continuous_assign, {equal_exprt(lhs(a.left()), expr(a.right()))});
       assign.add_source_location() = loc(s.location);
       items.operands().push_back(std::move(assign));
       break;

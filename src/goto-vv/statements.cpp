@@ -474,7 +474,7 @@ exprt compilert::stmt(const Statement &s)
         procedural_locals.empty() &&
         !locals.count(u.operand().getSymbolReference()))
       {
-        r = item(ID_postincrement, {expr(u.operand())});
+        r = item(ID_postincrement, {lhs(u.operand())});
         break;
       }
     }
@@ -531,13 +531,13 @@ exprt compilert::stmt(const Statement &s)
       r = std::move(*write);
       break;
     }
-    auto lhs = expr(a.left());
+    auto target_expr = lhs(a.left());
     // The typed RHS reads this target in the current procedural state.
-    auto rhs = expr(a.right(), a.op ? &lhs : nullptr);
+    auto rhs = expr(a.right(), a.op ? &target_expr : nullptr);
     r = item(
       a.isNonBlocking() ? ID_verilog_non_blocking_assign
                         : ID_verilog_blocking_assign,
-      {std::move(lhs), std::move(rhs)});
+      {std::move(target_expr), std::move(rhs)});
     break;
   }
   default:

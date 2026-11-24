@@ -108,7 +108,14 @@ public:
   typet type(const Type &t, SourceLocation fallback = {}) const;
   exprt literal(const SVInt &v, const typet &t) const;
   ConstantValue eval_known(const Expression &e) const;
-  exprt expr(const Expression &e, const exprt *compound_target = nullptr);
+  exprt expr(
+    const Expression &e,
+    const exprt *compound_target = nullptr,
+    bool lvalue = false);
+  exprt lhs(const Expression &e)
+  {
+    return expr(e, nullptr, true);
+  }
   std::optional<exprt>
   dynamic_packed_write(const AssignmentExpression &assignment);
   exprt stmt(const Statement &s);
