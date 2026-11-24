@@ -1,0 +1,15 @@
+CORE
+packed_element_offset.sv
+--finite-prefix --bound 0
+^\[main\.p_pos_ends\].*: PROVED up to bound 0$
+^\[main\.p_neg_ends\].*: PROVED up to bound 0$
+^\[main\.p_cross_zero\].*: PROVED up to bound 0$
+^\[main\.p_nested\].*: PROVED up to bound 0$
+^\[main\.p_pos_dynamic\].*: PROVED up to bound 0$
+^\[main\.p_neg_dynamic\].*: PROVED up to bound 0$
+^\[main\.p_pos_low_reachable\].*: REFUTED$
+^\[main\.p_pos_high_reachable\].*: REFUTED$
+^\[main\.p_neg_low_reachable\].*: REFUTED$
+^\[main\.p_neg_high_reachable\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

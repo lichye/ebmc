@@ -1,0 +1,26 @@
+CORE
+packed_element_wide_index.sv
+--finite-prefix --bound 0
+^\[main\.p_pos_ends\].*: PROVED up to bound 0$
+^\[main\.p_neg_ends\].*: PROVED up to bound 0$
+^\[main\.p_wide_ends\].*: PROVED up to bound 0$
+^\[main\.p_pos_dynamic\].*: PROVED up to bound 0$
+^\[main\.p_neg_dynamic\].*: PROVED up to bound 0$
+^\[main\.p_wide_dynamic\].*: PROVED up to bound 0$
+^\[main\.p_member_dynamic\].*: PROVED up to bound 0$
+^\[main\.p_pos_const_alias\].*: REFUTED$
+^\[main\.p_pos_alias\].*: REFUTED$
+^\[main\.p_neg_const_alias\].*: REFUTED$
+^\[main\.p_neg_alias\].*: REFUTED$
+^\[main\.p_wide_const_alias\].*: REFUTED$
+^\[main\.p_wide_alias\].*: REFUTED$
+^\[main\.p_member_alias\].*: REFUTED$
+^\[main\.p_pos_reach\].*: REFUTED$
+^\[main\.p_neg_reach\].*: REFUTED$
+^\[main\.p_wide_reach\].*: REFUTED$
+^\[main\.p_member_reach\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
