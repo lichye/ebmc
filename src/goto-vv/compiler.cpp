@@ -421,7 +421,8 @@ int compile_design(int argc, char **argv)
   using namespace vv;
   if(argc < 4)
   {
-    std::cerr << "usage: goto-vv compile output.vv [slang options] input.sv\n";
+    std::cerr << "usage: goto-vv compile OUTPUT [-mfcu|-sfcu] [slang options] "
+                 "INPUT...\n";
     return 2;
   }
   try
@@ -432,6 +433,8 @@ int compile_design(int argc, char **argv)
       throw std::runtime_error("goto-vv schema 1 requires slang 11.0.0");
     driver::Driver driver;
     driver.addStandardArgs();
+    driver.cmdLine.addRenameCommand("-mfcu,--single-unit");
+    driver.cmdLine.addRenameCommand("-sfcu,--single-unit=false");
     if(
       !driver.parseCommandLine(argc - 1, argv + 1) ||
       !driver.processOptions() || !driver.parseAllSources())
