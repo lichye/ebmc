@@ -53,21 +53,24 @@ exprt as_property(exprt e)
 
 ConstantValue compilert::eval_known(const Expression &e) const
 {
-  if(!automatic_locals.empty())
+  if(!procedural_locals.empty())
     e.visitSymbolReferences(
       [&](const Expression &reference, const Symbol &symbol)
       {
-        const auto local = automatic_locals.find(&symbol);
-        if(local != automatic_locals.end() && !local->second.assigned)
+        const auto local = procedural_locals.find(&symbol);
+        if(local != procedural_locals.end() && !local->second.assigned)
           fail(
             reference.sourceRange.start(),
-            "automatic local read before assignment: " +
+            std::string(
+              local->second.require_full_assignment ? "combinational local"
+                                                    : "automatic local") +
+              " read before assignment: " +
               std::string(symbol.name));
       });
   EvalContext context(*scope);
   for(const auto &[index, value] : expanded_indices)
     context.createLocal(&index->as<VariableSymbol>(), value);
-  for(const auto &[variable, local] : automatic_locals)
+  for(const auto &[variable, local] : procedural_locals)
     if(local.constant)
       context.createLocal(&variable->as<VariableSymbol>(), local.constant);
   return e.eval(context);
@@ -153,12 +156,15 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
       r = literal(l->second.integer(), t);
       break;
     }
-    if(auto l = automatic_locals.find(s); l != automatic_locals.end())
+    if(auto l = procedural_locals.find(s); l != procedural_locals.end())
     {
       if(!l->second.assigned)
         fail(
           at,
-          "automatic local read before assignment: " + std::string(s->name));
+          std::string(
+            l->second.require_full_assignment ? "combinational local"
+                                              : "automatic local") +
+            " read before assignment: " + std::string(s->name));
       r = l->second.ref;
       break;
     }

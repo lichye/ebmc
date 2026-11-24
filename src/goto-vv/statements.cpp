@@ -24,6 +24,7 @@ class loop_expansion_visitort
   : public ASTVisitor<loop_expansion_visitort, VisitFlags::AllGood>
 {
   const VariableSymbol &index;
+  bool in_always_comb;
   bool packed_index = false;
   std::set<const VariableSymbol *> declared;
   std::set<const VariableSymbol *> indices;
@@ -35,13 +36,16 @@ class loop_expansion_visitort
   }
 
 public:
-  explicit loop_expansion_visitort(const VariableSymbol &index) : index(index)
+  loop_expansion_visitort(const VariableSymbol &index, bool in_always_comb)
+    : index(index), in_always_comb(in_always_comb)
   {
   }
 
   void handle(const VariableDeclStatement &declaration)
   {
-    if(declaration.symbol.lifetime == VariableLifetime::Automatic)
+    if(
+      in_always_comb ||
+      declaration.symbol.lifetime == VariableLifetime::Automatic)
       declared.insert(&declaration.symbol);
   }
 
@@ -197,10 +201,12 @@ exprt compilert::counted_loop(
   if(!first.isInteger() || first.integer().hasUnknown())
     fail(v.location, "nonconstant loop initializer");
   context.createLocal(&v, first);
-  loop_expansion_visitort visitor(v);
-  if(expanded_indices.empty())
+  const bool expand_nested =
+    !expanded_indices.empty() || !procedural_locals.empty();
+  loop_expansion_visitort visitor(v, in_always_comb);
+  if(!expand_nested)
     loop.body.visit(visitor);
-  const bool expand = !expanded_indices.empty() || visitor.needs_expansion();
+  const bool expand = expand_nested || visitor.needs_expansion();
   auto expanded = item(ID_block);
   for(unsigned count = 0;; ++count)
   {
@@ -253,19 +259,24 @@ exprt compilert::counted_loop(
   return result.with_source_location(loc(at));
 }
 
-exprt compilert::declare_automatic(const VariableSymbol &v)
+exprt compilert::declare_local(const VariableSymbol &v)
 {
   if(v.getType().isString())
     fail(v.location, "unsupported runtime string variable");
+  const bool automatic_in_loop =
+    !expanded_indices.empty() && v.lifetime == VariableLifetime::Automatic;
+  const auto *init = v.getInitializer();
   if(
-    expanded_indices.empty() || v.lifetime != VariableLifetime::Automatic ||
+    (!automatic_in_loop && !in_always_comb) ||
     !v.getType().isSimpleBitVector())
     fail(v.location, "unsupported procedural local declaration");
+  if(!automatic_in_loop && init)
+    fail(v.location, "unsupported initializer for a combinational local");
 
   auto t = type(v.getType(), v.location);
   t.set("#vv_cycle_local", true);
   const auto id = name(*scope) + ".$local_" +
-                  std::to_string(next_automatic_local++) + "." +
+                  std::to_string(next_procedural_local++) + "." +
                   std::string(v.name);
   symbolt symbol(id, t, ID_Verilog);
   symbol.base_name = std::string(v.name);
@@ -273,13 +284,13 @@ exprt compilert::declare_automatic(const VariableSymbol &v)
   symbol.location = loc(v.location);
   symbol.is_lvalue = true;
   if(object.symbols.add(symbol))
-    fail(v.location, "duplicate automatic local " + id);
-  auto [entry, inserted] = automatic_locals.emplace(
-    &v, automatic_localt{symbol.symbol_expr(), false, {}});
+    fail(v.location, "duplicate procedural local " + id);
+  auto [entry, inserted] = procedural_locals.emplace(
+    &v, procedural_localt{symbol.symbol_expr(), false, !automatic_in_loop, {}});
   if(!inserted)
-    fail(v.location, "automatic local scope overlaps a previous declaration");
+    fail(v.location, "procedural local scope overlaps a previous declaration");
   auto &local = entry->second;
-  if(const auto *init = v.getInitializer())
+  if(init)
   {
     auto value = expr(*init);
     local.constant = eval_known(*init);
@@ -307,18 +318,27 @@ exprt compilert::stmt(const Statement &s)
       block.body.kind == StatementKind::ImmediateAssertion)
       return immediate(
         block.body.as<ImmediateAssertionStatement>(), block.blockSymbol);
-    const auto entered = automatic_locals;
+    const auto entered = procedural_locals;
     r = stmt(block.body);
     std::erase_if(
-      automatic_locals,
-      [&](const auto &entry) { return !entered.count(entry.first); });
+      procedural_locals,
+      [&](const auto &entry)
+      {
+        if(entered.count(entry.first))
+          return false;
+        if(entry.second.require_full_assignment && !entry.second.assigned)
+          fail(
+            entry.first->location,
+            "combinational local is not assigned on every path");
+        return true;
+      });
   }
   break;
   case StatementKind::ImmediateAssertion:
     r = immediate(s.as<ImmediateAssertionStatement>(), nullptr);
     break;
   case StatementKind::VariableDeclaration:
-    return declare_automatic(s.as<VariableDeclStatement>().symbol);
+    return declare_local(s.as<VariableDeclStatement>().symbol);
   case StatementKind::List:
   {
     r = item(ID_block);
@@ -339,7 +359,7 @@ exprt compilert::stmt(const Statement &s)
         ++n;
       }
       else
-        r.operands().push_back(declare_automatic(v));
+        r.operands().push_back(declare_local(v));
     }
     break;
   }
@@ -350,8 +370,8 @@ exprt compilert::stmt(const Statement &s)
     break;
   case StatementKind::Case:
   {
-    if(!automatic_locals.empty())
-      fail(at, "unsupported case with active automatic locals");
+    if(!procedural_locals.empty())
+      fail(at, "unsupported case with active procedural locals");
     const auto &c = s.as<CaseStatement>();
     if(
       (c.condition != CaseStatementCondition::Normal &&
@@ -420,17 +440,17 @@ exprt compilert::stmt(const Statement &s)
       break;
     }
     auto condition = boolean(expr(test));
-    const auto entered = automatic_locals;
+    const auto entered = procedural_locals;
     auto when_true = stmt(c.ifTrue);
-    const auto after_true = std::move(automatic_locals);
-    automatic_locals = entered;
+    const auto after_true = std::move(procedural_locals);
+    procedural_locals = entered;
     r = item(ID_if, {std::move(condition), std::move(when_true)});
     if(c.ifFalse)
       r.operands().push_back(stmt(*c.ifFalse));
     for(const auto &entry : entered)
     {
       const auto *symbol = entry.first;
-      auto &after = automatic_locals.at(symbol);
+      auto &after = procedural_locals.at(symbol);
       const auto &other = after_true.at(symbol);
       after.assigned &= other.assigned;
       if(!after.assigned || !(after.constant == other.constant))
@@ -451,6 +471,7 @@ exprt compilert::stmt(const Statement &s)
       auto &u = e.as<UnaryExpression>();
       if(
         u.op == UnaryOperator::Postincrement && expanded_indices.empty() &&
+        procedural_locals.empty() &&
         !locals.count(u.operand().getSymbolReference()))
       {
         r = item(ID_postincrement, {expr(u.operand())});
@@ -463,13 +484,17 @@ exprt compilert::stmt(const Statement &s)
     const auto *target = a.left().getSymbolReference();
     if(locals.count(target) || expanded_indices.count(target))
       fail(at, "write to a statically expanded loop index");
-    if(auto entry = automatic_locals.find(target);
-       entry != automatic_locals.end())
+    if(auto entry = procedural_locals.find(target);
+       entry != procedural_locals.end())
     {
       if(
         a.left().kind != ExpressionKind::NamedValue || a.isNonBlocking() ||
         a.op || a.timingControl)
-        fail(at, "unsupported assignment to an automatic local");
+        fail(
+          at,
+          entry->second.require_full_assignment
+            ? "unsupported assignment to a combinational local"
+            : "unsupported assignment to an automatic local");
       auto rhs = expr(a.right());
       auto &local = entry->second;
       local.constant = eval_known(a.right());
@@ -486,7 +511,7 @@ exprt compilert::stmt(const Statement &s)
           concat->operands().end(),
           [&](const Expression *operand) { return self(self, *operand); });
       const auto *symbol = lhs.getSymbolReference();
-      return automatic_locals.count(symbol) || expanded_indices.count(symbol);
+      return procedural_locals.count(symbol) || expanded_indices.count(symbol);
     };
     if(contains_local_target(contains_local_target, a.left()))
       fail(at, "unsupported assignment target containing a procedural local");

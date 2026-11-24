@@ -402,6 +402,7 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       // Explicit edge controls retain their resolved signals.
       const auto *timed = body.as_if<TimedStatement>();
       exprt statement;
+      in_always_comb = kind == "AlwaysComb";
       if(kind == "Always" && timed &&
          timed->timing.kind == TimingControlKind::ImplicitEvent)
         statement = item(
@@ -413,6 +414,7 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
         statement = clock_reset_block(*timed);
       else
         statement = stmt(body);
+      in_always_comb = false;
       auto process = item(op, {std::move(statement)});
       process.add_source_location() = loc(s.location);
       items.operands().push_back(std::move(process));
