@@ -1,0 +1,8 @@
+CORE
+selection.sv
+--aiger --property main.eventual
+error: AIGER: unsupported property 'main.eventual'
+^EXIT=6$
+^SIGNAL=0$
+--
+^aag

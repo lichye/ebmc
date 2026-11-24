@@ -1,0 +1,9 @@
+CORE
+selection.sv
+--aiger --property main.safe
+^aag [0-9]+ [0-9]+ 0 0 [0-9]+ 1$
+^b0 Verilog::\$root.main.safe$
+^EXIT=0$
+^SIGNAL=0$
+--
+^b[1-9]
