@@ -21,6 +21,47 @@ bool static_compound_target(const Expression &e)
          symbol->as<VariableSymbol>().lifetime == VariableLifetime::Static;
 }
 
+const Expression &strip_integral_conversions(const Expression &e)
+{
+  const auto *operand = &e;
+  while(const auto *cast = operand->as_if<ConversionExpression>())
+  {
+    if(
+      !cast->isImplicit() || !cast->type->isIntegral() ||
+      !cast->operand().type->isIntegral())
+      break;
+    operand = &cast->operand();
+  }
+  return *operand;
+}
+
+bool is_unit_assignment_step(
+  const AssignmentExpression &step,
+  const VariableSymbol &index)
+{
+  if(
+    !index.getType().isSimpleBitVector() || step.isNonBlocking() ||
+    step.timingControl || step.op ||
+    step.left().kind != ExpressionKind::NamedValue ||
+    step.left().getSymbolReference() != &index)
+    return false;
+
+  const auto *sum =
+    strip_integral_conversions(step.right()).as_if<BinaryExpression>();
+  if(!sum || sum->op != BinaryOperator::Add || !sum->type->isIntegral())
+    return false;
+
+  const auto &operand = strip_integral_conversions(sum->left());
+  if(
+    operand.kind != ExpressionKind::NamedValue ||
+    operand.getSymbolReference() != &index || !sum->right().type->isIntegral())
+    return false;
+
+  EvalContext context(index);
+  const auto amount = sum->right().eval(context);
+  return amount.isInteger() && amount.integer().as<int64_t>() == 1;
+}
+
 class loop_expansion_visitort
   : public ASTVisitor<loop_expansion_visitort, VisitFlags::AllGood>
 {
@@ -187,13 +228,24 @@ exprt compilert::counted_loop(
   const auto *init = v.getInitializer();
   if(
     !init || !loop.stopExpr || !loop.initializers.empty() ||
-    loop.steps.size() != 1 || loop.steps[0]->kind != ExpressionKind::UnaryOp)
+    loop.steps.size() != 1)
     fail(at, "requires a statically bounded counted loop");
-  const auto &step = loop.steps[0]->as<UnaryExpression>();
-  if(
-    step.op != UnaryOperator::Postincrement ||
-    step.operand().getSymbolReference() != &v)
-    fail(at, "expected an increment of the loop-local index");
+  const auto &step = *loop.steps.front();
+  const auto step_at = step.sourceRange.start();
+  const auto *assignment = step.as_if<AssignmentExpression>();
+  if(assignment)
+  {
+    if(!is_unit_assignment_step(*assignment, v))
+      fail(step_at, "expected a blocking unit increment of the loop-local index");
+  }
+  else
+  {
+    const auto *increment = step.as_if<UnaryExpression>();
+    if(
+      !increment || increment->op != UnaryOperator::Postincrement ||
+      increment->operand().getSymbolReference() != &v)
+      fail(step_at, "expected an increment of the loop-local index");
+  }
 
   EvalContext context(v);
   for(const auto &[index, value] : expanded_indices)
@@ -226,9 +278,24 @@ exprt compilert::counted_loop(
       expanded.operands().push_back(stmt(loop.body));
       expanded_indices.erase(&v);
     }
-    const auto updated = loop.steps[0]->eval(context);
+    std::optional<SVInt> expected;
+    if(assignment)
+    {
+      expected = context.findLocal(&v)->integer();
+      ++*expected;
+    }
+    const auto updated = step.eval(context);
     if(!updated.isInteger())
-      fail(at, "cannot evaluate loop step");
+      fail(step_at, "cannot evaluate loop step");
+    if(expected)
+    {
+      // Check the stored value after Slang's assignment conversions.
+      const auto &actual = context.findLocal(&v)->integer();
+      if(
+        actual.hasUnknown() || actual.getBitWidth() != expected->getBitWidth() ||
+        actual.isSigned() != expected->isSigned() || actual != *expected)
+        fail(step_at, "loop step does not preserve a typed unit increment");
+    }
   }
   if(expand)
     return expanded.with_source_location(loc(at));
@@ -250,11 +317,17 @@ exprt compilert::counted_loop(
   locals.emplace(&v, ref);
   auto initialization =
     item(ID_verilog_blocking_assign, {ref, literal(first.integer(), t)});
+  // The proven assignment step can use the original RTL unroller. In the
+  // Boolean representation, increment modulo two is logical negation.
+  auto increment = assignment && t.id() == ID_bool
+                     ? item(ID_verilog_blocking_assign, {ref, not_exprt(ref)})
+                     : item(ID_postincrement, {ref});
+  increment.add_source_location() = loc(step_at);
   auto result = item(
     ID_for,
     {item(ID_empty_string, {std::move(initialization)}),
      boolean(expr(*loop.stopExpr)),
-     item(ID_postincrement, {ref}),
+     std::move(increment),
      stmt(loop.body)});
   locals.erase(&v);
   return result.with_source_location(loc(at));
@@ -573,7 +646,8 @@ exprt compilert::stmt(const Statement &s)
           concat->operands().end(),
           [&](const Expression *operand) { return self(self, *operand); });
       const auto *symbol = lhs.getSymbolReference();
-      return procedural_locals.count(symbol) || expanded_indices.count(symbol);
+      return procedural_locals.count(symbol) || expanded_indices.count(symbol) ||
+             locals.count(symbol);
     };
     if(contains_local_target(contains_local_target, a.left()))
       fail(at, "unsupported assignment target containing a procedural local");
