@@ -26,6 +26,7 @@
 #include <slang/ast/symbols/MemberSymbols.h>
 #include <slang/ast/symbols/ParameterSymbols.h>
 #include <slang/ast/symbols/PortSymbols.h>
+#include <slang/ast/symbols/SubroutineSymbols.h>
 #include <slang/ast/symbols/VariableSymbols.h>
 #include <slang/ast/types/AllTypes.h>
 #include <slang/driver/Driver.h>
@@ -36,6 +37,7 @@
 
 #include <map>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 
 namespace vv
@@ -83,6 +85,10 @@ public:
   analysis::AnalysisManager &am;
   vv_objectt object;
   const Symbol *scope = nullptr;
+  const SubroutineSymbol *function = nullptr;
+  std::set<const SubroutineSymbol *> active_functions;
+  std::string function_identifier;
+  std::map<const VariableSymbol *, ConstantValue> function_constants;
   bool in_clocked_property = false;
   bool in_always_comb = false;
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
@@ -130,6 +136,10 @@ public:
     const ForLoopStatement &loop,
     const AssignmentExpression *external_init = nullptr);
   exprt declare_local(const VariableSymbol &variable);
+  bool is_function_variable(const Symbol *symbol) const;
+  std::string function_variable_name(const Symbol &symbol) const;
+  exprt declare_function_local(const VariableSymbol &variable);
+  exprt runtime_call(const CallExpression &call);
   exprt clock_reset_block(const TimedStatement &block);
   exprt immediate(const ImmediateAssertionStatement &s, const Symbol *label);
   exprt assertion(const AssertionExpr &a, SourceLocation at, irept &references);
@@ -142,6 +152,6 @@ public:
     const Symbol &label,
     exprt &items);
   void declare(const ValueSymbol &s, const PortSymbol *p, exprt &items);
-  symbolt &add(const Symbol &s, const typet &t);
+  symbolt &add(const Symbol &s, const typet &t, std::string id = {});
 };
 } // namespace vv

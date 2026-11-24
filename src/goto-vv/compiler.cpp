@@ -1,3 +1,5 @@
+#include <slang/ast/ASTVisitor.h>
+#include <slang/ast/expressions/Operator.h>
 #include <slang/ast/types/NetType.h>
 #include <slang/util/VersionInfo.h>
 
@@ -124,9 +126,10 @@ exprt compilert::literal(const SVInt &v, const typet &t) const
   }
   return from_integer(n, t);
 }
-symbolt &compilert::add(const Symbol &s, const typet &t)
+symbolt &compilert::add(const Symbol &s, const typet &t, std::string id)
 {
-  const auto id = name(s);
+  if(id.empty())
+    id = name(s);
   symbolt symbol(id, t, ID_Verilog);
   symbol.base_name = std::string(s.name);
   symbol.pretty_name = s.getHierarchicalPath();
@@ -227,6 +230,124 @@ void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
   decl.operands().push_back(std::move(val));
   items.operands().push_back(std::move(decl));
 }
+exprt compilert::runtime_call(const CallExpression &call)
+{
+  const auto &callee = *std::get<const SubroutineSymbol *>(call.subroutine);
+  const auto at = call.sourceRange.start();
+  const auto *parent = callee.getParentScope();
+  if(
+    call.thisClass() || !parent ||
+    (parent->asSymbol().kind != SymbolKind::InstanceBody &&
+     parent->asSymbol().kind != SymbolKind::GenerateBlock) ||
+    callee.subroutineKind != SubroutineKind::Function ||
+    callee.defaultLifetime != VariableLifetime::Automatic ||
+    !callee.returnValVar || !callee.getReturnType().isIntegral())
+    fail(
+      at, "requires a module-local automatic function with an integral return");
+
+  const auto formals = callee.getArguments();
+  if(formals.size() != call.arguments().size())
+    fail(at, "unbound runtime function arguments");
+  std::set<const Symbol *> written;
+  const auto record_write = [&](const Expression &target)
+  {
+    target.visitSymbolReferences([&](const Expression &, const Symbol &symbol)
+                                 { written.insert(&symbol); });
+  };
+  callee.getBody().visit(makeVisitor(
+    [&](auto &visitor, const AssignmentExpression &assignment)
+    {
+      record_write(assignment.left());
+      visitor.visitDefault(assignment);
+    },
+    [&](auto &visitor, const UnaryExpression &unary)
+    {
+      if(OpInfo::isLValue(unary.op))
+        record_write(unary.operand());
+      visitor.visitDefault(unary);
+    }));
+
+  auto id = name(callee);
+  std::map<const VariableSymbol *, ConstantValue> constants;
+  exprt::operandst arguments;
+  for(std::size_t i = 0; i < formals.size(); ++i)
+  {
+    if(formals[i]->direction != ArgumentDirection::In)
+      fail(formals[i]->location, "runtime function requires input formals");
+    if(!formals[i]->getType().isIntegral())
+      fail(formals[i]->location, "runtime function requires integral formals");
+    arguments.push_back(expr(*call.arguments()[i]));
+    // Specialize only on immutable, known arguments. A loop bound or inner
+    // function call can then use a value such as the caller's FP field width.
+    if(!written.count(formals[i]))
+    {
+      auto value = eval_known(*call.arguments()[i]);
+      if(value.isInteger() && !value.integer().hasUnknown())
+      {
+        id += "$arg" + std::to_string(i) + "_" +
+              value.integer().toString(LiteralBase::Hex, false);
+        constants.emplace(formals[i], std::move(value));
+      }
+    }
+  }
+
+  const auto result_type = type(callee.getReturnType(), at);
+  const auto *existing = object.symbols.lookup(id);
+  if(existing && existing->type.id() != ID_code)
+    fail(at, "runtime function name conflicts with a bound symbol");
+  if(!existing)
+  {
+    code_typet::parameterst parameters;
+    for(const auto *formal : formals)
+    {
+      auto &symbol = add(
+        *formal,
+        type(formal->getType(), formal->location),
+        id + "." + std::string(formal->name));
+      symbol.is_lvalue = true;
+      auto &parameter = parameters.emplace_back(symbol.type);
+      parameter.set_identifier(symbol.name);
+      parameter.set_base_name(symbol.base_name);
+      parameter.set(ID_input, true);
+    }
+    auto &result = add(
+      *callee.returnValVar, result_type, id + "." + std::string(callee.name));
+    result.is_lvalue = true;
+    auto signature = code_typet(std::move(parameters), result_type);
+    signature.set(ID_verilog_lifetime, ID_automatic);
+    add(callee, signature, id);
+
+    // Only the function body has its own lowering scope. Arguments already
+    // refer to the caller's symbols and, in SVA, the caller's sample.
+    const auto *saved_scope = std::exchange(scope, &callee);
+    const auto *saved_function = std::exchange(function, &callee);
+    auto saved_identifier = std::exchange(function_identifier, id);
+    auto saved_constants =
+      std::exchange(function_constants, std::move(constants));
+    auto saved_locals = std::exchange(locals, {});
+    auto saved_procedural = std::exchange(procedural_locals, {});
+    auto saved_indices = std::exchange(expanded_indices, {});
+    const auto saved_comb = std::exchange(in_always_comb, false);
+    active_functions.insert(&callee);
+    auto body = item(ID_block, {stmt(callee.getBody())});
+    active_functions.erase(&callee);
+    in_always_comb = saved_comb;
+    expanded_indices = std::move(saved_indices);
+    procedural_locals = std::move(saved_procedural);
+    locals = std::move(saved_locals);
+    function_constants = std::move(saved_constants);
+    function_identifier = std::move(saved_identifier);
+    function = saved_function;
+    scope = saved_scope;
+    object.symbols.get_writeable_ref(id).value = std::move(body);
+  }
+  return node(
+    ID_function_call,
+    type(*call.type, at),
+    {object.symbols.lookup_ref(id).symbol_expr(),
+     item(ID_arguments, std::move(arguments))});
+}
+
 void compilert::module(const InstanceSymbol &i, bool top)
 {
   auto previous_scope = scope;

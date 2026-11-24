@@ -37,7 +37,8 @@ const Expression &strip_integral_conversions(const Expression &e)
 
 bool is_unit_assignment_step(
   const AssignmentExpression &step,
-  const VariableSymbol &index)
+  const VariableSymbol &index,
+  BinaryOperator op)
 {
   if(
     !index.getType().isSimpleBitVector() || step.isNonBlocking() ||
@@ -48,7 +49,7 @@ bool is_unit_assignment_step(
 
   const auto *sum =
     strip_integral_conversions(step.right()).as_if<BinaryExpression>();
-  if(!sum || sum->op != BinaryOperator::Add || !sum->type->isIntegral())
+  if(!sum || sum->op != op || !sum->type->isIntegral())
     return false;
 
   const auto &operand = strip_integral_conversions(sum->left());
@@ -257,22 +258,30 @@ exprt compilert::counted_loop(
   const auto &step = *loop.steps.front();
   const auto step_at = step.sourceRange.start();
   const auto *assignment = step.as_if<AssignmentExpression>();
+  bool descending = false;
   if(assignment)
   {
-    if(!is_unit_assignment_step(*assignment, v))
+    descending = function && is_unit_assignment_step(
+                               *assignment, v, BinaryOperator::Subtract);
+    if(
+      !descending &&
+      !is_unit_assignment_step(*assignment, v, BinaryOperator::Add))
       fail(step_at, "expected a blocking unit increment of the loop-local index");
   }
   else
   {
     const auto *increment = step.as_if<UnaryExpression>();
+    descending =
+      function && increment && increment->op == UnaryOperator::Postdecrement;
     if(
-      !increment || increment->op != UnaryOperator::Postincrement ||
+      !increment ||
+      (!descending && increment->op != UnaryOperator::Postincrement) ||
       increment->operand().getSymbolReference() != &v)
       fail(step_at, "expected an increment of the loop-local index");
   }
 
   if(
-    external_init ||
+    function || external_init ||
     std::any_of(
       expanded_indices.begin(),
       expanded_indices.end(),
@@ -283,14 +292,17 @@ exprt compilert::counted_loop(
   }
 
   EvalContext context(v);
+  for(const auto &[formal, value] : function_constants)
+    context.createLocal(formal, value);
   for(const auto &[index, value] : expanded_indices)
     context.createLocal(&index->as<VariableSymbol>(), value);
   const auto first = init->eval(context);
   if(!first.isInteger() || first.integer().hasUnknown())
     fail(init->sourceRange.start(), "nonconstant loop initializer");
   context.createLocal(&v, first);
-  const bool expand_nested =
-    external_init || !expanded_indices.empty() || !procedural_locals.empty();
+  const bool expand_nested = function || external_init ||
+                             !expanded_indices.empty() ||
+                             !procedural_locals.empty();
   loop_expansion_visitort visitor(v, in_always_comb);
   if(!expand_nested)
     loop.body.visit(visitor);
@@ -330,7 +342,10 @@ exprt compilert::counted_loop(
     if(assignment)
     {
       expected = context.findLocal(&v)->integer();
-      ++*expected;
+      if(descending)
+        --*expected;
+      else
+        ++*expected;
     }
     const auto updated = step.eval(context);
     if(!updated.isInteger())
@@ -342,7 +357,7 @@ exprt compilert::counted_loop(
       if(
         actual.hasUnknown() || actual.getBitWidth() != expected->getBitWidth() ||
         actual.isSigned() != expected->isSigned() || actual != *expected)
-        fail(step_at, "loop step does not preserve a typed unit increment");
+        fail(step_at, "loop step does not preserve a typed unit change");
     }
     if(external_symbol)
       write_index(*context.findLocal(&v), step_at);
@@ -385,6 +400,8 @@ exprt compilert::counted_loop(
 
 exprt compilert::declare_local(const VariableSymbol &v)
 {
+  if(function)
+    return declare_function_local(v);
   if(v.getType().isString())
     fail(v.location, "unsupported runtime string variable");
   const bool automatic_in_loop =
@@ -423,6 +440,44 @@ exprt compilert::declare_local(const VariableSymbol &v)
       .with_source_location(symbol.location);
   }
   return item(ID_skip).with_source_location(symbol.location);
+}
+
+bool compilert::is_function_variable(const Symbol *symbol) const
+{
+  if(!symbol || !VariableSymbol::isKind(symbol->kind))
+    return false;
+  for(auto *parent = symbol->getParentScope(); parent;
+      parent = parent->asSymbol().getParentScope())
+    if(&parent->asSymbol() == function)
+      return symbol->as<VariableSymbol>().lifetime ==
+             VariableLifetime::Automatic;
+  return false;
+}
+
+std::string compilert::function_variable_name(const Symbol &symbol) const
+{
+  if(
+    symbol.kind == SymbolKind::FormalArgument ||
+    &symbol == function->returnValVar)
+    return function_identifier + "." + std::string(symbol.name);
+  return function_identifier + ".$local_" +
+         std::to_string(symbol.location.buffer().getId()) + "_" +
+         std::to_string(symbol.location.offset()) + "." +
+         std::string(symbol.name);
+}
+
+exprt compilert::declare_function_local(const VariableSymbol &v)
+{
+  if(!is_function_variable(&v) || !v.getType().isIntegral())
+    fail(v.location, "unsupported runtime function local declaration");
+  const auto id = function_variable_name(v);
+  if(!object.symbols.lookup(id))
+    add(v, type(v.getType(), v.location), id).is_lvalue = true;
+  const auto &local = object.symbols.lookup_ref(id);
+  if(const auto *init = v.getInitializer())
+    return item(ID_verilog_blocking_assign, {local.symbol_expr(), expr(*init)})
+      .with_source_location(local.location);
+  return item(ID_skip).with_source_location(local.location);
 }
 
 void compilert::require_empty_final(const Statement &s) const
@@ -486,8 +541,10 @@ exprt compilert::stmt(const Statement &s)
   case StatementKind::Block:
   {
     auto &block = s.as<BlockStatement>();
+    if(function && block.blockKind != StatementBlockKind::Sequential)
+      fail(at, "unsupported runtime function block");
     if(
-      block.blockSymbol && !block.blockSymbol->name.empty() &&
+      !function && block.blockSymbol && !block.blockSymbol->name.empty() &&
       block.body.kind == StatementKind::ImmediateAssertion)
       return immediate(
         block.body.as<ImmediateAssertionStatement>(), block.blockSymbol);
@@ -508,8 +565,18 @@ exprt compilert::stmt(const Statement &s)
   }
   break;
   case StatementKind::ImmediateAssertion:
+    if(function)
+      fail(at, "unsupported assertion in a runtime function");
     r = immediate(s.as<ImmediateAssertionStatement>(), nullptr);
     break;
+  case StatementKind::Return:
+  {
+    const auto *value = s.as<ReturnStatement>().expr;
+    if(!function || !value)
+      fail(at, "unsupported return statement");
+    r = verilog_returnt(expr(*value));
+    break;
+  }
   case StatementKind::VariableDeclaration:
     return declare_local(s.as<VariableDeclStatement>().symbol);
   case StatementKind::List:
@@ -538,6 +605,8 @@ exprt compilert::stmt(const Statement &s)
   }
   case StatementKind::ForLoop:
   {
+    if(function)
+      fail(at, "requires a declared local runtime function loop index");
     const auto &loop = s.as<ForLoopStatement>();
     if(!loop.loopVars.empty() || loop.initializers.size() != 1)
       fail(at, "requires one direct initializer for a module loop index");
@@ -564,7 +633,7 @@ exprt compilert::stmt(const Statement &s)
     break;
   }
   case StatementKind::Break:
-    if(!expanded_indices.empty())
+    if(function || !expanded_indices.empty())
       fail(at, "unsupported break in a statically expanded loop");
     r = item(ID_break);
     break;
@@ -611,6 +680,8 @@ exprt compilert::stmt(const Statement &s)
   }
   case StatementKind::Timed:
   {
+    if(function)
+      fail(at, "unsupported timing in a runtime function");
     if(!expanded_indices.empty())
       fail(at, "unsupported timing in a statically expanded loop");
     auto &ts = s.as<TimedStatement>();
@@ -671,8 +742,8 @@ exprt compilert::stmt(const Statement &s)
     {
       auto &u = e.as<UnaryExpression>();
       if(
-        u.op == UnaryOperator::Postincrement && expanded_indices.empty() &&
-        procedural_locals.empty() &&
+        !function && u.op == UnaryOperator::Postincrement &&
+        expanded_indices.empty() && procedural_locals.empty() &&
         !locals.count(u.operand().getSymbolReference()))
       {
         r = item(ID_postincrement, {lhs(u.operand())});
@@ -683,6 +754,10 @@ exprt compilert::stmt(const Statement &s)
       fail(at, "expected assignment");
     auto &a = e.as<AssignmentExpression>();
     const auto *target = a.left().getSymbolReference();
+    if(
+      function && (!is_function_variable(target) || a.isNonBlocking() ||
+                   a.timingControl || a.op))
+      fail(at, "requires a direct blocking write to a runtime function local");
     if(locals.count(target) || expanded_indices.count(target))
       fail(at, "write to a statically expanded loop index");
     if(auto entry = procedural_locals.find(target);

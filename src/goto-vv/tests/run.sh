@@ -446,6 +446,46 @@ for test_case in nonconsecutive:2 goto:6 bounded:10 positive_min:14 temporal:18 
   grep -qE "sequence_star_invalid.sv:$line:[0-9]+: $message$" "$log"
 done
 sed 's/\$stable(zero)/$stable(zero, @(negedge clk))/' "$front/tests/sampled_sequence.sv" >stable-clock.sv
+runtime_src="$front/tests/runtime_function.sv"
+compile runtime_function runtime-function.vv "$runtime_src"
+bind runtime-function.vv empty runtime-function-check.vv
+for depth in 1 2 3; do
+  log="runtime-function-d$depth"
+  flags=(--undriven seq --finite-prefix --numbered-trace --bound "$depth")
+  run "$log.direct" "$eb" "${flags[@]}" --top runtime_function "$runtime_src"
+  run "$log.typed" "$eb" "${flags[@]}" runtime-function-check.vv
+  while read -r name expected; do
+    if [[ $depth == 1 || $expected != REFUTED ]]; then
+      expected="PROVED up to bound $depth"
+    fi
+    compare "$log.direct" "$log.typed" "runtime_function.$name" "$expected"
+  done <"$front/tests/runtime_function.expected"
+  if [[ $depth = 1 ]]; then
+    test "$(cat "$log.typed.rc")" = 0
+  else
+    test "$(cat "$log.typed.rc")" = 10
+    grep -Fq "Counterexample with 3 states:" "$log.typed"
+    grep -Fq "Counterexample with 3 states:" "$log.direct"
+  fi
+done
+runtime_invalid="$front/tests/runtime_function_invalid.sv"
+for probe in recursive:4 out:11 ref:22 nonlocal:34 static:54 dynamic_loop:61 unsupported:44; do
+  kind=${probe%:*}
+  line=${probe#*:}
+  log="runtime-function-$kind"
+  run "$log" compile "runtime_function_$kind" "$log.vv" "$runtime_invalid"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+  case "$kind" in
+    recursive) message='recursive runtime function';;
+    out|ref) message='runtime function requires input formals';;
+    nonlocal) message='requires a direct blocking write to a runtime function local';;
+    static) message='requires a module-local automatic function with an integral return';;
+    dynamic_loop) message='nonconstant loop initializer';;
+    unsupported) message='unsupported statement RepeatLoop';;
+  esac
+  grep -qE "runtime_function_invalid.sv:$line:[0-9]+: $message$" "$log"
+done
 run stable-clock compile sampled_sequence rejected.vv stable-clock.sv
 grep -q 'stable-clock.sv:[0-9].*\$stable.*posedge' stable-clock
 sed 's/single-posedge\/preponed\/disable-current/single-posedge\/unsampled\/disable-current/' both.vv >bad-sampling.vv

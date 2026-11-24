@@ -132,6 +132,8 @@ ConstantValue compilert::eval_known(const Expression &e) const
               std::string(symbol.name));
       });
   EvalContext context(*scope);
+  for(const auto &[formal, value] : function_constants)
+    context.createLocal(formal, value);
   for(const auto &[index, value] : expanded_indices)
     context.createLocal(&index->as<VariableSymbol>(), value);
   for(const auto &[variable, local] : procedural_locals)
@@ -339,7 +341,14 @@ exprt compilert::expr(
       entry.add(ID_C_source_location) = loc(s->location);
       break;
     }
-    r = symbol_exprt(name(*s), t);
+    if(function)
+    {
+      if(!is_function_variable(s))
+        fail(at, "runtime function reads a nonlocal variable");
+      r = symbol_exprt(function_variable_name(*s), t);
+    }
+    else
+      r = symbol_exprt(name(*s), t);
     break;
   }
   case ExpressionKind::LValueReference:
@@ -657,6 +666,10 @@ exprt compilert::expr(
   case ExpressionKind::Call:
   {
     auto &c = e.as<CallExpression>();
+    if(
+      function && c.isSystemCall() &&
+      (c.getSubroutineName() == "$past" || c.getSubroutineName() == "$stable"))
+      fail(at, "sampled function inside a runtime function body");
     if(c.isSystemCall() && c.getSubroutineName() == "$past")
     {
       const auto args = c.arguments();
@@ -694,9 +707,17 @@ exprt compilert::expr(
       (c.getSubroutineName() == "$signed" ||
        c.getSubroutineName() == "$unsigned"))
       r = typecast_exprt::conditional_cast(expr(*c.arguments().front()), t);
+    else if(!c.isSystemCall())
+    {
+      const auto *callee = std::get<const SubroutineSymbol *>(c.subroutine);
+      if(active_functions.count(callee))
+        fail(at, "recursive runtime function");
+      EvalContext context(*scope);
+      const auto value = c.eval(context);
+      r = value.isInteger() ? literal(value.integer(), t) : runtime_call(c);
+    }
     else if(
-      !c.isSystemCall() || c.getSubroutineName() == "$clog2" ||
-      c.getSubroutineName() == "$bits")
+      c.getSubroutineName() == "$clog2" || c.getSubroutineName() == "$bits")
     {
       EvalContext context(*scope);
       auto value = c.eval(context);
