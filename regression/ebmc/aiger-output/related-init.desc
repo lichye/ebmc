@@ -1,0 +1,12 @@
+CORE
+related-init.sv
+--aiger
+^aag [0-9]+ 2 4 0 [0-9]+ 2 1$
+^b0 Verilog::\$root.main.first_only$
+^b1 Verilog::\$root.main.every_frame$
+^EXIT=0$
+^SIGNAL=0$
+--
+--
+The fourth latch activates the initial-state constraint only in frame zero.
+The two original latches initialized from seed remain free in their resets.
