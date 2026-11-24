@@ -1,0 +1,13 @@
+CORE
+btor2-guarded-mask.btor2
+--bound 1
+^main\.swapped: finite bad frame 1 has an infinite extension by totality$
+^\[main\.initialized\] : PROVED up to bound 1$
+^\[main\.low\] : PROVED up to bound 1$
+^\[main\.high\] : PROVED up to bound 1$
+^\[main\.swapped\] : REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+certifying witness loop
+--

@@ -1,0 +1,11 @@
+CORE
+guarded-mask-assume.sv
+--bound 1
+^main\.bad: witness loop [0-9]+ -> [0-9]+ \(equal endpoints\), bad frame 1$
+^\[main\.good\].*: PROVED up to bound 1$
+^\[main\.bad\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+infinite extension by totality
+--
