@@ -1,0 +1,7 @@
+CORE
+duplicate-bad.btor2
+--bound 0
+^\[repeated\] : PROVED up to bound 0$
+^\[repeated\$5\] : REFUTED$
+^EXIT=10$
+^SIGNAL=0$
