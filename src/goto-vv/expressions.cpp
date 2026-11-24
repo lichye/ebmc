@@ -14,6 +14,32 @@ exprt slice(exprt base, exprt hi, exprt lo, const typet &t)
     t,
     {std::move(base), std::move(hi), std::move(lo)});
 }
+
+bool has_packed_elements(const PackedArrayType &array)
+{
+  return array.elementType.getBitWidth() != 1 ||
+         array.elementType.getCanonicalType().kind ==
+           SymbolKind::PackedArrayType;
+}
+
+exprt packed_slice(
+  exprt base,
+  const PackedArrayType &array,
+  ConstantRange selection,
+  const typet &type)
+{
+  const auto stride = array.elementType.getBitWidth();
+  const auto first = array.range.translateIndex(selection.left);
+  const auto last = array.range.translateIndex(selection.right);
+  const auto offset = uint64_t(std::min(first, last)) * stride;
+  const auto width = selection.fullWidth() * stride;
+  return slice(
+    std::move(base),
+    index_constant(offset + width - 1),
+    index_constant(offset),
+    type);
+}
+
 exprt as_sequence(exprt e)
 {
   if(e.type().id() == ID_bool)
@@ -250,7 +276,44 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
   }
   case ExpressionKind::RangeSelect:
   {
-    auto &rs = e.as<RangeSelectExpression>();
+    const auto &rs = e.as<RangeSelectExpression>();
+    if(const auto *array =
+         rs.value().type->getCanonicalType().as_if<PackedArrayType>();
+       array && has_packed_elements(*array))
+    {
+      auto bound = [&](const Expression &operand)
+      {
+        const auto selected = eval_known(operand);
+        if(!selected.isInteger() || selected.integer().hasUnknown())
+          fail(
+            operand.sourceRange.start(),
+            "packed range select requires known constant bounds");
+        return selected.integer().as<int32_t>();
+      };
+      const auto left = bound(rs.left());
+      const auto right = bound(rs.right());
+      const auto selection_kind = rs.getSelectionKind();
+      std::optional<ConstantRange> selection;
+      if(left && right)
+      {
+        if(selection_kind == RangeSelectionKind::Simple)
+          selection = ConstantRange{*left, *right};
+        else if(*right > 0)
+          selection = ConstantRange::getIndexedRange(
+            *left,
+            *right,
+            array->range.isDescending(),
+            selection_kind == RangeSelectionKind::IndexedUp);
+      }
+      if(!selection || !array->range.contains(*selection))
+        fail(at, "packed range select is out of range");
+      if(
+        selection->left != selection->right &&
+        selection->isDescending() != array->range.isDescending())
+        fail(at, "packed range select goes against the declared direction");
+      r = packed_slice(expr(rs.value()), *array, *selection, t);
+      break;
+    }
     check_select(rs.value());
     EvalContext ctx(*scope);
     auto constant_bound = [&](const Expression &bound)
@@ -287,9 +350,7 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
       el.value().type->getCanonicalType().as_if<PackedArrayType>();
     if(
       !array || (array->range.isDescending() && array->range.right == 0 &&
-                 array->elementType.getBitWidth() == 1 &&
-                 array->elementType.getCanonicalType().kind !=
-                   SymbolKind::PackedArrayType))
+                 !has_packed_elements(*array)))
     {
       r = verilog_bit_select_exprt(expr(el.value()), expr(el.selector()), t);
       break;
@@ -302,13 +363,7 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
     const auto index = selected.integer().as<int32_t>();
     if(!index || !array->range.containsPoint(*index))
       fail(index_at, "packed element select index is out of range");
-    const auto stride = array->elementType.getBitWidth();
-    const auto offset = uint64_t(array->range.translateIndex(*index)) * stride;
-    r = slice(
-      expr(el.value()),
-      index_constant(offset + stride - 1),
-      index_constant(offset),
-      t);
+    r = packed_slice(expr(el.value()), *array, {*index, *index}, t);
     break;
   }
   case ExpressionKind::SimpleAssignmentPattern:

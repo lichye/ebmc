@@ -1,0 +1,7 @@
+p_shared PROVED up to bound 3
+p_independent PROVED up to bound 3
+p_left PROVED up to bound 3
+p_ascending PROVED up to bound 3
+p_1d PROVED up to bound 3
+p_wrong_shared REFUTED
+p_wrong_independent REFUTED
