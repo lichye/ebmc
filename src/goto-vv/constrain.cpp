@@ -44,6 +44,18 @@ void apply(vv_objectt &o, const std::string &path)
     };
     auto top = id2string(o.metadata.get("top"));
     std::string rest;
+    if(op == "undriven")
+    {
+      std::string policy;
+      if(
+        !(in >> policy) || in >> rest ||
+        (policy != "seq" && policy != "const") ||
+        !o.metadata.find("undriven_location").is_nil())
+        reject("expected a single undriven seq or undriven const directive");
+      o.metadata.set("undriven", policy);
+      o.metadata.add("undriven_location") = loc;
+      continue;
+    }
     if(op == "reset")
     {
       std::string n;

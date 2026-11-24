@@ -1,0 +1,17 @@
+implicit_one PROVED up to bound 6
+default_one PROVED up to bound 6
+default_two PROVED up to bound 6
+default_three PROVED up to bound 6
+default_bit PROVED up to bound 6
+computed PROVED up to bound 6
+signed_one PROVED up to bound 6
+signed_two PROVED up to bound 6
+signed_three PROVED up to bound 6
+before_reset PROVED up to bound 6
+in_reset PROVED up to bound 6
+after_reset PROVED up to bound 6
+capture_resumed PROVED up to bound 6
+bad_one REFUTED
+bad_two REFUTED
+bad_three REFUTED
+bad_after_reset REFUTED

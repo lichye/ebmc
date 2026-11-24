@@ -1,0 +1,9 @@
+zero_bad 3
+seven_bad 10
+eight_bad 11
+nine_bad 12
+reset_in_repeat pass
+reset_at_due pass
+reset_after_due 11
+no_shortcut pass
+eight_good pass

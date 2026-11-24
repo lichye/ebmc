@@ -38,7 +38,7 @@ public:
 
   // produce the transition system, and return it
   std::optional<transition_systemt> transition_system() override;
-  transition_systemt receive(vv_objectt);
+  std::optional<transition_systemt> receive(vv_objectt);
 
   /// Build the transition system and report floating reads from the same RTL.
   std::optional<transition_systemt>
@@ -94,6 +94,7 @@ protected:
   transition_systemt create_transition_system(
     verilog_standardt,
     symbol_tablet &&,
+    bool undriven_const,
     const verilog_undriven_reportert &);
 
   void create_reset_logic(const std::string &, transition_systemt &);

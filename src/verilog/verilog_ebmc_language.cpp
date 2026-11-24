@@ -336,6 +336,7 @@ void verilog_ebmc_languaget::create_root_module(
 transition_systemt verilog_ebmc_languaget::create_transition_system(
   verilog_standardt standard,
   symbol_tablet &&symbol_table,
+  bool undriven_const,
   const verilog_undriven_reportert &report_undriven)
 {
   auto root_identifier = verilog_module_symbol(verilog_root_module_name());
@@ -360,7 +361,7 @@ transition_systemt verilog_ebmc_languaget::create_transition_system(
       ignore_initial,
       initial_zero,
       message_handler,
-      cmdline.get_value("undriven") == "const",
+      undriven_const,
       report_undriven);
   }
   catch(ebmc_errort &)
@@ -647,6 +648,26 @@ std::optional<transition_systemt> verilog_ebmc_languaget::transition_system()
   return transition_system({});
 }
 
+static void report_undriven_nets(
+  const symbol_tablet &symbols,
+  verilog_standardt standard,
+  message_handlert &message_handler)
+{
+  verilog_rtl(
+    symbols,
+    verilog_module_symbol(verilog_root_module_name()),
+    standard,
+    message_handler,
+    verilog_undriven_modet::SEQ,
+    [](const auto &report)
+    {
+      for(const auto &net : report)
+        std::cout << "UNDRIVEN\t" << net.name << '\t'
+                  << net.location.get_file() << ':' << net.location.get_line()
+                  << '\n';
+    });
+}
+
 std::optional<transition_systemt> verilog_ebmc_languaget::transition_system(
   const verilog_undriven_reportert &report_undriven)
 {
@@ -747,25 +768,17 @@ std::optional<transition_systemt> verilog_ebmc_languaget::transition_system(
 
   if(cmdline.isset("undriven-report"))
   {
-    verilog_rtl(
-      symbol_table,
-      verilog_module_symbol(verilog_root_module_name()),
-      parse_trees.front().standard,
-      message_handler,
-      verilog_undriven_modet::SEQ,
-      [](const auto &report)
-      {
-        for(const auto &net : report)
-          std::cout << "UNDRIVEN\t" << net.name << '\t'
-                    << net.location.get_file() << ':' << net.location.get_line()
-                    << '\n';
-      });
+    report_undriven_nets(
+      symbol_table, parse_trees.front().standard, message_handler);
     return {};
   }
 
   // generate the transition system from $root
   auto transition_system = create_transition_system(
-    parse_trees.front().standard, std::move(symbol_table), report_undriven);
+    parse_trees.front().standard,
+    std::move(symbol_table),
+    cmdline.get_value("undriven") == "const",
+    report_undriven);
 
   // --reset given?
   if(cmdline.isset("reset"))
@@ -775,17 +788,42 @@ std::optional<transition_systemt> verilog_ebmc_languaget::transition_system(
   return transition_system;
 }
 
-transition_systemt verilog_ebmc_languaget::receive(vv_objectt object)
+std::optional<transition_systemt>
+verilog_ebmc_languaget::receive(vv_objectt object)
 {
   object.validate(true);
   const auto top = object.metadata.get("top");
+  const auto undriven = object.metadata.get("undriven");
   if(cmdline.isset("top") && cmdline.get_value("top") != id2string(top))
     throw ebmc_errort{} << "goto-vv top does not match --top";
-  if(cmdline.isset("reset") || (cmdline.isset("undriven") && cmdline.get_value("undriven")!="seq"))
-    throw ebmc_errort{} << "goto-vv reset and floating policy must match the constrained object";
+  if(
+    cmdline.isset("reset") ||
+    (cmdline.isset("undriven") &&
+     cmdline.get_value("undriven") != id2string(undriven)))
+    throw ebmc_errort{}
+      << "goto-vv reset and floating policy must match the constrained object";
   create_root_module({top}, object.symbols);
-  auto result=create_transition_system(verilog_standardt::SV2023,std::move(object.symbols),{});
-  const auto reset=object.metadata.get("reset");
-  if(!reset.empty()) create_reset_logic(id2string(reset),result);
+
+  if(cmdline.isset("show-symbol-table"))
+  {
+    std::cout << object.symbols;
+    return {};
+  }
+
+  if(cmdline.isset("undriven-report"))
+  {
+    report_undriven_nets(
+      object.symbols, verilog_standardt::SV2023, message_handler);
+    return {};
+  }
+
+  auto result = create_transition_system(
+    verilog_standardt::SV2023,
+    std::move(object.symbols),
+    undriven == "const",
+    {});
+  const auto reset = object.metadata.get("reset");
+  if(!reset.empty())
+    create_reset_logic(id2string(reset), result);
   return result;
 }

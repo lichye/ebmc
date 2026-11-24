@@ -26,6 +26,7 @@
 #include <slang/ast/symbols/MemberSymbols.h>
 #include <slang/ast/symbols/ParameterSymbols.h>
 #include <slang/ast/symbols/PortSymbols.h>
+#include <slang/ast/symbols/SubroutineSymbols.h>
 #include <slang/ast/symbols/VariableSymbols.h>
 #include <slang/ast/types/AllTypes.h>
 #include <slang/driver/Driver.h>
@@ -36,6 +37,7 @@
 
 #include <map>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 
 namespace vv
@@ -63,6 +65,19 @@ inline exprt boolean(exprt e)
   return typecast_exprt::conditional_cast(e, bool_typet());
 }
 
+inline bool has_packed_elements(const PackedArrayType &array)
+{
+  return array.elementType.getBitWidth() != 1 ||
+         array.elementType.getCanonicalType().kind ==
+           SymbolKind::PackedArrayType;
+}
+
+inline bool needs_packed_element_layout(const PackedArrayType &array)
+{
+  return has_packed_elements(array) || !array.range.isDescending() ||
+         array.range.right != 0;
+}
+
 class compilert
 {
 public:
@@ -70,10 +85,25 @@ public:
   analysis::AnalysisManager &am;
   vv_objectt object;
   const Symbol *scope = nullptr;
+  const SubroutineSymbol *function = nullptr;
+  std::set<const SubroutineSymbol *> active_functions;
+  std::string function_identifier;
+  std::map<const VariableSymbol *, ConstantValue> function_constants;
   bool in_clocked_property = false;
+  bool in_always_comb = false;
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
   std::map<std::string, std::string> clock_alias;
   std::map<const Symbol *, exprt> locals;
+  struct procedural_localt
+  {
+    symbol_exprt ref;
+    bool assigned = false;
+    bool require_full_assignment = false;
+    ConstantValue constant;
+  };
+  std::map<const Symbol *, procedural_localt> procedural_locals;
+  std::map<const Symbol *, ConstantValue> expanded_indices;
+  std::size_t next_procedural_local = 0;
   explicit compilert(SourceManager &sm, analysis::AnalysisManager &am)
     : sm(sm), am(am)
   {
@@ -83,11 +113,36 @@ public:
   irept describe_type(const Type &type) const;
   typet type(const Type &t, SourceLocation fallback = {}) const;
   exprt literal(const SVInt &v, const typet &t) const;
-  exprt expr(const Expression &e);
+  ConstantValue eval_known(const Expression &e) const;
+  exprt expr(
+    const Expression &e,
+    const exprt *compound_target = nullptr,
+    bool lvalue = false);
+  exprt lhs(const Expression &e)
+  {
+    return expr(e, nullptr, true);
+  }
+  std::optional<exprt>
+  dynamic_packed_write(const AssignmentExpression &assignment);
+  std::optional<exprt>
+  dynamic_packed_bank_write(const AssignmentExpression &assignment);
+  ConstantRange
+  packed_range(const RangeSelectExpression &, const PackedArrayType &) const;
+  void require_read_only(const Expression &expr, const char *diagnostic) const;
+  void require_empty_final(const Statement &s) const;
   exprt stmt(const Statement &s);
+  exprt counted_loop(
+    const VariableSymbol &index,
+    const ForLoopStatement &loop,
+    const AssignmentExpression *external_init = nullptr);
+  exprt declare_local(const VariableSymbol &variable);
+  bool is_function_variable(const Symbol *symbol) const;
+  std::string function_variable_name(const Symbol &symbol) const;
+  exprt declare_function_local(const VariableSymbol &variable);
+  exprt runtime_call(const CallExpression &call);
   exprt clock_reset_block(const TimedStatement &block);
   exprt immediate(const ImmediateAssertionStatement &s, const Symbol *label);
-  exprt assertion(const AssertionExpr &a, SourceLocation at);
+  exprt assertion(const AssertionExpr &a, SourceLocation at, irept &references);
   std::string clock(const TimingControl *ev, SourceLocation at);
   void module(const InstanceSymbol &inst, bool top);
   using port_mapt = std::map<const Symbol *, const PortSymbol *>;
@@ -97,6 +152,6 @@ public:
     const Symbol &label,
     exprt &items);
   void declare(const ValueSymbol &s, const PortSymbol *p, exprt &items);
-  symbolt &add(const Symbol &s, const typet &t);
+  symbolt &add(const Symbol &s, const typet &t, std::string id = {});
 };
 } // namespace vv

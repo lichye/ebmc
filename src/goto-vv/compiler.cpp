@@ -1,3 +1,5 @@
+#include <slang/ast/ASTVisitor.h>
+#include <slang/ast/expressions/Operator.h>
 #include <slang/ast/types/NetType.h>
 #include <slang/util/VersionInfo.h>
 
@@ -124,9 +126,10 @@ exprt compilert::literal(const SVInt &v, const typet &t) const
   }
   return from_integer(n, t);
 }
-symbolt &compilert::add(const Symbol &s, const typet &t)
+symbolt &compilert::add(const Symbol &s, const typet &t, std::string id)
 {
-  const auto id = name(s);
+  if(id.empty())
+    id = name(s);
   symbolt symbol(id, t, ID_Verilog);
   symbol.base_name = std::string(s.name);
   symbol.pretty_name = s.getHierarchicalPath();
@@ -149,7 +152,10 @@ void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
       net.netType.netKind != NetType::UWire)
       fail(s.location, "unsupported net kind " + std::string(net.netType.name));
   }
-  auto t = type(s.getType(), s.location);
+  const bool string_parameter =
+    s.kind == SymbolKind::Parameter && s.getType().isString();
+  auto t =
+    string_parameter ? typet(ID_verilog_string) : type(s.getType(), s.location);
   auto &symbol = add(s, t);
   auto &info = object.metadata.add("signals").add(symbol.name);
   info.id("declaration");
@@ -160,10 +166,17 @@ void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
   if(s.kind == SymbolKind::Parameter)
   {
     auto &v = s.as<ParameterSymbol>().getValue();
-    if(!v.isInteger())
-      fail(s.location, "unsupported parameter value");
     symbol.is_macro = true;
-    symbol.value = literal(v.integer(), t);
+    if(string_parameter)
+    {
+      if(!v.isString())
+        fail(s.location, "unsupported nonconstant string parameter");
+      symbol.value = constant_exprt(v.str(), t);
+    }
+    else if(v.isInteger())
+      symbol.value = literal(v.integer(), t);
+    else
+      fail(s.location, "unsupported parameter value");
     return;
   }
   symbol.is_lvalue = s.kind == SymbolKind::Variable;
@@ -217,6 +230,124 @@ void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
   decl.operands().push_back(std::move(val));
   items.operands().push_back(std::move(decl));
 }
+exprt compilert::runtime_call(const CallExpression &call)
+{
+  const auto &callee = *std::get<const SubroutineSymbol *>(call.subroutine);
+  const auto at = call.sourceRange.start();
+  const auto *parent = callee.getParentScope();
+  if(
+    call.thisClass() || !parent ||
+    (parent->asSymbol().kind != SymbolKind::InstanceBody &&
+     parent->asSymbol().kind != SymbolKind::GenerateBlock) ||
+    callee.subroutineKind != SubroutineKind::Function ||
+    callee.defaultLifetime != VariableLifetime::Automatic ||
+    !callee.returnValVar || !callee.getReturnType().isIntegral())
+    fail(
+      at, "requires a module-local automatic function with an integral return");
+
+  const auto formals = callee.getArguments();
+  if(formals.size() != call.arguments().size())
+    fail(at, "unbound runtime function arguments");
+  std::set<const Symbol *> written;
+  const auto record_write = [&](const Expression &target)
+  {
+    target.visitSymbolReferences([&](const Expression &, const Symbol &symbol)
+                                 { written.insert(&symbol); });
+  };
+  callee.getBody().visit(makeVisitor(
+    [&](auto &visitor, const AssignmentExpression &assignment)
+    {
+      record_write(assignment.left());
+      visitor.visitDefault(assignment);
+    },
+    [&](auto &visitor, const UnaryExpression &unary)
+    {
+      if(OpInfo::isLValue(unary.op))
+        record_write(unary.operand());
+      visitor.visitDefault(unary);
+    }));
+
+  auto id = name(callee);
+  std::map<const VariableSymbol *, ConstantValue> constants;
+  exprt::operandst arguments;
+  for(std::size_t i = 0; i < formals.size(); ++i)
+  {
+    if(formals[i]->direction != ArgumentDirection::In)
+      fail(formals[i]->location, "runtime function requires input formals");
+    if(!formals[i]->getType().isIntegral())
+      fail(formals[i]->location, "runtime function requires integral formals");
+    arguments.push_back(expr(*call.arguments()[i]));
+    // Specialize only on immutable, known arguments. A loop bound or inner
+    // function call can then use a value such as the caller's FP field width.
+    if(!written.count(formals[i]))
+    {
+      auto value = eval_known(*call.arguments()[i]);
+      if(value.isInteger() && !value.integer().hasUnknown())
+      {
+        id += "$arg" + std::to_string(i) + "_" +
+              value.integer().toString(LiteralBase::Hex, false);
+        constants.emplace(formals[i], std::move(value));
+      }
+    }
+  }
+
+  const auto result_type = type(callee.getReturnType(), at);
+  const auto *existing = object.symbols.lookup(id);
+  if(existing && existing->type.id() != ID_code)
+    fail(at, "runtime function name conflicts with a bound symbol");
+  if(!existing)
+  {
+    code_typet::parameterst parameters;
+    for(const auto *formal : formals)
+    {
+      auto &symbol = add(
+        *formal,
+        type(formal->getType(), formal->location),
+        id + "." + std::string(formal->name));
+      symbol.is_lvalue = true;
+      auto &parameter = parameters.emplace_back(symbol.type);
+      parameter.set_identifier(symbol.name);
+      parameter.set_base_name(symbol.base_name);
+      parameter.set(ID_input, true);
+    }
+    auto &result = add(
+      *callee.returnValVar, result_type, id + "." + std::string(callee.name));
+    result.is_lvalue = true;
+    auto signature = code_typet(std::move(parameters), result_type);
+    signature.set(ID_verilog_lifetime, ID_automatic);
+    add(callee, signature, id);
+
+    // Only the function body has its own lowering scope. Arguments already
+    // refer to the caller's symbols and, in SVA, the caller's sample.
+    const auto *saved_scope = std::exchange(scope, &callee);
+    const auto *saved_function = std::exchange(function, &callee);
+    auto saved_identifier = std::exchange(function_identifier, id);
+    auto saved_constants =
+      std::exchange(function_constants, std::move(constants));
+    auto saved_locals = std::exchange(locals, {});
+    auto saved_procedural = std::exchange(procedural_locals, {});
+    auto saved_indices = std::exchange(expanded_indices, {});
+    const auto saved_comb = std::exchange(in_always_comb, false);
+    active_functions.insert(&callee);
+    auto body = item(ID_block, {stmt(callee.getBody())});
+    active_functions.erase(&callee);
+    in_always_comb = saved_comb;
+    expanded_indices = std::move(saved_indices);
+    procedural_locals = std::move(saved_procedural);
+    locals = std::move(saved_locals);
+    function_constants = std::move(saved_constants);
+    function_identifier = std::move(saved_identifier);
+    function = saved_function;
+    scope = saved_scope;
+    object.symbols.get_writeable_ref(id).value = std::move(body);
+  }
+  return node(
+    ID_function_call,
+    type(*call.type, at),
+    {object.symbols.lookup_ref(id).symbol_expr(),
+     item(ID_arguments, std::move(arguments))});
+}
+
 void compilert::module(const InstanceSymbol &i, bool top)
 {
   auto previous_scope = scope;
@@ -301,6 +432,10 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
     case SymbolKind::WildcardImport:
     case SymbolKind::ExplicitImport:
     case SymbolKind::TypeAlias:
+    case SymbolKind::EmptyMember:
+      break;
+    case SymbolKind::Property:
+      // Slang expands the body at each reference in the assertion AST.
       break;
     case SymbolKind::TransparentMember:
       // Names hoisted from a local enum refer to its existing value symbols.
@@ -318,18 +453,42 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       inner.add_source_location() = loc(child.location);
       for(auto *c : child.getPortConnections())
       {
+        if(c->port.kind != SymbolKind::Port)
+          fail(
+            child.location,
+            "unsupported child port " + std::string(c->port.name));
         auto &p = c->port.as<PortSymbol>();
+        if(!p.internalSymbol || p.isNullPort)
+          fail(child.location, "unbound child port " + std::string(p.name));
+        if(
+          p.direction != ArgumentDirection::In &&
+          p.direction != ArgumentDirection::Out)
+          fail(p.location, "unsupported port direction");
         auto *e = c->getExpression();
         // An open output has a formal and its original driver inside the
         // child, but no receiving expression in the parent.
-        if(!e && p.internalSymbol && p.direction == ArgumentDirection::Out)
+        if(!e && p.direction == ArgumentDirection::Out)
           continue;
-        if(!e || !p.internalSymbol)
-          fail(child.location, "unbound child port " + std::string(p.name));
+        auto formal = symbol_exprt(name(*p.internalSymbol), type(p.getType()));
+        if(!e)
+        {
+          const auto ports = child.body.getPortList();
+          if(std::find(ports.begin(), ports.end(), &p) == ports.end())
+            fail(child.location, "unbound child port " + std::string(p.name));
+          // Slang returns a value when an input default applies. Here the
+          // formal itself is the undriven net, with no parent-side actual.
+          formal.add_source_location() = loc(p.location);
+          inner.operands().push_back(
+            item(ID_verilog_named_port_connection, {formal, nil_exprt{}})
+              .with_source_location(loc(child.location)));
+          continue;
+        }
+        if(e->bad())
+          fail(
+            e->sourceRange.start(), "unbound child port " + std::string(p.name));
         if(e->kind == ExpressionKind::Assignment)
           e = &e->as<AssignmentExpression>().left();
-        auto v = expr(*e);
-        auto formal = symbol_exprt(name(*p.internalSymbol), type(p.getType()));
+        auto v = p.direction == ArgumentDirection::In ? expr(*e) : lhs(*e);
         if(v.id() == ID_symbol)
           clock_alias[id2string(formal.get_identifier())] =
             id2string(v.get(ID_identifier));
@@ -352,7 +511,7 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       if(ca.getDelay())
         fail(s.location, "delayed continuous assign");
       auto assign = item(
-        ID_continuous_assign, {equal_exprt(expr(a.left()), expr(a.right()))});
+        ID_continuous_assign, {equal_exprt(lhs(a.left()), expr(a.right()))});
       assign.add_source_location() = loc(s.location);
       items.operands().push_back(std::move(assign));
       break;
@@ -361,6 +520,11 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
     {
       auto &p = s.as<ProceduralBlockSymbol>();
       auto &body = p.getBody();
+      if(p.procedureKind == ProceduralBlockKind::Final)
+      {
+        require_empty_final(body);
+        break;
+      }
       if(body.kind == StatementKind::Block)
       {
         auto &block = body.as<BlockStatement>();
@@ -391,6 +555,7 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       // Explicit edge controls retain their resolved signals.
       const auto *timed = body.as_if<TimedStatement>();
       exprt statement;
+      in_always_comb = kind == "AlwaysComb";
       if(kind == "Always" && timed &&
          timed->timing.kind == TimingControlKind::ImplicitEvent)
         statement = item(
@@ -402,6 +567,7 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
         statement = clock_reset_block(*timed);
       else
         statement = stmt(body);
+      in_always_comb = false;
       auto process = item(op, {std::move(statement)});
       process.add_source_location() = loc(s.location);
       items.operands().push_back(std::move(process));
@@ -441,9 +607,13 @@ int compile_design(int argc, char **argv)
       return 2;
     auto c = driver.createCompilation();
     driver.reportCompilation(*c, true);
-    if(!driver.reportDiagnostics(true))
+    if(driver.diagEngine.getNumErrors() != 0)
+    {
+      (void)driver.reportDiagnostics(true);
       return 2;
-    analysis::AnalysisManager am;
+    }
+    analysis::AnalysisManager am(
+      driver.getAnalysisOptions(), driver.threadPool);
     compilert lower(driver.sourceManager, am);
     std::mutex lock;
     am.addListener(
@@ -457,7 +627,12 @@ int compile_design(int argc, char **argv)
           lower.clocks[*p] = a.getSemanticLeadingClock();
         }
       });
+    c->freeze();
     am.analyze(*c);
+    c->unfreeze();
+    driver.diagEngine.issue(am.getDiagnostics());
+    if(!driver.reportDiagnostics(true))
+      return 2;
     auto tops = c->getRoot().topInstances;
     if(tops.size() != 1)
       throw std::runtime_error("expected a single top");

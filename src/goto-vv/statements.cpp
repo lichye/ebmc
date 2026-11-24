@@ -1,6 +1,157 @@
+#include <slang/ast/ASTVisitor.h>
+#include <slang/ast/expressions/Operator.h>
+
 #include "lower.h"
 namespace vv
 {
+namespace
+{
+bool static_compound_target(const Expression &e)
+{
+  if(const auto *field = e.as_if<MemberAccessExpression>())
+    return field->member.kind == SymbolKind::Field &&
+           field->value().type->getCanonicalType().kind ==
+             SymbolKind::PackedStructType &&
+           static_compound_target(field->value());
+
+  if(e.kind != ExpressionKind::NamedValue)
+    return false;
+  const auto *symbol = e.getSymbolReference();
+  return symbol && VariableSymbol::isKind(symbol->kind) &&
+         symbol->as<VariableSymbol>().lifetime == VariableLifetime::Static;
+}
+
+const Expression &strip_integral_conversions(const Expression &e)
+{
+  const auto *operand = &e;
+  while(const auto *cast = operand->as_if<ConversionExpression>())
+  {
+    if(
+      !cast->isImplicit() || !cast->type->isIntegral() ||
+      !cast->operand().type->isIntegral())
+      break;
+    operand = &cast->operand();
+  }
+  return *operand;
+}
+
+bool is_unit_assignment_step(
+  const AssignmentExpression &step,
+  const VariableSymbol &index,
+  BinaryOperator op)
+{
+  if(
+    !index.getType().isSimpleBitVector() || step.isNonBlocking() ||
+    step.timingControl || step.op ||
+    step.left().kind != ExpressionKind::NamedValue ||
+    step.left().getSymbolReference() != &index)
+    return false;
+
+  const auto *sum =
+    strip_integral_conversions(step.right()).as_if<BinaryExpression>();
+  if(!sum || sum->op != op || !sum->type->isIntegral())
+    return false;
+
+  const auto &operand = strip_integral_conversions(sum->left());
+  if(
+    operand.kind != ExpressionKind::NamedValue ||
+    operand.getSymbolReference() != &index || !sum->right().type->isIntegral())
+    return false;
+
+  EvalContext context(index);
+  const auto amount = sum->right().eval(context);
+  return amount.isInteger() && amount.integer().as<int64_t>() == 1;
+}
+
+bool is_module_variable(const Symbol &symbol)
+{
+  const auto *parent = symbol.getParentScope();
+  return symbol.kind == SymbolKind::Variable && parent &&
+         parent->asSymbol().kind == SymbolKind::InstanceBody;
+}
+
+class loop_expansion_visitort
+  : public ASTVisitor<loop_expansion_visitort, VisitFlags::AllGood>
+{
+  const VariableSymbol &index;
+  bool in_always_comb;
+  bool packed_index = false;
+  std::set<const VariableSymbol *> declared;
+  std::set<const VariableSymbol *> indices;
+
+  void check_bound(const Expression &bound)
+  {
+    bound.visitSymbolReferences([&](const Expression &, const Symbol &reference)
+                                { packed_index |= &reference == &index; });
+  }
+
+public:
+  loop_expansion_visitort(const VariableSymbol &index, bool in_always_comb)
+    : index(index), in_always_comb(in_always_comb)
+  {
+  }
+
+  void handle(const VariableDeclStatement &declaration)
+  {
+    if(
+      in_always_comb ||
+      declaration.symbol.lifetime == VariableLifetime::Automatic)
+      declared.insert(&declaration.symbol);
+  }
+
+  void handle(const ForLoopStatement &loop)
+  {
+    indices.insert(loop.loopVars.begin(), loop.loopVars.end());
+    visitDefault(loop);
+  }
+
+  void handle(const ElementSelectExpression &select)
+  {
+    if(const auto *array =
+         select.value().type->getCanonicalType().as_if<PackedArrayType>();
+       array && needs_packed_element_layout(*array))
+      check_bound(select.selector());
+    visitDefault(select);
+  }
+
+  void handle(const RangeSelectExpression &select)
+  {
+    if(const auto *array =
+         select.value().type->getCanonicalType().as_if<PackedArrayType>();
+       array && has_packed_elements(*array))
+    {
+      check_bound(select.left());
+      check_bound(select.right());
+    }
+    visitDefault(select);
+  }
+
+  bool needs_expansion() const
+  {
+    return packed_index || std::any_of(
+                             declared.begin(),
+                             declared.end(),
+                             [&](const auto *v) { return !indices.count(v); });
+  }
+};
+} // namespace
+
+void compilert::require_read_only(
+  const Expression &expr,
+  const char *diagnostic) const
+{
+  // Constant evaluation would perform these writes on temporary copies.
+  expr.visit(makeVisitor(
+    [&](auto &, const AssignmentExpression &e)
+    { fail(e.sourceRange.start(), diagnostic); },
+    [&](auto &visitor, const UnaryExpression &e)
+    {
+      if(OpInfo::isLValue(e.op))
+        fail(e.sourceRange.start(), diagnostic);
+      visitor.visitDefault(e);
+    }));
+}
+
 exprt compilert::immediate(
   const ImmediateAssertionStatement &a,
   const Symbol *label)
@@ -93,6 +244,291 @@ exprt compilert::clock_reset_block(const TimedStatement &block)
   return guard;
 }
 
+exprt compilert::counted_loop(
+  const VariableSymbol &v,
+  const ForLoopStatement &loop,
+  const AssignmentExpression *external_init)
+{
+  const auto at = loop.sourceRange.start();
+  const auto *init = external_init ? &external_init->right() : v.getInitializer();
+  if(
+    !init || !loop.stopExpr || (!external_init && !loop.initializers.empty()) ||
+    loop.steps.size() != 1)
+    fail(at, "requires a statically bounded counted loop");
+  const auto &step = *loop.steps.front();
+  const auto step_at = step.sourceRange.start();
+  const auto *assignment = step.as_if<AssignmentExpression>();
+  bool descending = false;
+  if(assignment)
+  {
+    descending = function && is_unit_assignment_step(
+                               *assignment, v, BinaryOperator::Subtract);
+    if(
+      !descending &&
+      !is_unit_assignment_step(*assignment, v, BinaryOperator::Add))
+      fail(step_at, "expected a blocking unit increment of the loop-local index");
+  }
+  else
+  {
+    const auto *increment = step.as_if<UnaryExpression>();
+    descending =
+      function && increment && increment->op == UnaryOperator::Postdecrement;
+    if(
+      !increment ||
+      (!descending && increment->op != UnaryOperator::Postincrement) ||
+      increment->operand().getSymbolReference() != &v)
+      fail(step_at, "expected an increment of the loop-local index");
+  }
+
+  if(
+    function || external_init ||
+    std::any_of(
+      expanded_indices.begin(),
+      expanded_indices.end(),
+      [](const auto &entry) { return is_module_variable(*entry.first); }))
+  {
+    require_read_only(*init, "unsupported write in a loop initializer");
+    require_read_only(*loop.stopExpr, "unsupported write in a loop guard");
+  }
+
+  EvalContext context(v);
+  for(const auto &[formal, value] : function_constants)
+    context.createLocal(formal, value);
+  for(const auto &[index, value] : expanded_indices)
+    context.createLocal(&index->as<VariableSymbol>(), value);
+  const auto first = init->eval(context);
+  if(!first.isInteger() || first.integer().hasUnknown())
+    fail(init->sourceRange.start(), "nonconstant loop initializer");
+  context.createLocal(&v, first);
+  const bool expand_nested = function || external_init ||
+                             !expanded_indices.empty() ||
+                             !procedural_locals.empty();
+  loop_expansion_visitort visitor(v, in_always_comb);
+  if(!expand_nested)
+    loop.body.visit(visitor);
+  const bool expand = expand_nested || visitor.needs_expansion();
+  auto expanded = item(ID_block);
+  const auto *external_symbol =
+    external_init ? &object.symbols.lookup_ref(name(v)) : nullptr;
+  const auto write_index = [&](const ConstantValue &value, SourceLocation where)
+  {
+    auto write = item(
+      ID_verilog_blocking_assign,
+      {external_symbol->symbol_expr(),
+       literal(value.integer(), external_symbol->type)});
+    write.add_source_location() = loc(where);
+    expanded.operands().push_back(std::move(write));
+  };
+  if(external_symbol)
+    write_index(first, external_init->sourceRange.start());
+  for(unsigned count = 0;; ++count)
+  {
+    const auto condition = loop.stopExpr->eval(context);
+    if(!condition.isInteger() || condition.integer().hasUnknown())
+      fail(at, "nonconstant loop guard");
+    if(!condition.isTrue())
+      break;
+    if(count >= 65536)
+      fail(at, "static loop exceeds the expansion limit");
+    if(expand)
+    {
+      // Lower this iteration with its actual typed induction value. A packed
+      // index must resolve to an in-range value in every emitted iteration.
+      expanded_indices.emplace(&v, *context.findLocal(&v));
+      expanded.operands().push_back(stmt(loop.body));
+      expanded_indices.erase(&v);
+    }
+    std::optional<SVInt> expected;
+    if(assignment)
+    {
+      expected = context.findLocal(&v)->integer();
+      if(descending)
+        --*expected;
+      else
+        ++*expected;
+    }
+    const auto updated = step.eval(context);
+    if(!updated.isInteger())
+      fail(step_at, "cannot evaluate loop step");
+    if(expected)
+    {
+      // Check the stored value after Slang's assignment conversions.
+      const auto &actual = context.findLocal(&v)->integer();
+      if(
+        actual.hasUnknown() || actual.getBitWidth() != expected->getBitWidth() ||
+        actual.isSigned() != expected->isSigned() || actual != *expected)
+        fail(step_at, "loop step does not preserve a typed unit change");
+    }
+    if(external_symbol)
+      write_index(*context.findLocal(&v), step_at);
+  }
+  if(expand)
+    return expanded.with_source_location(loc(at));
+
+  // Let the RTL builder unroll the other checked loops. Its loop frame
+  // merges data-dependent break paths.
+  const auto where = loc(v.location);
+  const auto id = name(*scope) + ".$for_" + id2string(where.get_line()) + "_" +
+                  id2string(where.get_column()) + "." + std::string(v.name);
+  const auto t = type(v.getType());
+  symbolt index(id, t, ID_Verilog);
+  index.base_name = std::string(v.name);
+  index.module = root;
+  index.location = where;
+  index.is_lvalue = true;
+  if(object.symbols.add(index))
+    fail(v.location, "duplicate loop index " + id);
+  const auto ref = index.symbol_expr();
+  locals.emplace(&v, ref);
+  auto initialization =
+    item(ID_verilog_blocking_assign, {ref, literal(first.integer(), t)});
+  // The proven assignment step can use the original RTL unroller. In the
+  // Boolean representation, increment modulo two is logical negation.
+  auto increment = assignment && t.id() == ID_bool
+                     ? item(ID_verilog_blocking_assign, {ref, not_exprt(ref)})
+                     : item(ID_postincrement, {ref});
+  increment.add_source_location() = loc(step_at);
+  auto result = item(
+    ID_for,
+    {item(ID_empty_string, {std::move(initialization)}),
+     boolean(expr(*loop.stopExpr)),
+     std::move(increment),
+     stmt(loop.body)});
+  locals.erase(&v);
+  return result.with_source_location(loc(at));
+}
+
+exprt compilert::declare_local(const VariableSymbol &v)
+{
+  if(function)
+    return declare_function_local(v);
+  if(v.getType().isString())
+    fail(v.location, "unsupported runtime string variable");
+  const bool automatic_in_loop =
+    !expanded_indices.empty() && v.lifetime == VariableLifetime::Automatic;
+  const auto *init = v.getInitializer();
+  if(
+    (!automatic_in_loop && !in_always_comb) ||
+    !v.getType().isSimpleBitVector())
+    fail(v.location, "unsupported procedural local declaration");
+  if(!automatic_in_loop && init)
+    fail(v.location, "unsupported initializer for a combinational local");
+
+  auto t = type(v.getType(), v.location);
+  t.set("#vv_cycle_local", true);
+  const auto id = name(*scope) + ".$local_" +
+                  std::to_string(next_procedural_local++) + "." +
+                  std::string(v.name);
+  symbolt symbol(id, t, ID_Verilog);
+  symbol.base_name = std::string(v.name);
+  symbol.module = root;
+  symbol.location = loc(v.location);
+  symbol.is_lvalue = true;
+  if(object.symbols.add(symbol))
+    fail(v.location, "duplicate procedural local " + id);
+  auto [entry, inserted] = procedural_locals.emplace(
+    &v, procedural_localt{symbol.symbol_expr(), false, !automatic_in_loop, {}});
+  if(!inserted)
+    fail(v.location, "procedural local scope overlaps a previous declaration");
+  auto &local = entry->second;
+  if(init)
+  {
+    auto value = expr(*init);
+    local.constant = eval_known(*init);
+    local.assigned = true;
+    return item(ID_verilog_blocking_assign, {local.ref, std::move(value)})
+      .with_source_location(symbol.location);
+  }
+  return item(ID_skip).with_source_location(symbol.location);
+}
+
+bool compilert::is_function_variable(const Symbol *symbol) const
+{
+  if(!symbol || !VariableSymbol::isKind(symbol->kind))
+    return false;
+  for(auto *parent = symbol->getParentScope(); parent;
+      parent = parent->asSymbol().getParentScope())
+    if(&parent->asSymbol() == function)
+      return symbol->as<VariableSymbol>().lifetime ==
+             VariableLifetime::Automatic;
+  return false;
+}
+
+std::string compilert::function_variable_name(const Symbol &symbol) const
+{
+  if(
+    symbol.kind == SymbolKind::FormalArgument ||
+    &symbol == function->returnValVar)
+    return function_identifier + "." + std::string(symbol.name);
+  return function_identifier + ".$local_" +
+         std::to_string(symbol.location.buffer().getId()) + "_" +
+         std::to_string(symbol.location.offset()) + "." +
+         std::string(symbol.name);
+}
+
+exprt compilert::declare_function_local(const VariableSymbol &v)
+{
+  if(!is_function_variable(&v) || !v.getType().isIntegral())
+    fail(v.location, "unsupported runtime function local declaration");
+  const auto id = function_variable_name(v);
+  if(!object.symbols.lookup(id))
+    add(v, type(v.getType(), v.location), id).is_lvalue = true;
+  const auto &local = object.symbols.lookup_ref(id);
+  if(const auto *init = v.getInitializer())
+    return item(ID_verilog_blocking_assign, {local.symbol_expr(), expr(*init)})
+      .with_source_location(local.location);
+  return item(ID_skip).with_source_location(local.location);
+}
+
+void compilert::require_empty_final(const Statement &s) const
+{
+  switch(s.kind)
+  {
+  case StatementKind::Empty:
+    return;
+  case StatementKind::Block:
+  {
+    const auto &block = s.as<BlockStatement>();
+    if(block.blockKind != StatementBlockKind::Sequential)
+      break;
+    require_empty_final(block.body);
+    return;
+  }
+  case StatementKind::List:
+    for(const auto *statement : s.as<StatementList>().list)
+      require_empty_final(*statement);
+    return;
+  case StatementKind::Conditional:
+  {
+    const auto &conditional = s.as<ConditionalStatement>();
+    if(conditional.conditions.size() != 1 || conditional.conditions[0].pattern)
+      fail(s.sourceRange.start(), "unsupported condition in final");
+    const auto &test = *conditional.conditions[0].expr;
+    const auto value = eval_known(test);
+    if(!value.isInteger() || value.integer().hasUnknown())
+      fail(test.sourceRange.start(), "final condition must be a known constant");
+    if(value.isTrue())
+      require_empty_final(conditional.ifTrue);
+    else if(conditional.ifFalse)
+      require_empty_final(*conditional.ifFalse);
+    return;
+  }
+  case StatementKind::ExpressionStatement:
+    if(const auto *call =
+         s.as<ExpressionStatement>().expr.as_if<CallExpression>())
+      fail(
+        call->sourceRange.start(),
+        "unsupported reachable final call " +
+          std::string(call->getSubroutineName()));
+    break;
+  default:
+    break;
+  }
+  fail(
+    s.sourceRange.start(),
+    "unsupported reachable final statement " + std::string(toString(s.kind)));
+}
+
 exprt compilert::stmt(const Statement &s)
 {
   const auto at = s.sourceRange.start();
@@ -105,17 +541,44 @@ exprt compilert::stmt(const Statement &s)
   case StatementKind::Block:
   {
     auto &block = s.as<BlockStatement>();
+    if(function && block.blockKind != StatementBlockKind::Sequential)
+      fail(at, "unsupported runtime function block");
     if(
-      block.blockSymbol && !block.blockSymbol->name.empty() &&
+      !function && block.blockSymbol && !block.blockSymbol->name.empty() &&
       block.body.kind == StatementKind::ImmediateAssertion)
       return immediate(
         block.body.as<ImmediateAssertionStatement>(), block.blockSymbol);
+    const auto entered = procedural_locals;
     r = stmt(block.body);
+    std::erase_if(
+      procedural_locals,
+      [&](const auto &entry)
+      {
+        if(entered.count(entry.first))
+          return false;
+        if(entry.second.require_full_assignment && !entry.second.assigned)
+          fail(
+            entry.first->location,
+            "combinational local is not assigned on every path");
+        return true;
+      });
   }
   break;
   case StatementKind::ImmediateAssertion:
+    if(function)
+      fail(at, "unsupported assertion in a runtime function");
     r = immediate(s.as<ImmediateAssertionStatement>(), nullptr);
     break;
+  case StatementKind::Return:
+  {
+    const auto *value = s.as<ReturnStatement>().expr;
+    if(!function || !value)
+      fail(at, "unsupported return statement");
+    r = verilog_returnt(expr(*value));
+    break;
+  }
+  case StatementKind::VariableDeclaration:
+    return declare_local(s.as<VariableDeclStatement>().symbol);
   case StatementKind::List:
   {
     r = item(ID_block);
@@ -127,71 +590,57 @@ exprt compilert::stmt(const Statement &s)
         r.operands().push_back(stmt(*list[n]));
         continue;
       }
-      auto &v = list[n]->as<VariableDeclStatement>().symbol;
-      if(n + 1 >= list.size() || list[n + 1]->kind != StatementKind::ForLoop)
-        fail(v.location, "unsupported procedural local outside a counted loop");
-      auto &loop = list[++n]->as<ForLoopStatement>();
-      auto init = v.getInitializer();
-      if(
-        !init || !loop.stopExpr || !loop.initializers.empty() ||
-        loop.steps.size() != 1 ||
-        loop.steps[0]->kind != ExpressionKind::UnaryOp)
-        fail(at, "requires a statically bounded counted loop");
-      auto &step = loop.steps[0]->as<UnaryExpression>();
-      if(
-        step.op != UnaryOperator::Postincrement ||
-        step.operand().getSymbolReference() != &v)
-        fail(at, "expected an increment of the loop-local index");
-      EvalContext context(v);
-      auto first = init->eval(context);
-      if(!first.isInteger())
-        fail(v.location, "nonconstant loop initializer");
-      context.createLocal(&v, first);
-      for(unsigned count = 0;; count++)
+      const auto &v = list[n]->as<VariableDeclStatement>().symbol;
+      const auto *loop =
+        n + 1 < list.size() ? list[n + 1]->as_if<ForLoopStatement>() : nullptr;
+      if(loop && loop->loopVars.size() == 1 && loop->loopVars.front() == &v)
       {
-        auto condition = loop.stopExpr->eval(context);
-        if(!condition.isInteger() || condition.integer().hasUnknown())
-          fail(at, "nonconstant loop guard");
-        if(!condition.isTrue())
-          break;
-        if(count >= 65536)
-          fail(at, "static loop exceeds the expansion limit");
-        auto updated = loop.steps[0]->eval(context);
-        if(!updated.isInteger())
-          fail(at, "cannot evaluate loop step");
+        r.operands().push_back(counted_loop(v, *loop));
+        ++n;
       }
-      // Let the RTL builder unroll the checked loop. Its loop frame merges
-      // data-dependent break paths and retains the statement evaluation order.
-      auto where = loc(v.location);
-      auto id = name(*scope) + ".$for_" + id2string(where.get_line()) + "_" +
-                id2string(where.get_column()) + "." + std::string(v.name);
-      auto t = type(v.getType());
-      symbolt index(id, t, ID_Verilog);
-      index.base_name = std::string(v.name);
-      index.module = root;
-      index.location = where;
-      index.is_lvalue = true;
-      if(object.symbols.add(index))
-        fail(v.location, "duplicate loop index " + id);
-      auto ref = index.symbol_expr();
-      locals.emplace(&v, ref);
-      auto initialization =
-        item(ID_verilog_blocking_assign, {ref, literal(first.integer(), t)});
-      r.operands().push_back(item(
-        ID_for,
-        {item(ID_empty_string, {initialization}),
-         boolean(expr(*loop.stopExpr)),
-         item(ID_postincrement, {ref}),
-         stmt(loop.body)}));
-      locals.erase(&v);
+      else
+        r.operands().push_back(declare_local(v));
     }
     break;
   }
+  case StatementKind::ForLoop:
+  {
+    if(function)
+      fail(at, "requires a declared local runtime function loop index");
+    const auto &loop = s.as<ForLoopStatement>();
+    if(!loop.loopVars.empty() || loop.initializers.size() != 1)
+      fail(at, "requires one direct initializer for a module loop index");
+    const auto *init =
+      loop.initializers.front()->as_if<AssignmentExpression>();
+    if(
+      !init || init->isNonBlocking() || init->timingControl || init->op ||
+      init->left().kind != ExpressionKind::NamedValue)
+      fail(
+        loop.initializers.front()->sourceRange.start(),
+        "requires a direct blocking initializer for a module loop index");
+    const auto *target = init->left().getSymbolReference();
+    const auto where = init->left().sourceRange.start();
+    if(
+      !target || !is_module_variable(*target) ||
+      !target->as<VariableSymbol>().getType().isSimpleBitVector())
+      fail(where, "requires a module variable as the loop index");
+    if(expanded_indices.count(target))
+      fail(where, "write to a statically expanded loop index");
+    const auto *symbol = object.symbols.lookup(name(*target));
+    if(!symbol || !symbol->is_lvalue)
+      fail(where, "requires a writable module loop index");
+    r = counted_loop(target->as<VariableSymbol>(), loop, init);
+    break;
+  }
   case StatementKind::Break:
+    if(function || !expanded_indices.empty())
+      fail(at, "unsupported break in a statically expanded loop");
     r = item(ID_break);
     break;
   case StatementKind::Case:
   {
+    if(!procedural_locals.empty())
+      fail(at, "unsupported case with active procedural locals");
     const auto &c = s.as<CaseStatement>();
     if(
       (c.condition != CaseStatementCondition::Normal &&
@@ -231,6 +680,10 @@ exprt compilert::stmt(const Statement &s)
   }
   case StatementKind::Timed:
   {
+    if(function)
+      fail(at, "unsupported timing in a runtime function");
+    if(!expanded_indices.empty())
+      fail(at, "unsupported timing in a statically expanded loop");
     auto &ts = s.as<TimedStatement>();
     clock(&ts.timing, at);
     auto &ev = ts.timing.as<SignalEventControl>();
@@ -245,36 +698,124 @@ exprt compilert::stmt(const Statement &s)
     auto &c = s.as<ConditionalStatement>();
     if(c.conditions.size() != 1 || c.conditions[0].pattern)
       fail(at, "unsupported statement condition");
-    r = item(ID_if, {boolean(expr(*c.conditions[0].expr)), stmt(c.ifTrue)});
+    const auto &test = *c.conditions[0].expr;
+    if(!expanded_indices.empty() || !procedural_locals.empty())
+      require_read_only(test, "unsupported write in a condition");
+    const auto constant = eval_known(test);
+    if(constant.isInteger() && !constant.integer().hasUnknown())
+    {
+      if(constant.isTrue())
+        return stmt(c.ifTrue);
+      if(c.ifFalse)
+        return stmt(*c.ifFalse);
+      r = item(ID_skip);
+      break;
+    }
+    auto condition = boolean(expr(test));
+    const auto entered = procedural_locals;
+    auto when_true = stmt(c.ifTrue);
+    const auto after_true = std::move(procedural_locals);
+    procedural_locals = entered;
+    r = item(ID_if, {std::move(condition), std::move(when_true)});
     if(c.ifFalse)
       r.operands().push_back(stmt(*c.ifFalse));
+    for(const auto &entry : entered)
+    {
+      const auto *symbol = entry.first;
+      auto &after = procedural_locals.at(symbol);
+      const auto &other = after_true.at(symbol);
+      after.assigned &= other.assigned;
+      if(!after.assigned || !(after.constant == other.constant))
+        after.constant = {};
+    }
     break;
   }
   case StatementKind::ExpressionStatement:
   {
     auto &e = s.as<ExpressionStatement>().expr;
+    if(e.kind == ExpressionKind::Call)
+      fail(
+        at,
+        "unsupported procedural call " +
+          std::string(e.as<CallExpression>().getSubroutineName()));
     if(e.kind == ExpressionKind::UnaryOp)
     {
       auto &u = e.as<UnaryExpression>();
       if(
-        u.op == UnaryOperator::Postincrement &&
+        !function && u.op == UnaryOperator::Postincrement &&
+        expanded_indices.empty() && procedural_locals.empty() &&
         !locals.count(u.operand().getSymbolReference()))
       {
-        r = item(ID_postincrement, {expr(u.operand())});
+        r = item(ID_postincrement, {lhs(u.operand())});
         break;
       }
     }
     if(e.kind != ExpressionKind::Assignment)
       fail(at, "expected assignment");
     auto &a = e.as<AssignmentExpression>();
-    if(locals.count(a.left().getSymbolReference()))
+    const auto *target = a.left().getSymbolReference();
+    if(
+      function && (!is_function_variable(target) || a.isNonBlocking() ||
+                   a.timingControl || a.op))
+      fail(at, "requires a direct blocking write to a runtime function local");
+    if(locals.count(target) || expanded_indices.count(target))
       fail(at, "write to a statically expanded loop index");
+    if(auto entry = procedural_locals.find(target);
+       entry != procedural_locals.end())
+    {
+      if(
+        a.left().kind != ExpressionKind::NamedValue || a.isNonBlocking() ||
+        a.op || a.timingControl)
+        fail(
+          at,
+          entry->second.require_full_assignment
+            ? "unsupported assignment to a combinational local"
+            : "unsupported assignment to an automatic local");
+      auto rhs = expr(a.right());
+      auto &local = entry->second;
+      local.constant = eval_known(a.right());
+      local.assigned = true;
+      r = item(ID_verilog_blocking_assign, {local.ref, std::move(rhs)});
+      break;
+    }
+    const auto contains_local_target =
+      [&](auto &&self, const Expression &lhs) -> bool
+    {
+      if(const auto *concat = lhs.as_if<ConcatenationExpression>())
+        return std::any_of(
+          concat->operands().begin(),
+          concat->operands().end(),
+          [&](const Expression *operand) { return self(self, *operand); });
+      const auto *symbol = lhs.getSymbolReference();
+      return procedural_locals.count(symbol) || expanded_indices.count(symbol) ||
+             locals.count(symbol);
+    };
+    if(contains_local_target(contains_local_target, a.left()))
+      fail(at, "unsupported assignment target containing a procedural local");
     if(a.op)
-      fail(at, "unsupported compound assignment");
+    {
+      if(
+        (*a.op != BinaryOperator::Add && *a.op != BinaryOperator::Subtract) ||
+        a.isNonBlocking() || a.timingControl)
+        fail(at, "unsupported compound assignment");
+      if(!a.left().type->isIntegral() || !static_compound_target(a.left()))
+        fail(
+          a.left().sourceRange.start(),
+          "unsupported compound assignment target");
+    }
+    if(auto write = a.isNonBlocking() ? dynamic_packed_write(a)
+                                     : dynamic_packed_bank_write(a))
+    {
+      r = std::move(*write);
+      break;
+    }
+    auto target_expr = lhs(a.left());
+    // The typed RHS reads this target in the current procedural state.
+    auto rhs = expr(a.right(), a.op ? &target_expr : nullptr);
     r = item(
       a.isNonBlocking() ? ID_verilog_non_blocking_assign
                         : ID_verilog_blocking_assign,
-      {expr(a.left()), expr(a.right())});
+      {std::move(target_expr), std::move(rhs)});
     break;
   }
   default:

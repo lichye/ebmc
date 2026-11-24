@@ -1,0 +1,5 @@
+p_rotation PROVED up to bound 3
+p_before PROVED up to bound 3
+p_chain PROVED up to bound 3
+p_adjacent PROVED up to bound 3
+p_wrong REFUTED

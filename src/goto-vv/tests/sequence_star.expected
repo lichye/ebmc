@@ -1,0 +1,10 @@
+zero_bad 2
+one_bad 4
+many_bad 6
+all_ends_ok pass
+all_ends_bad 6
+restart_bad 6
+gap_reset pass
+gap_live 4
+due_reset pass
+later_reset_bad 3
