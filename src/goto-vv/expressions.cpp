@@ -189,13 +189,26 @@ exprt compilert::expr(const Expression &e, const exprt *compound_target)
   }
   case ExpressionKind::Concatenation:
   {
-    r = node(ID_concatenation, t);
-    const auto args = e.as<ConcatenationExpression>().operands();
-    if(args.size() == 1 && t.id() == ID_bool)
-      r = typecast_exprt::conditional_cast(expr(*args.front()), t);
+    const bool packed = e.type->isIntegral();
+    exprt::operandst operands;
+    for(const auto *arg : e.as<ConcatenationExpression>().operands())
+    {
+      if(packed && arg->type->isVoid())
+      {
+        // Slang uses void for a zero-width replication operand.
+        const auto *rep = arg->as_if<ReplicationExpression>();
+        const auto *count = rep ? rep->count().getConstant() : nullptr;
+        if(count && count->isInteger() && count->integer().as<int32_t>() == 0)
+          continue;
+      }
+      operands.push_back(expr(*arg));
+    }
+    if(packed && operands.empty())
+      fail(at, "unsupported empty concatenation");
+    if(operands.size() == 1 && t.id() == ID_bool)
+      r = typecast_exprt::conditional_cast(std::move(operands.front()), t);
     else
-      for(auto *a : args)
-        r.operands().push_back(expr(*a));
+      r = node(ID_concatenation, t, std::move(operands));
     break;
   }
   case ExpressionKind::RangeSelect:

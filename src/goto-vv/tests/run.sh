@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member; do
+for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -114,6 +114,15 @@ run empty-member-clocking compile empty_member_clocking empty-clocking.vv "$fron
 grep -qE 'empty_member_clocking.sv:2:[0-9]+: unsupported module member ClockingBlock' empty-member-clocking
 test "$(cat empty-member-clocking.rc)" = 2
 test ! -e empty-clocking.vv
+zero_replication_invalid="$front/tests/zero_replication_invalid.sv"
+for kind in empty standalone; do
+  log="zero-replication-$kind"
+  run "$log" compile "zero_replication_$kind" "$log.vv" "$zero_replication_invalid"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+done
+grep -qE 'zero_replication_invalid.sv:2:[0-9]+: error: .*concatenation' zero-replication-empty
+grep -qE 'zero_replication_invalid.sv:7:[0-9]+: error: replication constant can only be zero inside' zero-replication-standalone
 # An explicitly empty input still needs its own supported undriven semantics.
 sed 's/\.a(a), \.forwarded(open_q)/.a(), .forwarded(open_q)/' "$front/tests/open_outputs.sv" >open_input.sv
 run open-input compile open_outputs rejected.vv open_input.sv

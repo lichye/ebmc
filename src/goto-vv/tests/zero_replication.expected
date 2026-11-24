@@ -1,0 +1,5 @@
+p_zero PROVED up to bound 3
+p_positive PROVED up to bound 3
+p_one PROVED up to bound 3
+p_unsigned PROVED up to bound 3
+p_wrong REFUTED
