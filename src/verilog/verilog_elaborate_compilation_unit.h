@@ -19,6 +19,7 @@ void verilog_elaborate_compilation_unit(
   const verilog_parse_treet &,
   bool warn_implicit_nets,
   symbol_table_baset &,
-  message_handlert &);
+  message_handlert &,
+  bool allow_constant_oob_read = false);
 
 #endif // CPROVER_VERILOG_ELABORATE_UNIT_H

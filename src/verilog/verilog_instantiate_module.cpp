@@ -299,7 +299,11 @@ irep_idt verilog_typecheckt::instantiate_module(
   // recursive call
 
   verilog_typecheckt verilog_typecheck(
-    standard, warn_implicit_nets, symbol_table, get_message_handler());
+    standard,
+    warn_implicit_nets,
+    symbol_table,
+    get_message_handler(),
+    allow_constant_oob_read);
 
   verilog_typecheck.typecheck_design_element(
     source_copy, *new_symbol, instance_identifier);

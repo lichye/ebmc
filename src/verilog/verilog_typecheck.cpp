@@ -1590,10 +1590,19 @@ void verilog_typecheckt::convert_if(verilog_ift &statement)
   convert_expr(condition);
   make_boolean(condition);
 
-  convert_statement(statement.then_case());
+  // A branch that a constant condition never selects is not evaluated.
+  const auto constant = constant_condition(condition);
+
+  {
+    unevaluatedt unevaluated{*this, constant == false};
+    convert_statement(statement.then_case());
+  }
 
   if(statement.has_else_case())
+  {
+    unevaluatedt unevaluated{*this, constant == true};
     convert_statement(statement.else_case());
+  }
 }
 
 /*******************************************************************\
@@ -2617,7 +2626,8 @@ bool verilog_typecheck(
   const irep_idt &module_identifier,
   verilog_standardt standard,
   bool warn_implicit_nets,
-  message_handlert &message_handler)
+  message_handlert &message_handler,
+  bool allow_constant_oob_read)
 {
   // find module source symbol
   symbol_tablet::symbolst::const_iterator it =
@@ -2664,7 +2674,11 @@ bool verilog_typecheck(
   }
 
   verilog_typecheckt verilog_typecheck(
-    standard, warn_implicit_nets, symbol_table, message_handler);
+    standard,
+    warn_implicit_nets,
+    symbol_table,
+    message_handler,
+    allow_constant_oob_read);
 
   try
   {

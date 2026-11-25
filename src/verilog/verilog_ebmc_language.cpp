@@ -194,7 +194,8 @@ void verilog_ebmc_languaget::elaborate_module(
        module.identifier,
        module.parse_tree.standard,
        warn_implicit_nets,
-       message_handler))
+       message_handler,
+       cmdline.isset("allow-constant-oob-read")))
   {
     log.error() << "CONVERSION ERROR" << messaget::eom;
     throw ebmc_errort{}.with_exit_code(2);
@@ -418,7 +419,11 @@ symbol_tablet verilog_ebmc_languaget::elaborate_compilation_units(
 
   for(auto &parse_tree : parse_trees)
     verilog_elaborate_compilation_unit(
-      parse_tree, warn_implicit_nets, symbol_table, message_handler);
+      parse_tree,
+      warn_implicit_nets,
+      symbol_table,
+      message_handler,
+      cmdline.isset("allow-constant-oob-read"));
 
   return symbol_table;
 }

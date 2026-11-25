@@ -1,6 +1,6 @@
 CORE
 packed_element_wide_index.sv
---finite-prefix --bound 0
+--finite-prefix --bound 0 --allow-constant-oob-read
 ^\[main\.p_pos_ends\].*: PROVED up to bound 0$
 ^\[main\.p_neg_ends\].*: PROVED up to bound 0$
 ^\[main\.p_wide_ends\].*: PROVED up to bound 0$

@@ -1,0 +1,10 @@
+CORE
+constant-packed-oob.sv
+--bound 1
+^file .*constant-packed-oob.sv line 11: range-oob: constant packed read \[5:2\] is outside declared range \[3:0\]$
+^EXIT=2$
+^SIGNAL=0$
+--
+^Generating Decision Problem$
+^\*\* Results:
+--

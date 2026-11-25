@@ -1,0 +1,10 @@
+CORE
+constant-packed-oob-write-control.sv
+--bound 1
+^\[control\.p_write\].*: PROVED up to bound 1$
+^\[control\.p_dynamic\].*: PROVED up to bound 1$
+^EXIT=0$
+^SIGNAL=0$
+--
+range-oob:
+--

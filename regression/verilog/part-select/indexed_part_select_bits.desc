@@ -1,6 +1,6 @@
 CORE
 indexed_part_select_bits.sv
---bound 0
+--bound 0 --allow-constant-oob-read
 ^\[main\.static_slice\].*: PROVED up to bound 0$
 ^\[main\.dynamic_slice\].*: PROVED up to bound 0$
 ^\[main\.mixed_base\].*: PROVED up to bound 0$

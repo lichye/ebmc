@@ -17,7 +17,8 @@ void verilog_elaborate_compilation_unit(
   const verilog_parse_treet &parse_tree,
   bool warn_implicit_nets,
   symbol_table_baset &symbol_table,
-  message_handlert &message_handler)
+  message_handlert &message_handler,
+  bool allow_constant_oob_read)
 {
   for(auto &item : parse_tree.items)
   {
@@ -55,7 +56,8 @@ void verilog_elaborate_compilation_unit(
            identifier,
            parse_tree.standard,
            warn_implicit_nets,
-           message_handler))
+           message_handler,
+           allow_constant_oob_read))
       {
         log.error() << "CONVERSION ERROR" << messaget::eom;
         throw ebmc_errort{}.with_exit_code(2);
@@ -71,7 +73,8 @@ void verilog_elaborate_compilation_unit(
           parse_tree.standard,
           warn_implicit_nets,
           symbol_table,
-          message_handler);
+          message_handler,
+          allow_constant_oob_read);
         verilog_typecheck.typecheck_decl(to_verilog_decl(item));
       }
       catch(const typecheckt::errort &error)
@@ -95,7 +98,8 @@ void verilog_elaborate_compilation_unit(
           parse_tree.standard,
           warn_implicit_nets,
           symbol_table,
-          message_handler);
+          message_handler,
+          allow_constant_oob_read);
         verilog_typecheck.typecheck_parameter_decl(
           static_cast<const verilog_module_itemt &>(item));
       }
@@ -119,7 +123,8 @@ void verilog_elaborate_compilation_unit(
           parse_tree.standard,
           warn_implicit_nets,
           symbol_table,
-          message_handler);
+          message_handler,
+          allow_constant_oob_read);
         verilog_typecheck.typecheck_property_declaration(
           to_verilog_property_declaration(static_cast<const exprt &>(item)));
       }
@@ -150,7 +155,8 @@ void verilog_elaborate_compilation_unit(
           parse_tree.standard,
           warn_implicit_nets,
           symbol_table,
-          message_handler);
+          message_handler,
+          allow_constant_oob_read);
         verilog_typecheck.typecheck_class(to_verilog_class(item));
       }
       catch(const typecheckt::errort &error)

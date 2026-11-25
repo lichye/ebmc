@@ -1,6 +1,6 @@
 CORE
 indexed_part_select_bits.sv
---show-trans
+--show-trans --allow-constant-oob-read
 ^  main\.high == main\.bus\[11:9\]$
 ^EXIT=0$
 ^SIGNAL=0$

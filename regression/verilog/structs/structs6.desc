@@ -1,6 +1,6 @@
 CORE
 structs6.sv
-
+--allow-constant-oob-read
 ^\[main\.p1\] always 0 == 0: PROVED .*$
 ^\[main\.p2\] always main\.s\[6:0\] == 114: PROVED .*$
 ^\[main\.p3\] always main\.s\[7\] == 1'b0: PROVED .*$

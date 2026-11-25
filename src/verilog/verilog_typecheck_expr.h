@@ -33,9 +33,11 @@ public:
     verilog_standardt _standard,
     bool _warn_implicit_nets,
     const namespacet &_ns,
-    message_handlert &_message_handler)
+    message_handlert &_message_handler,
+    bool _allow_constant_oob_read = false)
     : verilog_typecheck_baset(_standard, _ns, _message_handler),
-      warn_implicit_nets(_warn_implicit_nets)
+      warn_implicit_nets(_warn_implicit_nets),
+      allow_constant_oob_read(_allow_constant_oob_read)
   { }
 
   verilog_typecheck_exprt(
@@ -44,11 +46,13 @@ public:
     const namespacet &_ns,
     const irep_idt &_module_identifier,
     const irep_idt &_module_instance,
-    message_handlert &_message_handler)
+    message_handlert &_message_handler,
+    bool _allow_constant_oob_read = false)
     : verilog_typecheck_baset(_standard, _ns, _message_handler),
       module_identifier(_module_identifier),
       module_instance(_module_instance),
-      warn_implicit_nets(_warn_implicit_nets)
+      warn_implicit_nets(_warn_implicit_nets),
+      allow_constant_oob_read(_allow_constant_oob_read)
   { }
 
   virtual void convert_expr(exprt &expr)
@@ -200,6 +204,44 @@ protected:
   }
 
   bool warn_implicit_nets = false;
+  bool allow_constant_oob_read = false;
+
+  /// Nesting depth of operands that are not evaluated because a constant
+  /// condition selects another operand: the unselected operand of a
+  /// conditional operator, the right operand of a short-circuited && or ||,
+  /// and the unselected branch of an if statement. Constant out-of-range
+  /// reads there are not diagnosed (as in slang).
+  std::size_t unevaluated_depth = 0;
+
+  struct unevaluatedt
+  {
+    explicit unevaluatedt(verilog_typecheck_exprt &_tc, bool _active)
+      : tc(_tc), active(_active)
+    {
+      if(active)
+        ++tc.unevaluated_depth;
+    }
+    ~unevaluatedt()
+    {
+      if(active)
+        --tc.unevaluated_depth;
+    }
+    verilog_typecheck_exprt &tc;
+    bool active;
+  };
+
+  /// The value of a condition that is an elaboration-time constant.
+  std::optional<bool> constant_condition(const exprt &);
+
+  std::optional<mp_integer> constant_packed_read_index(const exprt &);
+
+  bool constant_read_out_of_range(
+    const exprt &select,
+    const mp_integer &low,
+    const mp_integer &high,
+    const mp_integer &offset,
+    const mp_integer &width,
+    bool increasing);
 
   virtual bool
   implicit_wire(const irep_idt &identifier, const symbolt *&, const typet &)
