@@ -1,0 +1,19 @@
+CORE
+constant-packed-oob.sv
+--allow-constant-oob-read --bound 1
+^file .*constant-packed-oob.sv line 11: range-oob:
+^\[vector_oob\.p_known\].*: PROVED up to bound 1$
+^\[vector_oob\.p_narrowed\].*: PROVED up to bound 1$
+^\[vector_oob\.p_explicit_x\].*: PROVED up to bound 1$
+^\[vector_oob\.p_bit_zero\].*: PROVED up to bound 1$
+^\[vector_oob\.p_two_state_part\].*: PROVED up to bound 1$
+^\[vector_oob\.p_explicit_conversion\].*: PROVED up to bound 1$
+^\[vector_oob\.p_parameter\].*: PROVED up to bound 1$
+^\[vector_oob\.lanes\[0\]\.p_genvar\].*: PROVED up to bound 1$
+^\[vector_oob\.lanes\[1\]\.p_genvar\].*: PROVED up to bound 1$
+^\[vector_oob\.p_oob_can_be_one\].*: REFUTED$
+^\[vector_oob\.p_oob_can_be_zero\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+--

@@ -815,6 +815,19 @@ exprt verilog_lowering_cast(typecast_exprt expr)
   return std::move(expr);
 }
 
+/// The value of a packed array element that is read with a constant,
+/// out-of-range index (1800-2017 11.5.1): x for a four-state element,
+/// 0 for a two-state element.
+static exprt packed_out_of_range_element(const exprt &expr)
+{
+  const typet &type = expr.type();
+  const auto width = numeric_cast_v<std::size_t>(verilog_bits(type));
+  if(expr.get_bool("#constant_oob_read_zero"))
+    return from_bitvector(from_integer(0, unsignedbv_typet{width}), 0, type);
+  auto unknown = verilog_unsignedbv_typet{width}.all_x_expr();
+  return from_bitvector(lower_to_aval_bval(unknown), 0, type);
+}
+
 /// The elements lsb..msb (declared indices) of the packed array \p src,
 /// as a packed array of type \p result_type. The source is flattened to a
 /// bit vector, and the selected sub-array is reconstructed from it.
@@ -1607,6 +1620,8 @@ exprt verilog_lowering_node(exprt expr)
 
       if(array_type.is_packed())
       {
+        if(expr.get_bool("#constant_oob_read"))
+          return packed_out_of_range_element(expr).with_source_location(expr);
         return index_exprt{
           src,
           packed_array_internal_index(array_type, bit_select.index()),

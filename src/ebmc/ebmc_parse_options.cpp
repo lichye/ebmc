@@ -609,6 +609,7 @@ void ebmc_parse_optionst::help()
     " {y--reset} {uexpr}             \t set up module reset\n"
     " {y--ignore-initial}            \t disregard initial blocks\n"
     " {y--initial-zero}              \t initialize variables with zero\n"
+    " {y--allow-constant-oob-read}   \t warn on native constant out-of-range packed reads\n"
     "\n"
     "Debugging options:\n"
     " {y--preprocess}                \t output the preprocessed source file\n"

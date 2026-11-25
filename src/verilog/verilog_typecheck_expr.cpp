@@ -3450,6 +3450,13 @@ void verilog_typecheck_exprt::array_decay(exprt &expr) const
     type.id() == ID_array &&
     type.get(ID_C_verilog_type) == ID_verilog_packed_array)
   {
+    if(expr.id() == ID_typecast && expr.get_bool("#constant_oob_read"))
+    {
+      // This result was assembled in packed bit order before the cast.
+      auto bits = to_typecast_expr(std::as_const(expr)).op();
+      expr = std::move(bits);
+      return;
+    }
     auto new_type =
       unsignedbv_typet{numeric_cast_v<std::size_t>(get_width(type))};
     // The synthesis stage turns these typecasts into a concatenation
@@ -3951,6 +3958,253 @@ Function: verilog_typecheck_exprt::convert_bit_select_expr
 
 \*******************************************************************/
 
+std::optional<mp_integer>
+verilog_typecheck_exprt::constant_packed_read_index(const exprt &index)
+{
+  if(auto simple = is_constant_integer_post_convert(index))
+    return simple;
+
+  // A nested constant select may require Verilog lowering beyond the
+  // simpler integer folding. Leave runtime function calls on their old path.
+  if(has_subexpr(
+       index,
+       [&](const exprt &operand)
+       {
+         if(operand.id() == ID_function_call)
+           return true;
+         if(operand.id() != ID_symbol)
+           return false;
+         const symbolt *symbol = nullptr;
+         return ns.lookup(to_symbol_expr(operand).identifier(), symbol) ||
+                !symbol->is_macro;
+       }))
+    return {};
+  try
+  {
+    return integer_constant_post_convert(index);
+  }
+  catch(const errort &)
+  {
+    return {};
+  }
+}
+
+std::optional<bool>
+verilog_typecheck_exprt::constant_condition(const exprt &condition)
+{
+  // Only conditions over parameters and two-valued constants are
+  // considered; anything else counts as not constant.
+  if(has_subexpr(
+       condition,
+       [&](const exprt &operand)
+       {
+         if(is_four_valued(operand.type()) || operand.id() == ID_function_call)
+           return true;
+         if(operand.id() != ID_symbol)
+           return false;
+         const symbolt *symbol = nullptr;
+         return ns.lookup(to_symbol_expr(operand).identifier(), symbol) ||
+                !symbol->is_macro || is_four_valued(symbol->value.type());
+       }))
+  {
+    return {};
+  }
+
+  try
+  {
+    if(const auto value = is_constant_integer_post_convert(condition))
+      return *value != 0;
+  }
+  catch(const errort &)
+  {
+  }
+  return {};
+}
+
+bool verilog_typecheck_exprt::constant_read_out_of_range(
+  const exprt &select,
+  const mp_integer &low,
+  const mp_integer &high,
+  const mp_integer &offset,
+  const mp_integer &width,
+  bool increasing)
+{
+  const mp_integer upper = offset + width - 1;
+  if(low >= offset && high <= upper)
+    return false;
+
+  // Not evaluated: no diagnostic; the replacement value is never used.
+  if(unevaluated_depth != 0)
+    return true;
+
+  std::string selection = "[" + integer2string(increasing ? low : high);
+  if(select.id() != ID_verilog_bit_select)
+    selection += ":" + integer2string(increasing ? high : low);
+  selection += "]";
+  const auto description = "range-oob: constant packed read " + selection +
+                           " is outside declared range [" +
+                           integer2string(increasing ? offset : upper) + ":" +
+                           integer2string(increasing ? upper : offset) + "]";
+  if(!allow_constant_oob_read)
+    throw errort{}.with_location(select.source_location()) << description;
+
+  warning().source_location = select.source_location();
+  warning() << description << messaget::eom;
+  return true;
+}
+
+static exprt constant_unknown(const mp_integer &width)
+{
+  return verilog_unsignedbv_typet{numeric_cast_v<std::size_t>(width)}
+    .all_x_expr();
+}
+
+/// The value of out-of-range bits of a constant read, 1800-2017 11.5.1:
+/// x for a four-state source, 0 for a two-state source.
+static exprt
+constant_out_of_range_bits(const mp_integer &width, bool four_state)
+{
+  if(four_state)
+    return constant_unknown(width);
+  return from_integer(0, unsignedbv_typet{numeric_cast_v<std::size_t>(width)});
+}
+
+/// Whether out-of-range bits of a read from \p type are x (four-state)
+/// rather than 0. A packed struct with at least one four-state member is
+/// treated as four-state as a whole.
+static bool reads_x_out_of_range(const typet &type)
+{
+  if(is_four_valued(type) || is_four_state_vector(type))
+    return true;
+  if(type.id() == ID_array)
+    return reads_x_out_of_range(to_array_type(type).element_type());
+  if(type.id() == ID_struct || type.id() == ID_union)
+  {
+    for(const auto &component : to_struct_union_type(type).components())
+      if(reads_x_out_of_range(component.type()))
+        return true;
+  }
+  return false;
+}
+
+/// Use the literals that the native driver analysis recognises in an
+/// explicit concatenation: one in-range slice and up to two runs of x
+/// (or of 0 for a two-state source).
+static exprt pad_constant_read(
+  exprt in_bounds,
+  const mp_integer &width,
+  const mp_integer &left_padding,
+  const mp_integer &right_padding,
+  bool four_state,
+  const source_locationt &location)
+{
+  if(in_bounds.is_nil())
+    return constant_out_of_range_bits(width, four_state)
+      .with_source_location(location);
+
+  exprt::operandst operands;
+  if(left_padding > 0)
+    operands.push_back(constant_out_of_range_bits(left_padding, four_state));
+  operands.push_back(std::move(in_bounds));
+  if(right_padding > 0)
+    operands.push_back(constant_out_of_range_bits(right_padding, four_state));
+  const auto width_int = numeric_cast_v<std::size_t>(width);
+  return concatenation_exprt{
+    std::move(operands),
+    four_state ? typet{verilog_unsignedbv_typet{width_int}}
+               : typet{unsignedbv_typet{width_int}}}
+    .with_source_location(location);
+}
+
+static exprt out_of_range_vector_select(
+  exprt source,
+  const mp_integer &low,
+  const mp_integer &high,
+  const source_locationt &location)
+{
+  const auto &source_type = to_verilog_vector_type(source.type());
+  const mp_integer offset = source_type.offset();
+  const mp_integer last = offset + verilog_bits(source.type()) - 1;
+  const bool increasing = source_type.increasing();
+  const mp_integer first_bit = std::max(low, offset);
+  const mp_integer last_bit = std::min(high, last);
+  const mp_integer result_width = high - low + 1;
+  const bool four_state = reads_x_out_of_range(source.type());
+  if(first_bit > last_bit)
+    return constant_out_of_range_bits(result_width, four_state)
+      .with_source_location(location);
+
+  const mp_integer width = last_bit - first_bit + 1;
+  const auto width_int = numeric_cast_v<std::size_t>(width);
+  const bool four_valued_source = is_four_valued(source.type());
+  auto select =
+    verilog_indexed_part_select_plus_or_minus_exprt{
+      ID_verilog_indexed_part_select_plus,
+      std::move(source),
+      from_integer(first_bit, integer_typet{}),
+      from_integer(width, integer_typet{}),
+      four_valued_source ? typet{verilog_unsignedbv_typet{width_int}}
+                         : typet{unsignedbv_typet{width_int}}}
+      .with_source_location(location);
+  if(offset != 0)
+    select.set(ID_C_offset, integer2string(offset));
+  if(increasing)
+    select.set(ID_C_increasing, true);
+  return pad_constant_read(
+    std::move(select),
+    result_width,
+    increasing ? first_bit - low : high - last_bit,
+    increasing ? high - last_bit : first_bit - low,
+    four_state,
+    location);
+}
+
+static exprt out_of_range_packed_array_select(
+  exprt source,
+  const mp_integer &low,
+  const mp_integer &high,
+  typet result_type,
+  const source_locationt &location)
+{
+  const auto &array = to_verilog_array_type(source.type());
+  const mp_integer stride = verilog_bits(array.element_type());
+  const mp_integer offset = array.offset();
+  const mp_integer upper = offset + array.size_int() - 1;
+  const bool increasing = array.increasing();
+  const mp_integer first = std::max(low, offset);
+  const mp_integer last = std::min(high, upper);
+  exprt in_bounds = nil_exprt{};
+  if(first <= last)
+  {
+    auto slice_type = verilog_array_typet{
+      ID_verilog_packed_array,
+      array.element_type(),
+      last - first + 1,
+      first,
+      increasing};
+    auto slice =
+      verilog_non_indexed_part_select_exprt{
+        std::move(source),
+        from_integer(last, integer_typet{}),
+        from_integer(first, integer_typet{}),
+        std::move(slice_type)}
+        .with_source_location(location);
+    const auto bits = numeric_cast_v<std::size_t>((last - first + 1) * stride);
+    in_bounds = typecast_exprt{std::move(slice), unsignedbv_typet{bits}};
+  }
+  auto padded = pad_constant_read(
+    std::move(in_bounds),
+    (high - low + 1) * stride,
+    (increasing ? first - low : high - last) * stride,
+    (increasing ? high - last : first - low) * stride,
+    reads_x_out_of_range(array.element_type()),
+    location);
+  auto result = typecast_exprt{std::move(padded), std::move(result_type)}
+                  .with_source_location(location);
+  result.set("#constant_oob_read", true);
+  return result;
+}
+
 exprt verilog_typecheck_exprt::convert_bit_select_expr(
   verilog_bit_select_exprt expr,
   bool as_lvalue)
@@ -3970,7 +4224,7 @@ exprt verilog_typecheck_exprt::convert_bit_select_expr(
 
   if(src.type().id() == ID_array)
   {
-    auto &array_type = to_array_type(src.type());
+    auto &array_type = to_verilog_array_type(src.type());
 
     // An element of an array of interface instances, 1800-2017 25.4, is
     // not an ordinary array element: each element is a symbol of its own,
@@ -3979,6 +4233,41 @@ exprt verilog_typecheck_exprt::convert_bit_select_expr(
       return convert_interface_array_element(std::move(expr));
 
     expr.type() = array_type.element_type();
+    if(!as_lvalue && array_type.is_packed())
+      if(const auto selected = constant_packed_read_index(index);
+         selected && constant_read_out_of_range(
+                       expr,
+                       *selected,
+                       *selected,
+                       array_type.offset(),
+                       array_type.size_int(),
+                       array_type.increasing()))
+      {
+        // 1800-2017 11.5.1: x for a four-state element, 0 for a
+        // two-state element.
+        if(!reads_x_out_of_range(expr.type()))
+        {
+          if(expr.type().id() == ID_bool)
+            return false_exprt{}.with_source_location(expr);
+          if(
+            expr.type().id() == ID_unsignedbv ||
+            expr.type().id() == ID_signedbv)
+          {
+            return from_integer(0, expr.type()).with_source_location(expr);
+          }
+          expr.set("#constant_oob_read_zero", true);
+        }
+        else
+        {
+          expr.type() = make_four_valued(expr.type(), true);
+          if(is_four_valued(expr.type()))
+            return constant_exprt{
+              constant_unknown(verilog_bits(expr.type())).get(ID_value),
+              expr.type()}
+              .with_source_location(expr);
+        }
+        expr.set("#constant_oob_read", true);
+      }
   }
   else if(src.type().id() == ID_named_block)
   {
@@ -3993,12 +4282,14 @@ exprt verilog_typecheck_exprt::convert_bit_select_expr(
   else
   {
     // extractbit works on bit vectors only
-    require_vector(expr.src());
+    const bool four_state_source = is_four_state_vector(src.type());
+    require_vector(src);
 
     auto width = get_width(src.type());
     auto offset = to_verilog_vector_type(src.type()).offset();
 
-    auto index_opt = is_constant_integer_post_convert(index);
+    auto index_opt = as_lvalue ? is_constant_integer_post_convert(index)
+                               : constant_packed_read_index(index);
 
     if(index_opt.has_value()) // constant index
     {
@@ -4007,8 +4298,21 @@ exprt verilog_typecheck_exprt::convert_bit_select_expr(
       auto index_int = index_opt.value();
 
       if(
-        (index_int < offset || index_int >= width + offset) &&
-        !(as_lvalue && src.id() == ID_sva_local))
+        !as_lvalue && constant_read_out_of_range(
+                        expr,
+                        index_int,
+                        index_int,
+                        offset,
+                        width,
+                        to_verilog_vector_type(src.type()).increasing()))
+      {
+        if(four_state_source || is_four_state_vector(src.type()))
+          return constant_unknown(1).with_source_location(expr);
+        return false_exprt().with_source_location(expr);
+      }
+      if(
+        as_lvalue && (index_int < offset || index_int >= width + offset) &&
+        src.id() != ID_sva_local)
         return false_exprt().with_source_location(expr);
     }
 
@@ -4323,8 +4627,16 @@ exprt verilog_typecheck_exprt::convert_binary_expr(
     // 1800-2017 11.4.7 Logical operators.
     // These yield 'x' when the result is not determined by a
     // controlling operand but at least one operand contains x or z.
-    Forall_operands(it, expr)
-      convert_expr(*it);
+    // Operands after a constant controlling operand are not evaluated.
+    const bool controlling = expr.id() == ID_or;
+    bool short_circuit = false;
+    for(auto &op : expr.operands())
+    {
+      unevaluatedt unevaluated{*this, short_circuit};
+      convert_expr(op);
+      if(!short_circuit && constant_condition(op) == controlling)
+        short_circuit = true;
+    }
 
     // Four-valued if any operand is four-valued.
     bool any_four_valued = false;
@@ -4729,10 +5041,16 @@ exprt verilog_typecheck_exprt::convert_binary_expr(
   }
   else if(expr.id() == ID_and || expr.id() == ID_or)
   {
+    // Operands after a constant that decides the result are not evaluated.
+    const bool decided_by = expr.id() == ID_or;
+    bool short_circuit = false;
     for(auto &op : expr.operands())
     {
+      unevaluatedt unevaluated{*this, short_circuit};
       convert_expr(op);
       make_boolean(op);
+      if(!short_circuit && constant_condition(op) == decided_by)
+        short_circuit = true;
     }
 
     tc_binary_expr(expr);
@@ -4816,11 +5134,15 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
       // array (1800-2017 7.4.3, 11.5.1).
       auto array_offset = array_type.offset();
       auto array_size = array_type.size_int();
+      bool out_of_range = false;
 
       if(lsb < array_offset || msb >= array_offset + array_size)
       {
-        throw errort().with_location(expr.source_location())
-          << "part-select is out of range";
+        if(as_lvalue || !array_type.is_packed())
+          throw errort().with_location(expr.source_location())
+            << "part-select is out of range";
+        out_of_range = constant_read_out_of_range(
+          expr, lsb, msb, array_offset, array_size, array_type.increasing());
       }
 
       // store these back onto the expression
@@ -4835,10 +5157,15 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
       auto result_size = msb - lsb + 1;
       expr.type() = verilog_array_typet{
         array_type.get(ID_C_verilog_type),
-        array_type.element_type(),
+        out_of_range && reads_x_out_of_range(array_type.element_type())
+          ? make_four_valued(array_type.element_type(), true)
+          : array_type.element_type(),
         result_size,
         lsb,
         array_type.increasing()};
+      if(out_of_range)
+        return out_of_range_packed_array_select(
+          std::move(src), lsb, msb, expr.type(), expr.source_location());
 
       return std::move(expr);
     }
@@ -4860,6 +5187,17 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
         << "part-select direction disagrees with the declared range";
     if(msb < lsb)
       std::swap(msb, lsb); // now msb>=lsb
+
+    if(
+      !as_lvalue && constant_read_out_of_range(
+                      expr,
+                      lsb,
+                      msb,
+                      src_offset,
+                      src_width,
+                      to_verilog_vector_type(src.type()).increasing()))
+      return out_of_range_vector_select(
+        std::move(src), lsb, msb, expr.source_location());
 
     // store these back onto the expression
     expr.op1() = from_integer(msb, integer_typet())
@@ -4928,11 +5266,15 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
       // array (1800-2017 7.4.6, 11.5.1).
       auto array_offset = array_type.offset();
       auto array_size = array_type.size_int();
+      bool out_of_range = false;
 
       if(lsb < array_offset || msb >= array_offset + array_size)
       {
-        throw errort().with_location(expr.source_location())
-          << "part-select is out of range";
+        if(as_lvalue || !array_type.is_packed())
+          throw errort().with_location(expr.source_location())
+            << "part-select is out of range";
+        out_of_range = constant_read_out_of_range(
+          expr, lsb, msb, array_offset, array_size, array_type.increasing());
       }
 
       part_select.index() = from_integer(base, integer_typet());
@@ -4943,10 +5285,15 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
       // lsb and the direction matches the source.
       expr.type() = verilog_array_typet{
         array_type.get(ID_C_verilog_type),
-        array_type.element_type(),
+        out_of_range && reads_x_out_of_range(array_type.element_type())
+          ? make_four_valued(array_type.element_type(), true)
+          : array_type.element_type(),
         width,
         lsb,
         array_type.increasing()};
+      if(out_of_range)
+        return out_of_range_packed_array_select(
+          std::move(src), lsb, msb, expr.type(), expr.source_location());
 
       return std::move(expr);
     }
@@ -4965,13 +5312,11 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
     // The index need not be a constant.
     exprt &index = part_select.index();
     convert_expr(index);
+    const auto base = as_lvalue ? is_constant_integer_post_convert(index)
+                                : constant_packed_read_index(index);
     // Keep elaboration-time bases as direct slices.
-    if(!index.is_constant())
-    {
-      if(const auto base = is_constant_integer_post_convert(index))
-        index =
-          from_integer(*base, integer_typet{}).with_source_location(index);
-    }
+    if(base && !index.is_constant())
+      index = from_integer(*base, integer_typet{}).with_source_location(index);
 
     // The width of the indexed part select must be an
     // elaboration-time constant.
@@ -4992,16 +5337,22 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
     const auto result_width = numeric_cast_v<std::size_t>(width);
     const bool declared_four_state = is_four_state_vector(src.type());
     bool may_read_outside = !as_lvalue && declared_four_state;
-    if(may_read_outside && index.is_constant())
+    if(!as_lvalue && base)
     {
-      if(const auto base = numeric_cast<mp_integer>(to_constant_expr(index)))
-      {
-        const mp_integer low = expr.id() == ID_verilog_indexed_part_select_plus
-                                 ? *base
-                                 : *base - width + 1;
-        may_read_outside =
-          low < src_offset || low + width > src_offset + src_width;
-      }
+      const mp_integer low = expr.id() == ID_verilog_indexed_part_select_plus
+                               ? *base
+                               : *base - width + 1;
+      const mp_integer high = low + width - 1;
+      if(constant_read_out_of_range(
+           expr,
+           low,
+           high,
+           src_offset,
+           src_width,
+           to_verilog_vector_type(src.type()).increasing()))
+        return out_of_range_vector_select(
+          std::move(src), low, high, expr.source_location());
+      may_read_outside = false;
     }
     if(is_four_valued(src.type()) || may_read_outside)
       expr.type() = verilog_unsignedbv_typet{result_width};
@@ -5017,8 +5368,15 @@ exprt verilog_typecheck_exprt::convert_trinary_expr(
   else if(expr.id()==ID_if)
   {
     convert_expr(expr.op0());
-    convert_expr(expr.op1());
-    convert_expr(expr.op2());
+    const auto condition = constant_condition(expr.op0());
+    {
+      unevaluatedt unevaluated{*this, condition == false};
+      convert_expr(expr.op1());
+    }
+    {
+      unevaluatedt unevaluated{*this, condition == true};
+      convert_expr(expr.op2());
+    }
 
     if(!is_four_valued(expr.op0().type()))
       make_boolean(expr.op0());

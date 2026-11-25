@@ -1,0 +1,9 @@
+CORE
+constant-oob-evaluated.sv
+--bound 0
+^file .*constant-oob-evaluated.sv line 4: range-oob: constant packed read \[6\] is outside declared range \[5:0\]$
+^EXIT=2$
+^SIGNAL=0$
+--
+^\*\* Results:
+--

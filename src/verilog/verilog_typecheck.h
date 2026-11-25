@@ -26,7 +26,8 @@ bool verilog_typecheck(
   const irep_idt &module_identifier,
   verilog_standardt,
   bool warn_implicit_nets,
-  message_handlert &message_handler);
+  message_handlert &message_handler,
+  bool allow_constant_oob_read = false);
 
 /// copies the source of the given Verilog module or package
 /// into the symbol table
@@ -56,12 +57,14 @@ public:
     verilog_standardt _standard,
     bool warn_implicit_nets,
     symbol_table_baset &_symbol_table,
-    message_handlert &_message_handler)
+    message_handlert &_message_handler,
+    bool allow_constant_oob_read = false)
     : verilog_typecheck_exprt(
         _standard,
         warn_implicit_nets,
         ns,
-        _message_handler),
+        _message_handler,
+        allow_constant_oob_read),
       verilog_symbol_tablet(_symbol_table),
       ns(_symbol_table),
       assertion_counter(0)

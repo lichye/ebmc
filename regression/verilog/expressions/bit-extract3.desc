@@ -1,6 +1,6 @@
 CORE
 bit-extract3.sv
---module main
+--module main --allow-constant-oob-read
 ^EXIT=0$
 ^SIGNAL=0$
 ^\[main\.property1\] .*: PROVED .*$

@@ -1,0 +1,12 @@
+CORE
+constant-oob-unevaluated.sv
+--bound 0
+^\[main\.p\] .*: PROVED up to bound 0$
+^EXIT=0$
+^SIGNAL=0$
+--
+range-oob
+--
+A constant out-of-range read in the unselected operand of a constant ?:,
+in the unselected branch of a constant if, or after a constant that
+decides && or || is not evaluated, and is not reported (as in slang).

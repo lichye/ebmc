@@ -1,0 +1,10 @@
+CORE
+constant-packed-array-oob.sv
+--allow-constant-oob-read --bound 1
+^file .*constant-packed-array-oob.sv line 4: range-oob: constant packed read \[3:2\] is outside declared range \[2:1\]$
+^\[packed_oob\.p_in\].*: PROVED up to bound 1$
+^\[packed_oob\.p_unknown\].*: PROVED up to bound 1$
+^EXIT=0$
+^SIGNAL=0$
+--
+--

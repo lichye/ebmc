@@ -1,0 +1,9 @@
+CORE
+genvar_integer_oob1.sv
+--bound 0 --allow-constant-oob-read
+^file .*genvar_integer_oob1.sv line 5: range-oob: constant packed read \[33:30\] is outside declared range \[31:0\]$
+^\[main\.g\[0\]\.p\] .*: PROVED up to bound 0$
+^\[main\.g\[1\]\.p\] .*: PROVED up to bound 0$
+^EXIT=0$
+^SIGNAL=0$
+--
