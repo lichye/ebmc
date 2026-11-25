@@ -1,0 +1,12 @@
+CORE
+fixed_repeat_monitor_overlap.sv
+--new-ic3 --buechi --coi --verbosity 10
+^Using a functional regular sequence monitor$
+^\[mapv\.p\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^ltl2tgba property:
+--
+Fixed repetitions are checked with the functional regular sequence monitor
+rather than a deterministic Spot automaton (32817 states for this sequence).
