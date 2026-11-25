@@ -739,9 +739,9 @@ exprt compilert::expr(
   case ExpressionKind::Call:
   {
     auto &c = e.as<CallExpression>();
-    if(
-      function && c.isSystemCall() &&
-      (c.getSubroutineName() == "$past" || c.getSubroutineName() == "$stable"))
+    const auto subroutine = c.getSubroutineName();
+    const bool sampled = subroutine == "$stable" || subroutine == "$rose";
+    if(function && c.isSystemCall() && (subroutine == "$past" || sampled))
       fail(at, "sampled function inside a runtime function body");
     if(c.isSystemCall() && c.getSubroutineName() == "$past")
     {
@@ -801,15 +801,29 @@ exprt compilert::expr(
             std::string(c.getSubroutineName()));
       r = literal(value.integer(), t);
     }
-    else if(c.isSystemCall() && c.getSubroutineName() == "$stable")
+    else if(c.isSystemCall() && sampled)
     {
       if(!in_clocked_property || c.arguments().size() != 1)
-        fail(at, "$stable requires the enclosing property's single posedge");
+        fail(
+          at,
+          std::string(subroutine) +
+            " requires the enclosing property's single posedge");
+      const auto &argument = *c.arguments().front();
+      if(subroutine == "$rose" && argument.type->isFourState())
+      {
+        EvalContext context(*scope);
+        const auto value = argument.eval(context);
+        // Native $past instrumentation cannot initialize an X/Z constant.
+        if(value.isInteger() && value.integer().hasUnknown())
+          fail(
+            argument.sourceRange.start(),
+            "unsupported X/Z constant argument to $rose");
+      }
       r = node(
         ID_function_call,
         bool_typet(),
-        {verilog_identifier_exprt("$stable"),
-         item(ID_arguments, {expr(*c.arguments().front())})});
+        {verilog_identifier_exprt(std::string(subroutine)),
+         item(ID_arguments, {expr(argument)})});
     }
     else
       fail(at, "unsupported function " + std::string(c.getSubroutineName()));

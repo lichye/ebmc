@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read past_depth; do
+for top in temporal sampled_sequence sampled_rose wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read past_depth; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -65,12 +65,38 @@ for top in temporal sampled_sequence wires generate_nested open_outputs local_en
   fi
   depth=3
   if [[ $top == packed_read ]]; then depth=15; fi
-  if [[ $top == past_depth ]]; then depth=6; fi
+  if [[ $top == past_depth || $top == sampled_rose ]]; then depth=6; fi
   run "$top.direct" "$eb" --top "$top" --undriven seq --bound "$depth" --trace "${direct_flags[@]}" "$direct_src"
   run "$top.typed" "$eb" --undriven seq --bound "$depth" --trace "$top-check.vv"
   while read -r name expected; do
     compare "$top.direct" "$top.typed" "$top.$name" "$expected"
   done < "$front/tests/$top.expected"
+done
+rose_source="$front/tests/sampled_rose.sv"
+sed '/^  assume_next:/d' "$rose_source" >rose-no-assume.sv
+compile sampled_rose rose-no-assume.vv rose-no-assume.sv
+bind rose-no-assume.vv empty rose-no-assume-check.vv
+rose_opts=(--undriven seq --bound 2 --property sampled_rose.next_blocked --trace)
+run rose-assumed.direct "$eb" "${rose_opts[@]}" --top sampled_rose "$rose_source"
+run rose-assumed.typed "$eb" "${rose_opts[@]}" sampled_rose-check.vv
+run rose-unassumed.direct "$eb" "${rose_opts[@]}" --top sampled_rose rose-no-assume.sv
+run rose-unassumed.typed "$eb" "${rose_opts[@]}" rose-no-assume-check.vv
+compare rose-assumed.direct rose-assumed.typed sampled_rose.next_blocked 'REFUTED up to bound 2'
+compare rose-unassumed.direct rose-unassumed.typed sampled_rose.next_blocked PROVED
+
+rose_invalid="$front/tests/sampled_rose_invalid.sv"
+for kind in explicit_clock procedural function direct_x direct_z folded_x folded_z; do
+  log="rose-invalid-$kind"
+  run "$log" compile "rose_$kind" "$log.vv" "$rose_invalid"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+done
+for kind in explicit_clock procedural; do
+  grep -Eq 'sampled_rose_invalid.sv:[0-9]+:[0-9]+: \$rose requires the enclosing property' "rose-invalid-$kind"
+done
+grep -Eq 'sampled_rose_invalid.sv:[0-9]+:[0-9]+: error: could not determine clocking event' rose-invalid-function
+for kind in direct_x direct_z folded_x folded_z; do
+  grep -Eq 'sampled_rose_invalid.sv:[0-9]+:[0-9]+: unsupported X/Z constant argument to \$rose' "rose-invalid-$kind"
 done
 grep -Fq 'generate_nested.outer.lanes[0].even_lane.u' generate_nested.vv
 grep -Fq 'generate_nested.outer.lanes[1].odd_lane.u' generate_nested.vv
