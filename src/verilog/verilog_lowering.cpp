@@ -165,6 +165,74 @@ static std::optional<mp_integer> bitvector_bits_opt(const typet &type)
     return verilog_bits_opt(type);
 }
 
+struct concatenation_slicet
+{
+  const exprt &operand;
+  mp_integer offset;
+};
+
+static std::optional<concatenation_slicet> concatenation_slice(
+  const exprt &src,
+  const mp_integer &offset,
+  const mp_integer &width)
+{
+  if(src.id() != ID_concatenation || offset < 0 || width <= 0)
+    return {};
+  auto lower = bitvector_bits_opt(src.type());
+  if(!lower || offset + width > *lower)
+    return {};
+
+  // Concatenation operands are ordered from most to least significant.
+  std::optional<concatenation_slicet> slice;
+  for(const auto &op : src.operands())
+  {
+    const auto op_width = bitvector_bits_opt(op.type());
+    if(!op_width || *op_width <= 0)
+      return {};
+    const auto upper = *lower;
+    *lower -= *op_width;
+    if(*lower <= offset && offset + width <= upper)
+      slice.emplace(concatenation_slicet{op, offset - *lower});
+  }
+  return *lower == 0 ? slice : std::nullopt;
+}
+
+static bool is_plain_bitvector(const typet &type)
+{
+  return type.id() == ID_bool || type.id() == ID_signedbv ||
+         type.id() == ID_unsignedbv ||
+         (type.id() == ID_bv && !is_aval_bval(type));
+}
+
+static exprt lower_concatenation_extract(exprt expr)
+{
+  const auto &src = std::as_const(expr).operands()[0];
+  const auto &index = std::as_const(expr).operands()[1];
+  if(
+    src.id() != ID_concatenation || !is_plain_bitvector(src.type()) ||
+    !is_plain_bitvector(expr.type()) ||
+    !std::all_of(
+      src.operands().begin(),
+      src.operands().end(),
+      [](const exprt &operand) { return is_plain_bitvector(operand.type()); }))
+    return expr;
+
+  const auto offset = numeric_cast<mp_integer>(index);
+  if(!offset)
+    return expr;
+  const auto width = bitvector_bits_opt(expr.type());
+  const auto slice = concatenation_slice(src, *offset, *width);
+  if(!slice)
+    return expr;
+
+  // Use physical bits here. from_bitvector also interprets Verilog aggregates
+  // and aval/bval encodings, which an already-lowered extract must not do.
+  const auto &operand = slice->operand;
+  if(slice->offset == 0 && operand.type().full_eq(expr.type()))
+    return exprt(operand).with_source_location(expr);
+  return extract(operand, slice->offset, expr.type()).with_source_location(expr);
+}
+
 exprt from_bitvector(
   const exprt &src,
   const mp_integer &offset,
@@ -182,42 +250,18 @@ exprt from_bitvector(
     const auto src_width_opt = bitvector_bits_opt(src.type());
     const mp_integer dest_width = dest_width_opt.value_or(0);
 
-    // the operands, if all their widths are known
-    bool operand_widths_known =
-      src.id() == ID_concatenation && src_width_opt.has_value() &&
-      std::all_of(
-        src.operands().begin(),
-        src.operands().end(),
-        [](const exprt &op)
-        { return bitvector_bits_opt(op.type()).has_value(); });
-
-    if(operand_widths_known && dest_width != 0)
+    if(const auto slice = concatenation_slice(src, offset, dest_width))
     {
-      // the operands are most significant first
-      mp_integer op_lower = *src_width_opt;
-
-      for(auto &op : src.operands())
-      {
-        auto op_width = *bitvector_bits_opt(op.type());
-        op_lower -= op_width;
-
-        if(op_lower <= offset && offset + dest_width <= op_lower + op_width)
-        {
-          // the operand already has the requested type and width;
-          // full_eq, as == ignores the direction and offset of ranges
-          if(offset == op_lower && op.type().full_eq(dest))
-            return op;
-
-          auto &op_type = op.type();
-          bool op_is_aggregate = op_type.id() == ID_struct ||
-                                 op_type.id() == ID_union ||
-                                 op_type.id() == ID_array;
-          return from_bitvector( // rec. call
-            op_is_aggregate ? to_bitvector(op) : op,
-            offset - op_lower,
-            dest);
-        }
-      }
+      const auto &op = slice->operand;
+      // full_eq also compares the direction and offset of ranges.
+      if(slice->offset == 0 && op.type().full_eq(dest))
+        return op;
+      auto &op_type = op.type();
+      bool op_is_aggregate = op_type.id() == ID_struct ||
+                             op_type.id() == ID_union ||
+                             op_type.id() == ID_array;
+      return from_bitvector(
+        op_is_aggregate ? to_bitvector(op) : op, slice->offset, dest);
     }
     else if(
       src.id() == ID_extractbits && dest_width != 0 &&
@@ -1017,7 +1061,11 @@ static exprt packed_array_internal_index(
 exprt verilog_lowering_node(exprt expr)
 {
   const exprt &node = expr;
-  if(expr.id() == ID_constant)
+  if(expr.id() == ID_extractbit || expr.id() == ID_extractbits)
+  {
+    return lower_concatenation_extract(std::move(expr));
+  }
+  else if(expr.id() == ID_constant)
   {
     const auto &constant_expr = to_constant_expr(node);
 
