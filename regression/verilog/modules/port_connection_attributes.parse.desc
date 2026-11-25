@@ -1,0 +1,10 @@
+CORE
+port_connection_attributes.sv
+--top main --show-parse
+^ *\* verilog_attributes: verilog_attributes$
+^ *\* base_name: async$
+^ *\* base_name: latency$
+^ *\* base_name: keep$
+^ *\* base_name: observe$
+^EXIT=0$
+^SIGNAL=0$

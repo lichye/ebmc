@@ -1,0 +1,8 @@
+CORE
+port_connection_attributes.sv
+--top main --bound 0 --finite-prefix
+^\[main\.p_named\].*: PROVED up to bound 0$
+^\[main\.p_ordered\].*: PROVED up to bound 0$
+^\[main\.p_implicit\].*: PROVED up to bound 0$
+^EXIT=0$
+^SIGNAL=0$

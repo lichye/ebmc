@@ -1,0 +1,6 @@
+CORE
+port_connection_attribute_invalid.sv
+--top main --show-parse
+^file .*port_connection_attribute_invalid\.sv line 5: syntax error
+^EXIT=1$
+^SIGNAL=0$

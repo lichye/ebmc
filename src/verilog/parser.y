@@ -4065,7 +4065,8 @@ ordered_port_connection_brace:
         ;
 
 ordered_port_connection:
-          expression_opt
+          attribute_instance_brace expression_opt
+                { $$ = $2; add_attributes($$, $1); }
         ;
 
 named_port_connection_brace:
@@ -4085,6 +4086,11 @@ named_port_connection_brace:
         ;
 
 named_port_connection:
+          attribute_instance_brace named_port_connection_body
+                { $$ = $2; add_attributes($$, $1); }
+        ;
+
+named_port_connection_body:
           // This needs to be 'any_identifier': the formal name is looked
           // up in the instantiated module's port name space, and hence may
           // coincide with a typedef, interface, package or class name that
