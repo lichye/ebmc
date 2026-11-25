@@ -544,6 +544,25 @@ exprt compilert::expr(
     const auto &el = e.as<ElementSelectExpression>();
     const auto *array =
       el.value().type->getCanonicalType().as_if<PackedArrayType>();
+    if(
+      lvalue && array && !has_packed_elements(*array) &&
+      array->range.fullWidth() == 1 && t.id() == ID_bool)
+    {
+      const auto selected = eval_known(el.selector());
+      if(
+        selected.isInteger() && !selected.integer().hasUnknown() &&
+        selected.integer().as<int32_t>() == array->range.right)
+      {
+        require_read_only(el.selector(), "unsupported write in a packed index");
+        auto base = expr(el.value(), nullptr, lvalue);
+        if(base.type().id() == ID_bool)
+        {
+          // Keep the write to the sole declared bit as a whole-object write.
+          r = std::move(base);
+          break;
+        }
+      }
+    }
     if(!array || !needs_packed_element_layout(*array))
     {
       auto base = expr(el.value(), nullptr, lvalue);
