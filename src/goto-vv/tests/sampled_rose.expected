@@ -1,0 +1,26 @@
+first_zero PROVED up to bound 6
+first_one PROVED up to bound 6
+first_constant PROVED up to bound 6
+first_bit_cast PROVED up to bound 6
+rises PROVED up to bound 6
+holds PROVED up to bound 6
+falls PROVED up to bound 6
+upper_rises PROVED up to bound 6
+lsb_rises PROVED up to bound 6
+upper_falls PROVED up to bound 6
+lsb_falls PROVED up to bound 6
+zero_to_x REFUTED
+x_to_one PROVED up to bound 6
+one_to_z REFUTED
+z_to_zero REFUTED
+zero_to_z REFUTED
+z_to_one PROVED up to bound 6
+wide_zero_to_x REFUTED
+wide_x_to_one PROVED up to bound 6
+wide_zero_to_z PROVED up to bound 6
+wide_z_to_one REFUTED
+assume_next ASSUMED
+next_blocked REFUTED up to bound 6
+next_live PROVED
+same_live PROVED
+later_live PROVED
