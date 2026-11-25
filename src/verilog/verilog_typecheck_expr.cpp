@@ -2217,9 +2217,14 @@ exprt verilog_typecheck_exprt::genvar_constant(
     throw errort().with_location(source_location) << "invalid genvar value";
 
   auto &value = genvar_opt->value;
-  std::size_t bits = address_bits(value + 1);
 
-  return from_integer(value, unsignedbv_typet{bits})
+  // 1800-2017 27.4: within each instance of a loop generate block, the
+  // loop index is an implicit localparam of type integer (32 bits, signed),
+  // typed like an integer localparam with a known value.
+  signedbv_typet integer_type{32};
+  integer_type.set(ID_C_verilog_type, ID_integer);
+
+  return from_integer(value, integer_type)
     .with_source_location(source_location);
 }
 

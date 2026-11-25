@@ -1,0 +1,18 @@
+CORE
+genvar_integer1.sv
+--bound 0
+^\[main\.g\[0\]\.p_bits\] .*: PROVED up to bound 0$
+^\[main\.g\[3\]\.p_bits\] .*: PROVED up to bound 0$
+^\[main\.g\[0\]\.p_signed\] .*: PROVED up to bound 0$
+^\[main\.g\[3\]\.p_signed\] .*: PROVED up to bound 0$
+^\[main\.g\[0\]\.p_slice\] .*: PROVED up to bound 0$
+^\[main\.g\[3\]\.p_slice\] .*: PROVED up to bound 0$
+^\[main\.g\[0\]\.p_load\] .*: PROVED up to bound 0$
+^\[main\.g\[3\]\.p_load\] .*: PROVED up to bound 0$
+^EXIT=0$
+^SIGNAL=0$
+--
+REFUTED
+--
+1800-2017 27.4: the loop index of a loop generate construct is an implicit
+integer localparam (32 bits, signed) in each generate block instance.
