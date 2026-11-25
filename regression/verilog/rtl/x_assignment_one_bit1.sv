@@ -18,8 +18,8 @@ module main(input clk, input a, input b);
 
   always @(posedge clk) q <= n;
 
-  // Variables are two-valued; x and z are converted as for wider
-  // variables, e.g., reg [3:0] v = 4'bx.
+  // An x or z assigned to a four-state variable is unconstrained, as for
+  // wider variables, e.g., reg [3:0] v = 4'bx; it is not 0.
   p0: assert property (@(posedge clk) m == 0 && z == 0);
   p1: assert property (@(posedge clk) q == 0 -> n == a);
 endmodule

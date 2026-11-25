@@ -1,0 +1,23 @@
+CORE
+explicit_x_procedural_paths.sv
+--top main --bound 4
+^\[main\.p1_comb\] .*: REFUTED$
+^\[main\.p2_nba\] .*: REFUTED$
+^\[main\.p3_alwayscomb\] .*: REFUTED$
+^\[main\.p4_wire_nba\] .*: REFUTED$
+^\[main\.p5_port_nba\] .*: REFUTED$
+^\[main\.p6_concat\] .*: REFUTED$
+^\[main\.p7_default\] .*: REFUTED$
+^\[main\.p7_reset\] .*: REFUTED$
+^\[main\.p8_port_ff\] .*: REFUTED$
+^\[main\.c9_bitcast\] .*: PROVED up to bound 4$
+^\[main\.c9_twostate\] .*: PROVED up to bound 4$
+^\[main\.c_known\] .*: PROVED up to bound 4$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+An explicit x written to a four-state variable is unconstrained, whether
+it reaches the variable through a net or a port (p1, p4, p5, p8) or
+directly through a procedural assignment (p2, p3, p6, p7). A two-state
+target or an explicit two-state conversion reads 0 (1800-2017 6.12.2).
