@@ -122,12 +122,14 @@ bool is_four_state_vector(const typet &type)
 
 typet make_two_valued(typet src)
 {
+  // Scalar enums still have a nominal type and integral cast semantics.
+  const bool can_be_boolean = src.get(ID_C_verilog_type) != ID_verilog_enum;
   if(src.id() == ID_verilog_unsignedbv)
   {
     // Is it [0:0]? If so, make it 'bool'
     if(
       to_verilog_unsignedbv_type(src).width() == 1 &&
-      src.get(ID_C_offset) == irep_idt{})
+      src.get(ID_C_offset) == irep_idt{} && can_be_boolean)
     {
       auto result = bool_typet{}.with_source_location(src.source_location());
       irep_idt verilog_type = src.get(ID_C_verilog_type);
@@ -156,7 +158,7 @@ typet make_two_valued(typet src)
     // Is it [0:0]? If so, make it 'bool'
     if(
       to_unsignedbv_type(src).width() == 1 &&
-      src.get(ID_C_offset) == irep_idt{})
+      src.get(ID_C_offset) == irep_idt{} && can_be_boolean)
     {
       auto result = bool_typet{}.with_source_location(src.source_location());
       irep_idt verilog_type = src.get(ID_C_verilog_type);

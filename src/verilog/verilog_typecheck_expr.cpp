@@ -3857,9 +3857,24 @@ exprt verilog_typecheck_exprt::convert_unary_expr(unary_exprt expr)
   }
   else if(expr.id() == ID_verilog_implicit_typecast)
   {
-    // We generate implict casts during elaboration.
+    // We generate implicit casts during elaboration.
+    const bool literal = expr.op().is_constant();
     expr.type() = make_two_valued(elaborate_type(expr.type()));
     convert_expr(expr.op());
+
+    // Check the declared width of a sized literal before narrowing it to
+    // the scalar enum base type (IEEE 1800-2017 6.19).
+    if(
+      literal && expr.type().get(ID_C_verilog_type) == ID_verilog_enum &&
+      get_width(expr.type()) == 1 && get_width(expr.op()) != 1)
+    {
+      const auto &spelling = id2string(expr.op().get("#verilog_value"));
+      const auto apostrophe = spelling.find('\'');
+      if(apostrophe != std::string::npos && apostrophe != 0)
+        throw errort().with_location(expr.op().source_location())
+          << "sized enum literal must match the base type width";
+    }
+
     expr.id(ID_typecast);
   }
   else if(

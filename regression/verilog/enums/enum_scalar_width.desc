@@ -1,0 +1,6 @@
+CORE
+enum_scalar_width.sv
+--bound 0
+^file .*enum_scalar_width\.sv line 2: sized enum literal must match the base type width$
+^EXIT=2$
+^SIGNAL=0$

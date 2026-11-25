@@ -1,0 +1,6 @@
+CORE
+enum_scalar.sv
+--bound 0 -D BAD_OTHER_ENUM
+^file .*enum_scalar\.sv line 12: assignment to enum requires enum of the same type
+^EXIT=2$
+^SIGNAL=0$
