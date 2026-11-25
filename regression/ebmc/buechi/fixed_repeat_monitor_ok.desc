@@ -1,0 +1,11 @@
+CORE
+fixed_repeat_monitor_ok.sv
+--new-ic3 --buechi --coi --verbosity 10
+^Using a functional regular sequence monitor$
+^\[mapv\.p\] .*: PROVED$
+^EXIT=0$
+^SIGNAL=0$
+--
+^ltl2tgba property:
+--
+INV_MV and (sequence |=> consequent): the one match is answered.

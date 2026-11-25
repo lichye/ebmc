@@ -1,0 +1,12 @@
+CORE
+fixed_repeat_monitor_overlap.sv
+--buechi --bound 38
+^mapv\.p: finite bad frame 38 has an infinite extension by totality$
+^\[mapv\.p\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+Two overlapping matches of a sequence with fixed repetitions [*2] and [*9]
+(the second starts in the [*9] tail of the first); only the first is answered.
+The first bad frame is the consequent of the second match.

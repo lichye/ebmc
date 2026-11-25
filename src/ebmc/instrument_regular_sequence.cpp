@@ -50,6 +50,9 @@ public:
       if(repeat.is_singleton())
       {
         auto count = numeric_cast<std::size_t>(repeat.repetitions());
+        // A fixed repetition is a chain of positions in the monitor. Spot
+        // would have to determinize the overlapping attempts instead.
+        regular_repeat |= count && *count > 1;
         return count && segment(test, *count, *count);
       }
       auto lower = repeat.is_range()

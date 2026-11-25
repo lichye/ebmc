@@ -1,0 +1,9 @@
+CORE
+fixed_repeat_monitor_overlap.sv
+--buechi --bound 37
+^\[mapv\.p\] .*: PROVED up to bound 37$
+^EXIT=0$
+^SIGNAL=0$
+--
+--
+No bad frame before the consequent of the second, overlapping match.
