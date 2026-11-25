@@ -663,11 +663,20 @@ protected:
   std::map<irep_idt, ram_portt> first_ram_ports;
   bool
   commit_ram_port(const irep_idt &, const exprt &value, const exprt &clock);
+  /// Explicit x/z bits of a value that an always construct commits to
+  /// four-state bits of a variable get fresh unconstrained values.
+  exprt sample_committed_unknowns(
+    const irep_idt &identifier,
+    const verilog_rtl_slicet &,
+    const exprt &value);
+  std::size_t committed_unknowns = 0;
+
   void commit(
     const statet &,
     kindt,
     const source_locationt &,
-    const exprt *clock = nullptr);
+    const exprt *clock = nullptr,
+    bool sample_unknowns = false);
 
   /// The width of the entire identifier as a slice. Types without
   /// a fixed number of bits, e.g. chandles, are treated as a single
@@ -819,6 +828,12 @@ exprt verilog_rtl_buildert::bind_value(exprt value, const irep_idt &identifier)
     return value;
 
   if(!tree_size_exceeds(value, auxiliary_wire_threshold))
+    return value;
+
+  // Keep explicit x/z visible until the value is committed, see
+  // sample_committed_unknowns.
+  if(has_subexpr(
+       value, [](const exprt &e) { return is_verilog_unknown_literal(e); }))
     return value;
 
   // A module wire has one value per cycle. A local assertion variable
@@ -2551,6 +2566,12 @@ exprt verilog_rtl_buildert::fragment_value(
   return slice_of(symbol, fragment);
 }
 
+static bool has_unknown_literal(const exprt &expr)
+{
+  return has_subexpr(
+    expr, [](const exprt &e) { return is_verilog_unknown_literal(e); });
+}
+
 /*******************************************************************\
 
 Function: verilog_rtl_buildert::build_assign
@@ -2571,9 +2592,11 @@ void verilog_rtl_buildert::build_assign(
   auto rhs = substitute(assign.rhs(), state);
 
   // Can the rhs be simplified to a constant, for propagation?
+  // Explicit x/z stay visible: the conversion to the two-valued
+  // representation would fold them to 0 before they are committed.
   auto rhs_simplified = fold_and_simplify(rhs);
 
-  if(rhs_simplified.is_constant())
+  if(rhs_simplified.is_constant() && !has_unknown_literal(rhs))
     rhs = rhs_simplified;
 
   assign_to(assign.lhs(), std::move(rhs), state, blocking);
@@ -4364,7 +4387,8 @@ void verilog_rtl_buildert::commit(
   const statet &state,
   kindt kind,
   const source_locationt &source_location,
-  const exprt *clock)
+  const exprt *clock,
+  bool sample_unknowns)
 {
   for(auto &value_entry : state.values)
   {
@@ -4416,9 +4440,124 @@ void verilog_rtl_buildert::commit(
 
       slice_map.emplace(
         slice,
-        verilog_rtl_definitiont{kind, slice_entry.second, source_location});
+        verilog_rtl_definitiont{
+          kind,
+          sample_unknowns
+            ? sample_committed_unknowns(identifier, slice, slice_entry.second)
+            : slice_entry.second,
+          source_location});
     }
   }
+}
+
+/// The bit ranges of a variable of \p type that hold x/z (1800-2017 6.3,
+/// 6.11), with bit 0 the least significant bit of the packed value.
+static void four_state_ranges(
+  const typet &type,
+  const mp_integer &offset,
+  std::vector<std::pair<mp_integer, mp_integer>> &dest)
+{
+  const auto width = verilog_bits_opt(type);
+  if(!width.has_value() || *width < 1)
+    return;
+  if(type.id() == ID_struct)
+  {
+    // the first member is the most significant one
+    mp_integer member_offset = offset;
+    const auto &components = to_struct_type(type).components();
+    for(auto it = components.rbegin(); it != components.rend(); ++it)
+    {
+      four_state_ranges(it->type(), member_offset, dest);
+      member_offset += verilog_bits_opt(it->type()).value_or(0);
+    }
+    return;
+  }
+  bool four_state = is_four_valued(type) || is_four_state_vector(type);
+  if(type.id() == ID_array)
+  {
+    std::vector<std::pair<mp_integer, mp_integer>> element;
+    four_state_ranges(to_array_type(type).element_type(), 0, element);
+    four_state = !element.empty();
+  }
+  else if(type.id() == ID_union)
+  {
+    for(const auto &component : to_struct_union_type(type).components())
+    {
+      std::vector<std::pair<mp_integer, mp_integer>> member;
+      four_state_ranges(component.type(), 0, member);
+      four_state = four_state || !member.empty();
+    }
+  }
+  if(four_state)
+    dest.emplace_back(offset, offset + *width - 1);
+}
+
+exprt verilog_rtl_buildert::sample_committed_unknowns(
+  const irep_idt &identifier,
+  const verilog_rtl_slicet &slice,
+  const exprt &value)
+{
+  if(!has_subexpr(
+       value, [](const exprt &e) { return is_verilog_unknown_literal(e); }))
+    return value;
+
+  // The variable is stored with two-valued bits. An explicit x or z
+  // committed to a four-state bit is modelled like an x/z net drive: it
+  // gets a fresh unconstrained value at this write, which the variable
+  // holds until the next write. A two-state bit keeps the conversion
+  // to 0 (1800-2017 6.12.2). Reads within the process saw the x/z.
+  std::vector<std::pair<mp_integer, mp_integer>> ranges;
+  four_state_ranges(ns.lookup(identifier).type, 0, ranges);
+
+  // the four-state bits of the slice, relative to the slice
+  std::vector<bool> unknown_bits(
+    numeric_cast_v<std::size_t>(slice.width()), false);
+  bool any = false;
+  for(const auto &range : ranges)
+    for(auto bit = std::max(range.first, slice.lower);
+        bit <= std::min(range.second, slice.higher);
+        ++bit)
+    {
+      unknown_bits[numeric_cast_v<std::size_t>(bit - slice.lower)] = true;
+      any = true;
+    }
+  if(!any)
+    return value;
+
+  auto fresh = [&](const typet &type)
+  {
+    return nondet_symbol_exprt{
+      id2string(identifier) + "::committed_x" +
+        std::to_string(committed_unknowns++),
+      type};
+  };
+  auto sampled = verilog_sample_drive(value, fresh);
+  if(std::all_of(
+       unknown_bits.begin(), unknown_bits.end(), [](bool b) { return b; }))
+    return sampled;
+
+  // Mixed: take the four-state bits from the sampled value and the
+  // two-state bits from the value converted as before.
+  const auto width = unknown_bits.size();
+  const unsignedbv_typet word{width};
+  const auto sampled_word =
+    typecast_exprt::conditional_cast(std::move(sampled), word);
+  const auto converted_word = typecast_exprt::conditional_cast(value, word);
+  exprt::operandst parts; // most significant first
+  for(std::size_t high = width; high > 0;)
+  {
+    std::size_t low = high - 1;
+    while(low > 0 && unknown_bits[low - 1] == unknown_bits[high - 1])
+      --low;
+    const auto &source = unknown_bits[high - 1] ? sampled_word : converted_word;
+    parts.push_back(extractbits_exprt{
+      source,
+      from_integer(low, integer_typet{}),
+      unsignedbv_typet{high - low}});
+    high = low;
+  }
+  return typecast_exprt::conditional_cast(
+    concatenation_exprt{std::move(parts), word}, value.type());
 }
 
 /*******************************************************************\
@@ -4720,7 +4859,8 @@ void verilog_rtl_buildert::build_always(const verilog_always_baset &always)
     state,
     clocked ? kindt::STATE_HOLDING : kindt::WIRE,
     always.source_location(),
-    ram_clock);
+    ram_clock,
+    true);
 }
 
 void verilog_rtl_buildert::net_assignment(

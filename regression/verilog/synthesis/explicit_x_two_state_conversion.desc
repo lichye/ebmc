@@ -1,0 +1,12 @@
+CORE
+explicit_x_two_state_conversion.sv
+--top main --bound 3
+^\[main\.c_a\] .*: PROVED up to bound 3$
+^\[main\.c_b\] .*: PROVED up to bound 3$
+^\[main\.c_c\] .*: PROVED up to bound 3$
+^EXIT=0$
+^SIGNAL=0$
+--
+--
+An explicit two-state conversion of a value with x gives 0 for the x bits,
+also when the result is written by an always construct.

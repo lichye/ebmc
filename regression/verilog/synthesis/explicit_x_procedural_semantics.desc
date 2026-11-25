@@ -1,0 +1,26 @@
+CORE
+explicit_x_procedural_semantics.sv
+--top main --bound 4
+^\[main\.p_same_read\] .*: PROVED up to bound 4$
+^\[main\.r_unknown\] .*: REFUTED$
+^\[main\.p_hold\] .*: PROVED up to bound 4$
+^\[main\.r_new_value\] .*: REFUTED$
+^\[main\.p_known_bits\] .*: PROVED up to bound 4$
+^\[main\.r_x_bits\] .*: REFUTED$
+^\[main\.p_nba_old\] .*: PROVED up to bound 4$
+^\[main\.r_vector_fill\] .*: REFUTED$
+^\[main\.p_two_state_field\] .*: PROVED up to bound 4$
+^\[main\.r_four_state_a\] .*: REFUTED$
+^\[main\.r_four_state_c\] .*: REFUTED$
+^\[main\.r_comb_value\] .*: REFUTED$
+^\[main\.p_two_state_var\] .*: PROVED up to bound 4$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+The value of an explicit x committed by an always construct: one value per
+write, read consistently and held until the next write; known neighbour
+bits, the old value read by a non-blocking assignment, two-state struct
+fields and two-state variables are unchanged.
+The k_* properties record behaviour outside this change (x produced by an
+operator, x/z read back inside the same process, 'x into a packed struct).
