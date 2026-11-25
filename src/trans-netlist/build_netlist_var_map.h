@@ -13,6 +13,11 @@ Author: Daniel Kroening, dkr@amazon.com
 
 #include "var_map.h"
 
-var_mapt build_netlist_var_map(symbol_table_baset &, const irep_idt &module);
+#include <unordered_set>
+
+var_mapt build_netlist_var_map(
+  symbol_table_baset &,
+  const irep_idt &module,
+  const std::unordered_set<irep_idt> *retained_symbols = nullptr);
 
 #endif

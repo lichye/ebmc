@@ -1,0 +1,8 @@
+CORE
+coi.sv
+--new-ic3 --coi --verbosity 9 --property main.safe -D NO_LOCK
+^Latches: 2, nodes:
+^main.safe: finite bad frame 1 has an infinite extension by totality$
+^\[main.safe\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$

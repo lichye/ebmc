@@ -32,8 +32,12 @@ public:
   cone_of_influencet(
     const transt &_trans,
     const exprt::operandst &_seeds,
-    const std::function<bool(const exprt &)> &_total_rhs)
-    : trans(_trans), seeds(_seeds), total_rhs(_total_rhs)
+    const std::function<bool(const exprt &)> &_total_rhs,
+    const std::function<bool(const equal_exprt &)> &_removable_driver)
+    : trans(_trans),
+      seeds(_seeds),
+      total_rhs(_total_rhs),
+      removable_driver(_removable_driver)
   {
   }
 
@@ -43,6 +47,7 @@ protected:
   const transt &trans;
   const exprt::operandst &seeds;
   const std::function<bool(const exprt &)> &total_rhs;
+  const std::function<bool(const equal_exprt &)> &removable_driver;
 
   typedef std::unordered_set<irep_idt> symbol_sett;
 
@@ -265,7 +270,10 @@ void cone_of_influencet::classify(conjunctt &conjunct)
       conjunct.kind = kindt::NEXT;
     }
 
-    if(conjunct.definitional && (!total_rhs || total_rhs(rhs)))
+    if(
+      conjunct.definitional && (!total_rhs || total_rhs(rhs)) &&
+      (conjunct.kind == kindt::INIT || !removable_driver ||
+       removable_driver(to_equal_expr(expr))))
     {
       collect_symbols(rhs, conjunct.current_symbols, conjunct.next_symbols);
 
@@ -689,9 +697,10 @@ Function: cone_of_influence
 cone_of_influence_resultt cone_of_influence(
   const transt &trans,
   const exprt::operandst &seeds,
-  const std::function<bool(const exprt &)> &total_rhs)
+  const std::function<bool(const exprt &)> &total_rhs,
+  const std::function<bool(const equal_exprt &)> &removable_driver)
 {
-  return cone_of_influencet{trans, seeds, total_rhs}();
+  return cone_of_influencet{trans, seeds, total_rhs, removable_driver}();
 }
 
 /*******************************************************************\

@@ -95,9 +95,12 @@ struct cone_of_influence_resultt
 /// revisited if assumptions are ever dropped as well.
 /// When provided, \p total_rhs must accept a definition's right-hand side
 /// before it may be removed. A rejected definition is kept as a constraint.
+/// \p removable_driver can further restrict which invariant and next-state
+/// equalities a backend can treat as definitions. It does not apply to INIT.
 cone_of_influence_resultt cone_of_influence(
   const transt &,
   const exprt::operandst &seeds,
-  const std::function<bool(const exprt &)> &total_rhs = {});
+  const std::function<bool(const exprt &)> &total_rhs = {},
+  const std::function<bool(const equal_exprt &)> &removable_driver = {});
 
 #endif // CPROVER_TRANS_WORD_LEVEL_CONE_OF_INFLUENCE_H

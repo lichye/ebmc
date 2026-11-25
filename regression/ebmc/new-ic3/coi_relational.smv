@@ -1,0 +1,15 @@
+MODULE main
+
+VAR
+  kept : boolean;
+  other : boolean;
+
+ASSIGN
+  init(kept) := TRUE;
+  next(kept) := kept;
+  init(other) := FALSE;
+
+-- A transition restriction outside the syntactic cone remains unsupported.
+TRANS other | next(other)
+
+SPEC AG kept

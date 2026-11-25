@@ -15,7 +15,10 @@ Author: Daniel Kroening, dkr@amazon.com
 
 #include "new_ic3_engine.h"
 
+#include <util/expr_util.h>
+
 #include <ebmc/ebmc_error.h>
+#include <ebmc/instrument_past.h>
 #include <ebmc/liveness_to_safety.h>
 #include <ebmc/netlist.h>
 #include <ebmc/report_results.h>
@@ -24,6 +27,7 @@ Author: Daniel Kroening, dkr@amazon.com
 #include <temporal-logic/temporal_logic.h>
 #include <trans-netlist/aig_prop.h>
 #include <trans-netlist/instantiate_netlist.h>
+#include <trans-word-level/cone_of_influence.h>
 #include <verilog/sva_expr.h>
 
 #include "ic3_solver.h"
@@ -41,6 +45,78 @@ static bool new_ic3_supports_property(const exprt &expr)
   if(expr.id() == ID_AG)
     return !has_temporal_operator(to_AG_expr(expr).op());
   return false;
+}
+
+static netlistt make_ic3_netlist(
+  const cmdlinet &cmdline,
+  transition_systemt &transition_system,
+  ebmc_propertiest &properties,
+  message_handlert &message_handler)
+{
+  if(!cmdline.isset("coi"))
+    return make_netlist(
+      transition_system, properties, cmdline, message_handler);
+
+  // Match the full-model instrumentation used without COI. Even a history
+  // latch for a disabled property can affect equality of lasso endpoints.
+  instrument_past(transition_system, properties);
+
+  exprt::operandst seeds;
+  std::map<irep_idt, exprt> property_map;
+  for(const auto &property : properties.properties)
+  {
+    if(
+      property.is_assumed() ||
+      (property.is_unknown() &&
+       new_ic3_supports_property(property.normalized_expr)))
+    {
+      seeds.push_back(property.normalized_expr);
+      property_map.emplace(property.identifier, property.normalized_expr);
+    }
+  }
+
+  auto &symbols = transition_system.symbol_table;
+  const auto &module = transition_system.main_symbol->name;
+  auto removable_driver = [&symbols, &module](const equal_exprt &equality)
+  {
+    const auto &lhs = equality.lhs();
+    const auto *symbol = symbols.lookup(lhs.get(ID_identifier));
+    if(!symbol || symbol->module != module || symbol->is_input)
+      return false;
+    // Preserve relations involving multiple next values and the converter's
+    // diagnostics for next-state references that it cannot encode.
+    if(has_subexpr(equality.rhs(), ID_next_symbol))
+      return false;
+    return symbol->is_state_var == (lhs.id() == ID_next_symbol);
+  };
+
+  const auto reduced = cone_of_influence(
+    transition_system.trans_expr, seeds, {}, removable_driver);
+  messaget message{message_handler};
+  reduced.report(message);
+
+  std::unordered_set<irep_idt> retained_symbols;
+  auto collect = [&retained_symbols](const exprt &expr)
+  {
+    expr.visit_pre(
+      [&retained_symbols](const exprt &node)
+      {
+        if(node.id() == ID_symbol || node.id() == ID_next_symbol)
+          retained_symbols.insert(node.get(ID_identifier));
+      });
+  };
+  collect(reduced.trans);
+  for(const auto &seed : seeds)
+    collect(seed);
+
+  return make_netlist(
+    symbols,
+    module,
+    reduced.trans,
+    property_map,
+    cmdline,
+    message_handler,
+    &retained_symbols);
 }
 
 static literalt build_property_literal(
@@ -136,7 +212,7 @@ property_checker_resultt new_ic3_engine(
   const namespacet ns(transition_system.symbol_table);
 
   auto netlist =
-    make_netlist(transition_system, properties, cmdline, message_handler);
+    make_ic3_netlist(cmdline, transition_system, properties, message_handler);
 
   message.statistics() << "Latches: " << netlist.var_map.latches.size()
                        << ", nodes: " << netlist.number_of_nodes()
