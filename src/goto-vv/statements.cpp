@@ -468,7 +468,12 @@ std::string compilert::function_variable_name(const Symbol &symbol) const
 
 exprt compilert::declare_function_local(const VariableSymbol &v)
 {
-  if(!is_function_variable(&v) || !v.getType().isIntegral())
+  const auto &local_type = v.getType().getCanonicalType();
+  const auto *array = local_type.as_if<FixedSizeUnpackedArrayType>();
+  // Use the ordinary unpacked array and select IR in the native call frame.
+  if(
+    !is_function_variable(&v) ||
+    !(local_type.isIntegral() || (array && array->elementType.isIntegral())))
     fail(v.location, "unsupported runtime function local declaration");
   const auto id = function_variable_name(v);
   if(!object.symbols.lookup(id))

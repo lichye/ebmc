@@ -486,6 +486,39 @@ for probe in recursive:4 out:11 ref:22 nonlocal:34 static:54 dynamic_loop:61 uns
   esac
   grep -qE "runtime_function_invalid.sv:$line:[0-9]+: $message$" "$log"
 done
+array_src="$front/tests/runtime_local_array.sv"
+compile runtime_local_array runtime-local-array.vv "$array_src"
+bind runtime-local-array.vv empty runtime-local-array-check.vv
+array_flags=(--undriven seq --bound 2 --yices)
+run runtime-array.direct "$eb" "${array_flags[@]}" --top runtime_local_array "$array_src"
+run runtime-array.typed "$eb" "${array_flags[@]}" runtime-local-array-check.vv
+for property in odd_tail signed_endpoints isolated_calls nested; do
+  compare runtime-array.direct runtime-array.typed "runtime_local_array.$property" 'PROVED up to bound 2'
+done
+compare runtime-array.direct runtime-array.typed runtime_local_array.wrong_tail REFUTED
+test "$(cat runtime-array.typed.rc)" = 10
+for route in direct typed; do
+  grep -Fq 'runtime_local_array.wrong_tail: finite bad frame 1 has an infinite extension by totality' "runtime-array.$route"
+done
+"$eb" --show-trans --undriven seq runtime-local-array-check.vv >runtime-array.trans
+if grep -Fq '.$local_' runtime-array.trans; then
+  echo 'A runtime function local escaped its call frame' >&2
+  exit 1
+fi
+array_invalid="$front/tests/runtime_local_array_invalid.sv"
+for probe in dynamic:3 static:11 nested:20 nonlocal:30; do
+  kind=${probe%:*}
+  line=${probe#*:}
+  log="runtime-array-$kind"
+  run "$log" compile "bad_array_$kind" "$log.vv" "$array_invalid"
+  test "$(cat "$log.rc")" = 2
+  test ! -e "$log.vv"
+  message='unsupported runtime function local declaration'
+  if [[ $kind = nonlocal ]]; then
+    message='requires a direct blocking write to a runtime function local'
+  fi
+  grep -qE "runtime_local_array_invalid.sv:$line:[0-9]+: $message$" "$log"
+done
 scalar_reductions="$front/tests/scalar_reductions.sv"
 compile scalar_reductions scalar-reductions.vv "$scalar_reductions"
 bind scalar-reductions.vv empty scalar-reductions-check.vv
