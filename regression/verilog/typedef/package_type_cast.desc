@@ -1,0 +1,9 @@
+CORE
+package_type_cast.sv
+--top main --bound 1 --finite-prefix
+^\[main\.p_width\].*: PROVED up to bound 1$
+^\[main\.p_scope\].*: PROVED up to bound 1$
+^\[main\.p_reset\].*: PROVED up to bound 1$
+^\[main\.p_capture\].*: PROVED up to bound 1$
+^EXIT=0$
+^SIGNAL=0$

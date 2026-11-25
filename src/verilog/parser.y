@@ -2105,16 +2105,9 @@ data_type:
         | TOK_VIRTUAL interface_opt interface_identifier
                 { init($$, ID_verilog_virtual_interface);
                   stack_type($$).set(ID_base_name, stack_expr($3).get(ID_base_name)); }
-        | type_identifier packed_dimension_brace
+        | ps_type_identifier packed_dimension_brace
                 { add_as_subtype(stack_type($2), stack_type($1));
                   $$ = $2; }
-        | package_scope
-          type_identifier
-                { pop_scope(); /* exit the package scope */ }
-          packed_dimension_brace
-                { mto($1, $2);
-                  add_as_subtype(stack_type($4), stack_type($1));
-                  $$ = $4; }
         | class_type
         | TOK_EVENT
                 { init($$, ID_verilog_event); }
@@ -5873,7 +5866,13 @@ type_identifier: TOK_TYPE_IDENTIFIER
                 }
         ;
 
-ps_type_identifier: type_identifier;
+ps_type_identifier:
+          type_identifier
+        | package_scope type_identifier
+                { pop_scope(); /* exit the package scope */
+                  $$ = $1;
+                  mto($$, $2); }
+        ;
 
 // This needs to be 'any_identifier': the parameter name in a named
 // parameter assignment is looked up in the instantiated module's

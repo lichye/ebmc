@@ -1,0 +1,6 @@
+CORE
+package_type_cast.sv
+--top main --bound 1 -D BAD_UNKNOWN
+^file .*package_type_cast\.sv line 14: identifier missing_t not found in package fpnew_pkg$
+^EXIT=2$
+^SIGNAL=0$

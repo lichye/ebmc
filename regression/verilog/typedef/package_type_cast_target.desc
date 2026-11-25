@@ -1,0 +1,6 @@
+CORE
+package_type_cast.sv
+--top main --bound 1 -D BAD_TARGET
+^file .*package_type_cast\.sv line 16: assignment to enum requires enum of the same type
+^EXIT=2$
+^SIGNAL=0$
