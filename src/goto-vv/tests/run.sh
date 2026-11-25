@@ -538,6 +538,31 @@ run strict-packed-dynamic compile strict_packed_output strict-packed-dynamic.vv 
 grep -Eq 'strict-packed-dynamic.sv:.*: error: reference to non-constant variable' strict-packed-dynamic
 test "$(cat strict-packed-dynamic.rc)" = 2
 test ! -e strict-packed-dynamic.vv
+indexed_src="$front/tests/strict_indexed_write.sv"
+compile strict_indexed_write strict-indexed-write.vv "$indexed_src"
+bind strict-indexed-write.vv empty strict-indexed-write-check.vv
+run strict-indexed-write.direct "$eb" "${strict_flags[@]}" --top strict_indexed_write \
+  -D EBMC_FIXED_REFERENCE "$indexed_src"
+run strict-indexed-write.typed "$eb" "${strict_flags[@]}" strict-indexed-write-check.vv
+test "$(cat strict-indexed-write.typed.rc)" = 10
+for direction in down up; do
+  compare strict-indexed-write.direct strict-indexed-write.typed \
+    "strict_indexed_write.${direction}_good" 'PROVED up to bound 1'
+  compare strict-indexed-write.direct strict-indexed-write.typed \
+    "strict_indexed_write.${direction}_wrong" REFUTED
+  for route in direct typed; do
+    grep -Fq "strict_indexed_write.${direction}_wrong: finite bad frame 0 has an infinite extension by totality" \
+      "strict-indexed-write.$route"
+  done
+done
+indexed_controls="$front/tests/strict_indexed_write_controls.sv"
+compile strict_indexed_write_controls strict-indexed-dynamic.vv "$indexed_controls"
+"$vv" compile strict-indexed-oob.vv --top strict_indexed_write_controls \
+  -D EBMC_STATIC_OOB -Wno-error=range-oob "$indexed_controls" >strict-indexed-oob 2>&1
+grep -Eq 'strict_indexed_write_controls.sv:.*: warning: .*\[-Wrange-oob\]' strict-indexed-oob
+for kind in dynamic oob; do
+  grep -Fq '"verilog_indexed_part_select_plus" 3 ' "strict-indexed-$kind.vv"
+done
 run stable-clock compile sampled_sequence rejected.vv stable-clock.sv
 grep -q 'stable-clock.sv:[0-9].*\$stable.*posedge' stable-clock
 sed 's/single-posedge\/preponed\/disable-current/single-posedge\/unsampled\/disable-current/' both.vv >bad-sampling.vv

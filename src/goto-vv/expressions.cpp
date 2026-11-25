@@ -20,6 +20,28 @@ exprt slice(exprt base, exprt hi, exprt lo, const typet &t)
     {std::move(base), std::move(hi), std::move(lo)});
 }
 
+std::optional<int32_t> known_int32(const ConstantValue &value)
+{
+  if(!value.isInteger() || value.integer().hasUnknown())
+    return {};
+  return value.integer().as<int32_t>();
+}
+
+std::optional<ConstantRange> indexed_range(
+  int32_t start,
+  int32_t width,
+  ConstantRange declared,
+  RangeSelectionKind kind)
+{
+  if(width <= 0)
+    return {};
+  return ConstantRange::getIndexedRange(
+    start,
+    width,
+    declared.isDescending(),
+    kind == RangeSelectionKind::IndexedUp);
+}
+
 std::pair<uint64_t, uint64_t> packed_slice_layout(
   const PackedArrayType &array,
   ConstantRange selection)
@@ -164,12 +186,8 @@ ConstantRange compilert::packed_range(
   {
     if(selection_kind == RangeSelectionKind::Simple)
       selection = ConstantRange{*left, *right};
-    else if(*right > 0)
-      selection = ConstantRange::getIndexedRange(
-        *left,
-        *right,
-        array.range.isDescending(),
-        selection_kind == RangeSelectionKind::IndexedUp);
+    else
+      selection = indexed_range(*left, *right, array.range, selection_kind);
   }
   if(!selection || !array.range.contains(*selection))
     fail(at, "packed range select is out of range");
@@ -496,13 +514,40 @@ exprt compilert::expr(
   case ExpressionKind::RangeSelect:
   {
     const auto &rs = e.as<RangeSelectExpression>();
-    if(const auto *array =
-         rs.value().type->getCanonicalType().as_if<PackedArrayType>();
-       array && has_packed_elements(*array))
+    const auto *array =
+      rs.value().type->getCanonicalType().as_if<PackedArrayType>();
+    const auto selection_kind = rs.getSelectionKind();
+    if(array && has_packed_elements(*array))
     {
       const auto selection = packed_range(rs, *array);
       r = packed_slice(expr(rs.value(), nullptr, lvalue), *array, selection, t);
       break;
+    }
+    if(lvalue && array && selection_kind != RangeSelectionKind::Simple)
+    {
+      const auto start = known_int32(eval_known(rs.left()));
+      const auto width = known_int32(eval_known(rs.right()));
+      const auto selection =
+        start && width
+          ? indexed_range(*start, *width, array->range, selection_kind)
+          : std::nullopt;
+      if(
+        selection && array->range.contains(*selection) &&
+        selection->fullWidth() == e.type->getBitWidth())
+      {
+        require_read_only(
+          rs.left(), "unsupported write in a packed range base");
+        require_read_only(
+          rs.right(), "unsupported write in a packed range width");
+        auto base = expr(rs.value(), nullptr, lvalue);
+        // A static in-bounds write is a location, not a guarded read value.
+        // The fixed slice uses the packed vector's flattened bit positions.
+        if(base.type().id() == ID_bool && t.id() == ID_bool)
+          r = std::move(base);
+        else
+          r = packed_slice(std::move(base), *array, *selection, t);
+        break;
+      }
     }
     check_select(rs.value());
     EvalContext ctx(*scope);
@@ -513,7 +558,7 @@ exprt compilert::expr(
         fail(bound.sourceRange.start(), "nonconstant part-select bound");
       return literal(v.integer(), type(*bound.type));
     };
-    if(rs.getSelectionKind() == RangeSelectionKind::Simple)
+    if(selection_kind == RangeSelectionKind::Simple)
       r = slice(
         expr(rs.value(), nullptr, lvalue),
         constant_bound(rs.left()),
@@ -521,7 +566,7 @@ exprt compilert::expr(
         t);
     else
     {
-      auto direction = rs.getSelectionKind() == RangeSelectionKind::IndexedUp
+      auto direction = selection_kind == RangeSelectionKind::IndexedUp
                          ? ID_verilog_indexed_part_select_plus
                          : ID_verilog_indexed_part_select_minus;
       // An indexed read produces a vector even at width one. The native
@@ -548,10 +593,7 @@ exprt compilert::expr(
       lvalue && array && !has_packed_elements(*array) &&
       array->range.fullWidth() == 1 && t.id() == ID_bool)
     {
-      const auto selected = eval_known(el.selector());
-      if(
-        selected.isInteger() && !selected.integer().hasUnknown() &&
-        selected.integer().as<int32_t>() == array->range.right)
+      if(known_int32(eval_known(el.selector())) == array->range.right)
       {
         require_read_only(el.selector(), "unsupported write in a packed index");
         auto base = expr(el.value(), nullptr, lvalue);
