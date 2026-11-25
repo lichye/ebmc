@@ -59,7 +59,8 @@ public:
   void operator()(
     const irep_idt &module,
     const transt &,
-    const std::map<irep_idt, exprt> &properties);
+    const std::map<irep_idt, exprt> &properties,
+    const std::unordered_set<irep_idt> *retained_symbols);
 
 protected:
   symbol_table_baset &symbol_table;
@@ -75,10 +76,11 @@ protected:
 void convert_trans_to_netlist_simplet::operator()(
   const irep_idt &module,
   const transt &trans,
-  const std::map<irep_idt, exprt> &properties)
+  const std::map<irep_idt, exprt> &properties,
+  const std::unordered_set<irep_idt> *retained_symbols)
 {
   // identify the variables we want in the AIG
-  dest.var_map = build_netlist_var_map(symbol_table, module);
+  dest.var_map = build_netlist_var_map(symbol_table, module, retained_symbols);
 
   // allocate AIG nodes
   allocate_nodes(dest);
@@ -219,9 +221,10 @@ void convert_trans_to_netlist_simple(
   const transt &trans_expr,
   const std::map<irep_idt, exprt> &properties,
   netlistt &dest,
-  message_handlert &message_handler)
+  message_handlert &message_handler,
+  const std::unordered_set<irep_idt> *retained_symbols)
 {
   convert_trans_to_netlist_simplet c(symbol_table, dest, message_handler);
 
-  c(module, trans_expr, properties);
+  c(module, trans_expr, properties, retained_symbols);
 }

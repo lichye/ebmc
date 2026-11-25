@@ -1,0 +1,16 @@
+CORE
+coi.sv
+--new-ic3 --coi --verbosity 9 --witness-lasso 4 --trace --property main.past_fail --property main.reachable
+^Latches: 3, nodes:
+^main.past_fail: no witness loop within 4 transitions$
+^main.reachable: no witness loop within 4 transitions$
+^\[main.past_fail\].*: INCONCLUSIVE$
+^\[main.reachable\].*: INCONCLUSIVE$
+^EXIT=10$
+^SIGNAL=0$
+--
+^Counterexample:
+^Trace:
+--
+The disabled property on the detached counter adds history to the full model.
+Its history is absent from the IC3 netlist but still matters for loop closure.

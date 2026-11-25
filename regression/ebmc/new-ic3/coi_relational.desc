@@ -1,0 +1,7 @@
+CORE
+coi_relational.smv
+--new-ic3 --coi
+^transition constraints are not supported by new IC3 engine$
+^\[spec1\] AG kept: UNSUPPORTED: transition constraints not supported by new IC3 engine$
+^EXIT=10$
+^SIGNAL=0$

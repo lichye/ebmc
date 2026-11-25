@@ -1,0 +1,7 @@
+CORE
+coi_constraints.smv
+--new-ic3 --coi --verbosity 9
+^Cone of influence: .* \(invar 1/1, init 2/3, trans 1/2\)$
+^\[spec1\] AG kept: PROVED$
+^EXIT=0$
+^SIGNAL=0$

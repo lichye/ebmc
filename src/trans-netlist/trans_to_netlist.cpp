@@ -61,7 +61,8 @@ public:
   void operator()(
     const irep_idt &module,
     const transt &,
-    const std::map<irep_idt, exprt> &properties);
+    const std::map<irep_idt, exprt> &properties,
+    const std::unordered_set<irep_idt> *retained_symbols);
 
 protected:
   symbol_table_baset &symbol_table;
@@ -241,14 +242,15 @@ Function: convert_trans_to_netlistt::operator()
 void convert_trans_to_netlistt::operator()(
   const irep_idt &module,
   const transt &trans,
-  const std::map<irep_idt, exprt> &properties)
+  const std::map<irep_idt, exprt> &properties,
+  const std::unordered_set<irep_idt> *retained_symbols)
 {
   // setup
   lhs_map.clear();
   rhs_list.clear();
   constraint_list.clear();
 
-  dest.var_map = build_netlist_var_map(symbol_table, module);
+  dest.var_map = build_netlist_var_map(symbol_table, module, retained_symbols);
   allocate_state_variables(dest);
 
   // setup lhs_map
@@ -1177,9 +1179,10 @@ void convert_trans_to_netlist(
   const transt &trans_expr,
   const std::map<irep_idt, exprt> &properties,
   netlistt &dest,
-  message_handlert &message_handler)
+  message_handlert &message_handler,
+  const std::unordered_set<irep_idt> *retained_symbols)
 {
   convert_trans_to_netlistt c(symbol_table, dest, message_handler);
 
-  c(module, trans_expr, properties);
+  c(module, trans_expr, properties, retained_symbols);
 }

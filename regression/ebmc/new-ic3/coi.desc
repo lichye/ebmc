@@ -1,0 +1,19 @@
+CORE
+coi.sv
+--new-ic3 --coi --verbosity 9 --witness-lasso 5 --trace --property main.safe --property main.past_fail --property main.reachable --property main.impossible
+^Latches: 5, nodes:
+^main.past_fail: witness loop 4 -> 5 \(equal endpoints\), bad frame 2$
+^main.reachable: witness loop 4 -> 5 \(equal endpoints\), bad frame 1$
+^\[main.lock\].*: ASSUMED$
+^\[main.safe\].*: PROVED$
+^\[main.past_fail\].*: REFUTED$
+^\[main.reachable\].*: PROVED$
+^\[main.impossible\].*: REFUTED$
+^  main.detached = 3
+^EXIT=10$
+^SIGNAL=0$
+--
+^\[main.detached_safe\]
+--
+The selected properties share the retained latch cone. The lasso is
+certified on the full model, including the detached state and its update.

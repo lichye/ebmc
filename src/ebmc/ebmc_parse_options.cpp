@@ -548,7 +548,7 @@ void ebmc_parse_optionst::help()
     " {y--property} {uid}            \t check the property with given ID; may be given more than once\n"
     " {y--liveness-to-safety}        \t translate liveness properties to safety properties\n"
     " {y--buechi}                    \t translate LTL/SVA properties to Buechi acceptance\n"
-    " {y--coi}                       \t reduce the model to the cone of influence of the properties (word-level BMC and k-induction)\n"
+    " {y--coi}                       \t reduce the model to the cone of influence of the properties (word-level BMC, k-induction, and new IC3)\n"
     "\n"
     "Methods:\n"
     " {y--finite-prefix}             \t use the original engine's finite-prefix witness semantics\n"

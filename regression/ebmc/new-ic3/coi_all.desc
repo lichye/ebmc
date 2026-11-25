@@ -1,0 +1,11 @@
+CORE
+coi.sv
+--new-ic3 --coi --verbosity 9 --witness-lasso 5
+^Latches: 21, nodes:
+^\[main.safe\].*: PROVED$
+^\[main.past_fail\].*: REFUTED$
+^\[main.reachable\].*: PROVED$
+^\[main.impossible\].*: REFUTED$
+^\[main.detached_safe\].*: PROVED$
+^EXIT=10$
+^SIGNAL=0$

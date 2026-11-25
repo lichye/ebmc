@@ -28,8 +28,10 @@ static bool is_module_instance_array(const typet &type)
   return element_type->id() == ID_verilog_module_instance;
 }
 
-var_mapt
-build_netlist_var_map(symbol_table_baset &symbol_table, const irep_idt &module)
+var_mapt build_netlist_var_map(
+  symbol_table_baset &symbol_table,
+  const irep_idt &module,
+  const std::unordered_set<irep_idt> *retained_symbols)
 {
   const namespacet ns{symbol_table};
   boolbv_widtht boolbv_width(ns);
@@ -102,9 +104,21 @@ build_netlist_var_map(symbol_table_baset &symbol_table, const irep_idt &module)
     var.bits.resize(size);
   };
 
-  for(const auto &symbol_it : symbol_table.symbols)
-    if(symbol_it.second.module == module)
-      update_dest_var_map(symbol_it.second);
+  if(retained_symbols)
+  {
+    for(const auto &id : *retained_symbols)
+    {
+      const auto *symbol = symbol_table.lookup(id);
+      if(symbol && symbol->module == module)
+        update_dest_var_map(*symbol);
+    }
+  }
+  else
+  {
+    for(const auto &symbol_it : symbol_table.symbols)
+      if(symbol_it.second.module == module)
+        update_dest_var_map(symbol_it.second);
+  }
 
   return var_map;
 }

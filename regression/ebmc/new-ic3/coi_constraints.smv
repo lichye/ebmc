@@ -1,0 +1,20 @@
+MODULE main
+
+VAR
+  kept : boolean;
+  left : boolean;
+  right : boolean;
+  body : boolean;
+
+ASSIGN
+  init(kept) := FALSE;
+  next(kept) := kept;
+  init(body) := FALSE;
+  next(body) := body;
+
+-- The separate component has no legal initial state. Dropping its
+-- correlated INIT and INVAR conditions would admit a counterexample.
+INIT left = right
+INVAR left != right
+
+SPEC AG kept
