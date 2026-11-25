@@ -6,12 +6,16 @@ Author: Daniel Kroening, Amazon, dkr@amazon.com
 
 \*******************************************************************/
 
+#include <util/arith_tools.h>
+#include <util/bitvector_expr.h>
 #include <util/floatbv_expr.h>
 #include <util/ieee_float.h>
+#include <util/mathematical_types.h>
 #include <util/std_expr.h>
 #include <util/symbol_table.h>
 
 #include <testing-utils/use_catch.h>
+#include <verilog/aval_bval_encoding.h>
 #include <verilog/verilog_lowering.h>
 #include <verilog/verilog_types.h>
 
@@ -28,6 +32,39 @@ static constant_exprt real_constant(double value, const typet &type)
 
 static const exprt round_to_even =
   ieee_floatt::rounding_mode_expr(ieee_floatt::rounding_modet::ROUND_TO_EVEN);
+
+SCENARIO("verilog_lowering projects an extract within a concatenation operand")
+{
+  const symbol_exprt high{"high", signedbv_typet{3}};
+  const symbol_exprt mid{"mid", bool_typet{}};
+  const symbol_exprt low{"low", unsignedbv_typet{4}};
+  const concatenation_exprt packed{{high, mid, low}, unsignedbv_typet{8}};
+  const auto index = [](int i) { return from_integer(i, integer_typet{}); };
+
+  REQUIRE(
+    verilog_lowering(extractbits_exprt{packed, index(5), high.type()}) == high);
+  REQUIRE(verilog_lowering(extractbit_exprt{packed, index(4)}) == mid);
+  REQUIRE(
+    verilog_lowering(extractbit_exprt{packed, index(2)}) ==
+    extractbit_exprt{low, index(2)});
+  const signedbv_typet signed_slice{2};
+  REQUIRE(
+    verilog_lowering(extractbits_exprt{packed, index(6), signed_slice}) ==
+    extractbits_exprt{high, index(1), signed_slice});
+
+  const extractbits_exprt spanning{packed, index(3), unsignedbv_typet{2}};
+  const extractbits_exprt outside{packed, index(7), unsignedbv_typet{2}};
+  const extractbit_exprt dynamic{packed, symbol_exprt{"i", unsignedbv_typet{3}}};
+  REQUIRE(verilog_lowering(spanning) == spanning);
+  REQUIRE(verilog_lowering(outside) == outside);
+  REQUIRE(verilog_lowering(dynamic) == dynamic);
+
+  const auto encoded_type = lower_to_aval_bval(verilog_unsignedbv_typet{2});
+  const concatenation_exprt encoded{
+    {symbol_exprt{"xz", encoded_type}, low}, unsignedbv_typet{8}};
+  const extractbit_exprt encoded_extract{encoded, index(6)};
+  REQUIRE(verilog_lowering(encoded_extract) == encoded_extract);
+}
 
 SCENARIO("verilog_lowering lowers real arithmetic to IEEE 754 operations")
 {
