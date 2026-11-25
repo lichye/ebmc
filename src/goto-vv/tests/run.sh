@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in temporal sampled_sequence sampled_rose wires generate_nested open_outputs local_enum clock_reset packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read past_depth; do
+for top in temporal sampled_sequence sampled_rose wires generate_nested open_outputs local_enum clock_reset clock_reset_low packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read past_depth; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -122,8 +122,28 @@ for name in first_zero first_nonzero; do
 done
 sed 's/if (rst) q/if (data) q/' "$front/tests/clock_reset.sv" >wrong-reset.sv
 run wrong-reset compile clock_reset rejected.vv wrong-reset.sv
-grep -q 'wrong-reset.sv:[0-9].*posedge reset tested by the outer if' wrong-reset
+grep -q 'wrong-reset.sv:[0-9].*reset edge matching the outer if' wrong-reset
 test "$(cat wrong-reset.rc)" != 0
+# Check the active-low edge, signal identity, and the serialized guard.
+for kind in condition signal; do
+  if [[ $kind = condition ]]; then
+    sed 's/if (!rst_n)/if (rst_n)/' "$front/tests/clock_reset_low.sv" >"wrong-reset-$kind.sv"
+  else
+    sed 's/if (!rst_n)/if (!data)/' "$front/tests/clock_reset_low.sv" >"wrong-reset-$kind.sv"
+  fi
+  run "wrong-reset-$kind" compile clock_reset_low "rejected-$kind.vv" "wrong-reset-$kind.sv"
+  grep -qE "wrong-reset-$kind.sv:3:[0-9]+: expected a reset edge matching the outer if" "wrong-reset-$kind"
+  test "$(cat "wrong-reset-$kind.rc")" = 2
+  test ! -e "rejected-$kind.vv"
+done
+for route in direct typed; do
+  grep -Fq 'finite bad frame 1 has an infinite extension by totality' "clock_reset_low.$route"
+done
+grep -q '^"negedge" ' clock_reset_low-check.vv
+sed 's/^"negedge" /"posedge" /' clock_reset_low-check.vv >wrong-reset-object.vv
+run wrong-reset-object "$eb" --show-symbol-table wrong-reset-object.vv
+grep -qE 'clock_reset_low\.sv:3:.*invalid clock/reset guard in always_ff' wrong-reset-object
+test "$(cat wrong-reset-object.rc)" = 6
 # A semantic analysis error must stop compilation before an object is written.
 sed '/always_ff/i\  initial q = 0;' "$front/tests/bridge.sv" >driver-conflict.sv
 run driver-conflict compile bridge driver-rejected.vv driver-conflict.sv

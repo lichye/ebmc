@@ -279,13 +279,39 @@ void vv_objectt::validate(bool require_constraints) const
           {
             const auto &clk = event.get_sub()[0];
             const auto &reset = event.get_sub()[1];
-            if(clk.id() != ID_posedge || reset.id() != ID_posedge ||
-               reset.get_sub().size() != 1 || reset.get_sub()[0].id() != ID_symbol ||
-               reset.get_sub()[0].find(ID_type).id() != ID_bool ||
-               body.id() != ID_if || body.get_sub().size() < 2 ||
-               body.get_sub()[0].id() != ID_symbol ||
-               body.get_sub()[0].get(ID_identifier) != reset.get_sub()[0].get(ID_identifier))
-              error(s.location, "invalid clock/reset guard in always_ff");
+            const auto &guard_location = static_cast<const source_locationt &>(
+              guard.find(ID_C_source_location));
+            auto invalid_reset = [&]
+            {
+              error(
+                guard_location.is_nil() ? s.location : guard_location,
+                "invalid clock/reset guard in always_ff");
+            };
+            const bool active_low = reset.id() == ID_negedge;
+            if(
+              clk.id() != ID_posedge ||
+              (!active_low && reset.id() != ID_posedge) ||
+              reset.get_sub().size() != 1 ||
+              reset.get_sub()[0].id() != ID_symbol ||
+              reset.get_sub()[0].find(ID_type).id() != ID_bool ||
+              body.id() != ID_if || body.get_sub().size() < 2)
+              invalid_reset();
+
+            const auto *tested_signal = &body.get_sub()[0];
+            if(active_low)
+            {
+              if(
+                tested_signal->id() != ID_not ||
+                tested_signal->find(ID_type).id() != ID_bool ||
+                tested_signal->get_sub().size() != 1)
+                invalid_reset();
+              tested_signal = &tested_signal->get_sub()[0];
+            }
+            if(
+              tested_signal->id() != ID_symbol ||
+              tested_signal->get(ID_identifier) !=
+                reset.get_sub()[0].get(ID_identifier))
+              invalid_reset();
             self(self, clk);
             self(self, reset.get_sub()[0]);
             self(self, body);
