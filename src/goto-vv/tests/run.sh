@@ -99,6 +99,7 @@ run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 -
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_contract.sh" "$work/clock-gate"
+EBMC="$eb" VV_BIN="$vv" bash "$front/tests/reset_binding.sh" "$work/reset-binding"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_cascade.sh" "$work/clock-gate-cascade"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_low_reset.sh" "$work/clock-gate-low-reset"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_static_slices.sh" "$work/clock-gate-static-slices"

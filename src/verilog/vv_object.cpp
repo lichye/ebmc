@@ -20,8 +20,17 @@ namespace
 const std::string header = "goto-vv 1 slang-11.0.0 ebmc-eae879de";
 const std::string clock_gate_header = header + " clock-gate-contract-v1";
 const std::string clock_gate_branches_header = clock_gate_header + " branches";
+// Older readers must reject a low reset instead of assuming active high.
+const std::string low_reset_header = header + " reset-low";
 using numbert = std::size_t;
 using fields_t = std::map<std::string, const irept *>;
+
+const irept *reset_polarity_field(const irept &metadata)
+{
+  const auto &fields = metadata.get_named_sub();
+  const auto polarity = fields.find("reset_polarity");
+  return polarity == fields.end() ? nullptr : &polarity->second;
+}
 
 class writert
 {
@@ -110,9 +119,10 @@ void vv_objectt::write(const std::string &path) const
   std::ofstream out(path);
   if(!out)
     throw std::runtime_error("cannot open " + path);
-  out << (has_clock_gate_branches() ? clock_gate_branches_header
-          : has_clock_gate()        ? clock_gate_header
-                                    : header)
+  out << (has_clock_gate_branches()        ? clock_gate_branches_header
+          : has_clock_gate()               ? clock_gate_header
+          : reset_polarity_field(metadata) ? low_reset_header
+                                           : header)
       << '\n';
   irept root("object");
   root.add("metadata") = metadata;
@@ -131,12 +141,14 @@ vv_objectt vv_objectt::read(const std::string &path)
   std::ifstream in(path);
   std::string line;
   if(
-    !std::getline(in, line) || (line != header && line != clock_gate_header &&
-                                line != clock_gate_branches_header))
+    !std::getline(in, line) ||
+    (line != header && line != clock_gate_header &&
+     line != clock_gate_branches_header && line != low_reset_header))
     throw std::runtime_error(
       path + ":1: unsupported goto-vv schema or tool versions");
-  const bool clock_gate = line != header;
   const bool branches = line == clock_gate_branches_header;
+  const bool clock_gate = branches || line == clock_gate_header;
+  const bool low_reset = line == low_reset_header;
   std::vector<irept> nodes;
   std::string id;
   auto bad = [&]
@@ -211,7 +223,8 @@ vv_objectt vv_objectt::read(const std::string &path)
       bad();
   if(
     result.has_clock_gate() != clock_gate ||
-    result.has_clock_gate_branches() != branches)
+    result.has_clock_gate_branches() != branches ||
+    (reset_polarity_field(result.metadata) != nullptr) != low_reset)
     bad();
   return result;
 }
@@ -270,10 +283,18 @@ void vv_objectt::validate(bool require_constraints) const
   };
   if(!primary_input(clock))
     error(loc, "unbound primary clock");
-  if(!metadata.get("reset").empty())
+  const auto reset = metadata.get("reset");
+  if(const auto *polarity = reset_polarity_field(metadata))
   {
-    auto r =
-      symbols.lookup("Verilog::$root." + id2string(metadata.get("reset")));
+    if(reset.empty())
+      error(loc, "reset polarity requires a reset binding");
+    // The legacy encoding omits the polarity and means active high.
+    if(polarity->id() != "low")
+      error(loc, "invalid reset polarity");
+  }
+  if(!reset.empty())
+  {
+    auto r = symbols.lookup("Verilog::$root." + id2string(reset));
     if(!primary_input(r))
       error(loc, "invalid reset binding");
   }
@@ -294,7 +315,7 @@ void vv_objectt::validate(bool require_constraints) const
       gate.get("ENV1") == gate.get("ENV2") || gate.get("ENV1") == clock->name ||
       gate.get("ENV2") == clock->name || !gate_net || !mux ||
       gate_net->type.id() != ID_bool || mux->type.id() != ID_bool || !due ||
-      due->type.id() != ID_bool || !metadata.get("reset").empty() ||
+      due->type.id() != ID_bool || !reset.empty() ||
       gate.get("RstSync").empty() ||
       (stage != "clock-gate-compiled" && stage != "constrained") ||
       (initial && stage != "constrained"))
