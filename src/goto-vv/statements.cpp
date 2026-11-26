@@ -63,6 +63,31 @@ bool is_unit_assignment_step(
   return amount.isInteger() && amount.integer().as<int64_t>() == 1;
 }
 
+// A later initial statement can be checked at compile time only if the
+// preceding statements cannot suspend the process or leave the block.
+bool completes_at_initial_entry(const Statement &s)
+{
+  if(const auto *block = s.as_if<BlockStatement>())
+    return block->blockKind == StatementBlockKind::Sequential &&
+           completes_at_initial_entry(block->body);
+  if(const auto *list = s.as_if<StatementList>())
+    return std::all_of(
+      list->list.begin(),
+      list->list.end(),
+      [](const auto *child) { return completes_at_initial_entry(*child); });
+  if(const auto *branch = s.as_if<ConditionalStatement>())
+    return completes_at_initial_entry(branch->ifTrue) &&
+           (!branch->ifFalse || completes_at_initial_entry(*branch->ifFalse));
+  if(const auto *statement = s.as_if<ExpressionStatement>())
+  {
+    const auto *assignment = statement->expr.as_if<AssignmentExpression>();
+    return !assignment || !assignment->timingControl;
+  }
+  return s.kind == StatementKind::Empty ||
+         s.kind == StatementKind::VariableDeclaration ||
+         s.kind == StatementKind::ImmediateAssertion;
+}
+
 bool is_module_variable(const Symbol &symbol)
 {
   const auto *parent = symbol.getParentScope();
@@ -342,13 +367,48 @@ void compilert::merge_procedural_locals(
   }
 }
 
+bool compilert::initial_parameter_check(
+  const ImmediateAssertionStatement &a) const
+{
+  if((a.ifTrue && a.ifTrue->kind != StatementKind::Empty) || !a.ifFalse)
+    return false;
+  const auto *action = a.ifFalse->as_if<ExpressionStatement>();
+  const auto *call = action ? action->expr.as_if<CallExpression>() : nullptr;
+  if(!call || !call->isSystemCall() || call->getSubroutineName() != "$fatal")
+    return false;
+
+  // A fresh context only sees elaborated constants, including instance
+  // parameters. The process's runtime values are absent.
+  EvalContext context(*scope);
+  const auto value = a.cond.eval(context);
+  if(!value || !context.getAllDiagnostics().empty())
+    return false;
+  if(value.isTrue())
+    return true;
+
+  auto diagnostic =
+    "initial parameter assertion failed in " + scope->getHierarchicalPath();
+  const auto args = call->arguments();
+  if(args.size() == 2)
+  {
+    if(const auto *literal = args[1]->as_if<StringLiteral>();
+       literal && !literal->getValue().empty() &&
+       literal->getValue().find('%') == std::string_view::npos)
+      diagnostic += ": " + std::string(literal->getValue());
+  }
+  fail(a.sourceRange.start(), diagnostic);
+}
+
 exprt compilert::immediate(
   const ImmediateAssertionStatement &a,
-  const Symbol *label)
+  const Symbol *label,
+  bool at_initial_entry)
 {
   auto at = a.sourceRange.start();
   if(a.assertionKind != AssertionKind::Assert || a.isDeferred)
     fail(at, "unsupported procedural assertion kind or timing");
+  if(at_initial_entry && initial_parameter_check(a))
+    return item(ID_skip).with_source_location(loc(at));
   auto condition = boolean(expr(a.cond));
   auto lower_action = [&](const Statement *action)
   {
@@ -810,7 +870,7 @@ void compilert::require_empty_final(const Statement &s) const
     "unsupported reachable final statement " + std::string(toString(s.kind)));
 }
 
-exprt compilert::stmt(const Statement &s)
+exprt compilert::stmt(const Statement &s, bool at_initial_entry)
 {
   const auto at = s.sourceRange.start();
   exprt r;
@@ -824,15 +884,18 @@ exprt compilert::stmt(const Statement &s)
     auto &block = s.as<BlockStatement>();
     if(function && block.blockKind != StatementBlockKind::Sequential)
       fail(at, "unsupported runtime function block");
+    at_initial_entry &= block.blockKind == StatementBlockKind::Sequential;
     if(
       !function && block.blockSymbol && !block.blockSymbol->name.empty() &&
       block.body.kind == StatementKind::ImmediateAssertion)
       return immediate(
-        block.body.as<ImmediateAssertionStatement>(), block.blockSymbol);
+        block.body.as<ImmediateAssertionStatement>(),
+        block.blockSymbol,
+        at_initial_entry);
     if(auto loop = named_clocked_loop(block))
       return std::move(*loop);
     const auto entered = procedural_locals;
-    r = stmt(block.body);
+    r = stmt(block.body, at_initial_entry);
     std::erase_if(
       procedural_locals,
       [&](const auto &entry)
@@ -850,7 +913,8 @@ exprt compilert::stmt(const Statement &s)
   case StatementKind::ImmediateAssertion:
     if(function)
       fail(at, "unsupported assertion in a runtime function");
-    r = immediate(s.as<ImmediateAssertionStatement>(), nullptr);
+    r = immediate(
+      s.as<ImmediateAssertionStatement>(), nullptr, at_initial_entry);
     break;
   case StatementKind::Return:
   {
@@ -870,7 +934,9 @@ exprt compilert::stmt(const Statement &s)
     {
       if(list[n]->kind != StatementKind::VariableDeclaration)
       {
-        r.operands().push_back(stmt(*list[n]));
+        r.operands().push_back(stmt(*list[n], at_initial_entry));
+        if(at_initial_entry)
+          at_initial_entry = completes_at_initial_entry(*list[n]);
         continue;
       }
       const auto &v = list[n]->as<VariableDeclStatement>().symbol;
@@ -879,6 +945,7 @@ exprt compilert::stmt(const Statement &s)
       if(loop && loop->loopVars.size() == 1 && loop->loopVars.front() == &v)
       {
         r.operands().push_back(counted_loop(v, *loop));
+        at_initial_entry = false;
         ++n;
       }
       else
@@ -1081,9 +1148,9 @@ exprt compilert::stmt(const Statement &s)
     if(constant.isInteger() && !constant.integer().hasUnknown())
     {
       if(constant.isTrue())
-        return stmt(c.ifTrue);
+        return stmt(c.ifTrue, at_initial_entry);
       if(c.ifFalse)
-        return stmt(*c.ifFalse);
+        return stmt(*c.ifFalse, at_initial_entry);
       r = item(ID_skip);
       break;
     }

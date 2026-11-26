@@ -204,7 +204,7 @@ public:
     const decltype(procedural_locals) &entered,
     const decltype(procedural_locals) &other);
   void require_empty_final(const Statement &s) const;
-  exprt stmt(const Statement &s);
+  exprt stmt(const Statement &s, bool at_initial_entry = false);
   std::optional<exprt> named_clocked_loop(const BlockStatement &);
   exprt counted_loop(
     const VariableSymbol &index,
@@ -223,7 +223,11 @@ public:
     const std::string &id,
     exprt condition,
     std::string_view diagnostic_task = {});
-  exprt immediate(const ImmediateAssertionStatement &s, const Symbol *label);
+  bool initial_parameter_check(const ImmediateAssertionStatement &) const;
+  exprt immediate(
+    const ImmediateAssertionStatement &s,
+    const Symbol *label,
+    bool at_initial_entry);
   exprt assertion(const AssertionExpr &a, SourceLocation at, irept &references);
   std::string clock(const TimingControl *ev, SourceLocation at);
   void module(const InstanceSymbol &inst, bool top);

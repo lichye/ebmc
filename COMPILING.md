@@ -134,6 +134,14 @@ from outside the loop is diagnosed.
 
 ### Procedural case qualifiers
 
+At the untimed entry of an `initial` sequence, goto-vv evaluates an immediate
+parameter assertion with an empty success action and a single `$fatal`
+failure action. A true elaborated condition produces no assertion in the
+model. A false condition reports the instance and source location and aborts
+compilation. The check requires a statically reached statement in an
+instantiated scope. Existing runtime assertions and translation directives
+keep their previous behavior.
+
 For ordinary matching, `unique case` and `priority case` select the first
 matching item in source order, or the default if present. To create
 procedural assertions at the case statement, pass `--assert-case-qualifiers`
