@@ -4882,6 +4882,11 @@ exprt verilog_typecheck_exprt::convert_binary_expr(
 
     tc_binary_expr(expr);
 
+    // Two scalars: the division is on one-bit vectors (1800-2017 6.9).
+    for(auto &op : expr.operands())
+      if(op.type().id() == ID_bool)
+        require_vector(op);
+
     expr.type()=expr.op0().type();
 
     return std::move(expr);
@@ -5004,6 +5009,12 @@ exprt verilog_typecheck_exprt::convert_binary_expr(
       convert_expr(op);
 
     tc_binary_expr(expr);
+
+    // Two scalars: the arithmetic wraps around in one bit, as on one-bit
+    // vectors (1800-2017 6.9).
+    for(auto &op : expr.operands())
+      if(op.type().id() == ID_bool)
+        require_vector(op);
 
     expr.type() = expr.op0().type();
     return std::move(expr);

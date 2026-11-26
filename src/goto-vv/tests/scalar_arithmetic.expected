@@ -1,0 +1,36 @@
+e_add PROVED up to bound 3
+e_dec PROVED up to bound 3
+e_mul PROVED up to bound 3
+e_neg PROVED up to bound 3
+e_sub PROVED up to bound 3
+p_add PROVED up to bound 3
+p_ashr PROVED up to bound 3
+p_counters_b0 PROVED up to bound 3
+p_counters_b1 PROVED up to bound 3
+p_counters PROVED up to bound 3
+p_dec0 PROVED up to bound 3
+p_dec1 PROVED up to bound 3
+p_dec PROVED up to bound 3
+p_div PROVED up to bound 3
+p_mod PROVED up to bound 3
+p_mul PROVED up to bound 3
+p_neg PROVED up to bound 3
+p_shl PROVED up to bound 3
+p_shr PROVED up to bound 3
+p_sneg PROVED up to bound 3
+p_ssub PROVED up to bound 3
+p_sub PROVED up to bound 3
+p_wrap_hold PROVED up to bound 3
+p_wrap PROVED up to bound 3
+p_wshl PROVED up to bound 3
+p_wshr PROVED up to bound 3
+p_wsub PROVED up to bound 3
+p_wsub_zero PROVED up to bound 3
+r_dec0 REFUTED
+r_wrap REFUTED
+w_counters_b REFUTED
+w_dec REFUTED
+w_neg REFUTED
+w_sub REFUTED
+w_wrap REFUTED
+w_wsub REFUTED

@@ -3901,15 +3901,22 @@ void verilog_rtl_buildert::build_incdec(
     statement.id() == ID_preincrement || statement.id() == ID_postincrement;
 
   // Per 1800-2017 11.4.2, the increment and decrement operators
-  // behave as blocking assignments.
-  auto one = from_integer(1, op.type());
+  // behave as blocking assignments. A scalar counts as a one-bit vector
+  // (1800-2017 6.9), and wraps around in one bit.
+  const typet arithmetic_type = op.type().id() == ID_bool
+                                  ? typet{unsignedbv_typet{1}}
+                                  : op.type();
+  const auto operand = typecast_exprt::conditional_cast(op, arithmetic_type);
+  auto one = from_integer(1, arithmetic_type);
 
   exprt rhs;
 
   if(increment)
-    rhs = plus_exprt{op, one};
+    rhs = plus_exprt{operand, one};
   else
-    rhs = minus_exprt{op, one};
+    rhs = minus_exprt{operand, one};
+
+  rhs = typecast_exprt::conditional_cast(rhs, op.type());
 
   verilog_blocking_assignt assignment{op, std::move(rhs)};
   assignment.add_source_location() = statement.source_location();

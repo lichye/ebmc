@@ -723,6 +723,28 @@ run strict-packed-dynamic compile strict_packed_output strict-packed-dynamic.vv 
 grep -Eq 'strict-packed-dynamic.sv:.*: error: reference to non-constant variable' strict-packed-dynamic
 test "$(cat strict-packed-dynamic.rc)" = 2
 test ! -e strict-packed-dynamic.vv
+# One-bit arithmetic is on one-bit vectors: the SAT, AIG and SMT backends
+# agree, and no operator is ignored by the bit-level backend.
+arith_src="$front/tests/scalar_arithmetic.sv"
+compile scalar_arithmetic scalar-arithmetic.vv "$arith_src"
+bind scalar-arithmetic.vv empty scalar-arithmetic-check.vv
+for backend in sat aig yices; do
+  arith_flags=(--undriven seq --bound 3)
+  [[ $backend == sat ]] || arith_flags+=("--$backend")
+  run "scalar-arithmetic-$backend.direct" "$eb" "${arith_flags[@]}" --top scalar_arithmetic "$arith_src"
+  run "scalar-arithmetic-$backend.typed" "$eb" "${arith_flags[@]}" scalar-arithmetic-check.vv
+  while read -r name expected; do
+    compare "scalar-arithmetic-$backend.direct" "scalar-arithmetic-$backend.typed" \
+      "scalar_arithmetic.$name" "$expected"
+  done <"$front/tests/scalar_arithmetic.expected"
+  for route in direct typed; do
+    test "$(cat "scalar-arithmetic-$backend.$route.rc")" = 10
+    if grep -q '^warning: ignoring' "scalar-arithmetic-$backend.$route"; then
+      echo "scalar_arithmetic: $backend $route ignored an operator" >&2
+      exit 1
+    fi
+  done
+done
 indexed_src="$front/tests/strict_indexed_write.sv"
 compile strict_indexed_write strict-indexed-write.vv "$indexed_src"
 bind strict-indexed-write.vv empty strict-indexed-write-check.vv

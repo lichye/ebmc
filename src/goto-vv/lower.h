@@ -77,6 +77,16 @@ inline exprt boolean(exprt e)
 {
   return typecast_exprt::conditional_cast(e, bool_typet());
 }
+/// As in the native type checker, a scalar is a one-bit vector
+/// (1800-2017 6.9): arithmetic on it wraps around in one bit.
+inline typet vector_type(const typet &t)
+{
+  return t.id() == ID_bool ? typet(unsignedbv_typet{1}) : t;
+}
+inline exprt as_vector(exprt e)
+{
+  return typecast_exprt::conditional_cast(e, vector_type(e.type()));
+}
 
 inline bool has_packed_elements(const PackedArrayType &array)
 {

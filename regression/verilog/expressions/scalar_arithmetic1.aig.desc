@@ -1,0 +1,18 @@
+CORE
+scalar_arithmetic1.sv
+--bound 3 --aig
+^\[main\.p_sub\] .*: PROVED up to bound 3$
+^\[main\.p_add\] .*: PROVED up to bound 3$
+^\[main\.p_mul\] .*: PROVED up to bound 3$
+^\[main\.p_div\] .*: PROVED up to bound 3$
+^\[main\.w_sub\] .*: REFUTED$
+^\[main\.p_inc\] .*: PROVED up to bound 3$
+^\[main\.p_dec\] .*: PROVED up to bound 3$
+^\[main\.p_add_assign\] .*: PROVED up to bound 3$
+^\[main\.p_sub_assign\] .*: PROVED up to bound 3$
+^\[main\.w_inc\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
+--
