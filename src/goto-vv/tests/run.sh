@@ -698,4 +698,5 @@ for k in bad-binding bad-version bad-clock stable-clock bad-sampling; do test "$
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/compilation_units.sh" "$work/compilation-units"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/diagnostic_tasks.sh" "$work/diagnostics"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/constant_power.sh" "$work/constant-power"
+EBMC="$eb" VV_BIN="$vv" bash "$front/tests/package_function.sh" "$work/package-function"
 echo PASS

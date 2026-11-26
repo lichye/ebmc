@@ -187,6 +187,7 @@ public:
     const ForLoopStatement &loop,
     const AssignmentExpression *external_init = nullptr);
   exprt declare_local(const VariableSymbol &variable);
+  bool in_package_function() const;
   bool is_function_variable(const Symbol *symbol) const;
   std::string function_variable_name(const Symbol &symbol) const;
   exprt declare_function_local(const VariableSymbol &variable);

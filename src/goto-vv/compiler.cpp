@@ -230,20 +230,38 @@ void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
   decl.operands().push_back(std::move(val));
   items.operands().push_back(std::move(decl));
 }
+bool compilert::in_package_function() const
+{
+  const auto *parent = function ? function->getParentScope() : nullptr;
+  return parent && parent->asSymbol().kind == SymbolKind::Package;
+}
+
 exprt compilert::runtime_call(const CallExpression &call)
 {
   const auto &callee = *std::get<const SubroutineSymbol *>(call.subroutine);
   const auto at = call.sourceRange.start();
   const auto *parent = callee.getParentScope();
+  const auto declared_in = parent ? parent->asSymbol().kind : SymbolKind::Root;
+  const bool package = declared_in == SymbolKind::Package;
+  if(in_package_function() && !package)
+    fail(at, "runtime package function requires a package function callee");
   if(
-    call.thisClass() || !parent ||
-    (parent->asSymbol().kind != SymbolKind::InstanceBody &&
-     parent->asSymbol().kind != SymbolKind::GenerateBlock) ||
+    call.thisClass() ||
+    (!package && declared_in != SymbolKind::InstanceBody &&
+     declared_in != SymbolKind::GenerateBlock) ||
     callee.subroutineKind != SubroutineKind::Function ||
     callee.defaultLifetime != VariableLifetime::Automatic ||
     !callee.returnValVar || !callee.getReturnType().isIntegral())
     fail(
-      at, "requires a module-local automatic function with an integral return");
+      at,
+      package
+        ? "requires an automatic package function with an integral return"
+        : "requires a module-local automatic function with an integral return");
+  const auto &return_type = callee.getReturnType();
+  if(
+    package && !return_type.isSimpleBitVector() &&
+    return_type.getCanonicalType().kind != SymbolKind::EnumType)
+    fail(at, "runtime package function requires an integer or enum return");
 
   const auto formals = callee.getArguments();
   if(formals.size() != call.arguments().size())
@@ -282,10 +300,13 @@ exprt compilert::runtime_call(const CallExpression &call)
     if(!written.count(formals[i]))
     {
       auto value = eval_known(*call.arguments()[i]);
-      if(value.isInteger() && !value.integer().hasUnknown())
+      if(value.isInteger() && (package || !value.integer().hasUnknown()))
       {
+        // Hex strings can coalesce distinct X/Z patterns within a digit.
+        const auto base =
+          value.integer().hasUnknown() ? LiteralBase::Binary : LiteralBase::Hex;
         id += "$arg" + std::to_string(i) + "_" +
-              value.integer().toString(LiteralBase::Hex, false);
+              value.integer().toString(base, false);
         constants.emplace(formals[i], std::move(value));
       }
     }

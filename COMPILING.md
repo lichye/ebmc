@@ -114,6 +114,14 @@ An empty contract is a zero-length file. Contract lines can specify
 Run the cross-process interface fixtures with
 `bash src/goto-vv/tests/run.sh /path/to/test-output`.
 
+Runtime calls can use package-level automatic functions with input formals and
+fixed-width integer or enum results. A plain `unique case` with a default uses
+ordinary case matching. For a selector and labels known to Slang, X and Z
+compare exactly even when another argument is evaluated at run time.
+An X/Z label with a variable four-state selector requires a representation
+the runtime package path does not provide and is diagnosed. Package state,
+nonlocal writes, recursion and effectful statements are also diagnosed.
+
 ### Temporary Coral clock gate contract
 
 `goto-vv compile --clock-gate-contract FILE` opts into the temporary Coral W4
