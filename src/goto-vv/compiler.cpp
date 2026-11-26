@@ -105,6 +105,66 @@ typet compilert::type(const Type &t, SourceLocation fallback) const
     return bool_typet();
   return c.isSigned() ? typet(signedbv_typet(w)) : typet(unsignedbv_typet(w));
 }
+
+/// Whether every bit of a packed type can hold x or z: a four-state
+/// vector, or a packed struct, union or array of such.
+static bool uniformly_four_state(const Type &t)
+{
+  const Type &c = t.getCanonicalType();
+  if(!c.isFourState())
+    return false;
+  if(const auto *s = c.as_if<PackedStructType>())
+  {
+    for(const auto &field : s->membersOfType<FieldSymbol>())
+      if(!uniformly_four_state(field.getType()))
+        return false;
+  }
+  else if(const auto *u = c.as_if<PackedUnionType>())
+  {
+    for(const auto &field : u->membersOfType<FieldSymbol>())
+      if(!uniformly_four_state(field.getType()))
+        return false;
+  }
+  else if(const auto *a = c.as_if<PackedArrayType>())
+    return uniformly_four_state(a->elementType);
+  return true;
+}
+
+/// Mark the four-state bits of \p result, the lowered type of \p t, the
+/// way the native type checker keeps them on two-valued storage. EBMC then
+/// gives an explicit x or z committed to such a bit a fresh value
+/// (verilog_rtl_buildert::sample_committed_unknowns).
+static void mark_four_state(typet &result, const Type &t)
+{
+  const Type &c = t.getCanonicalType();
+  if(const auto *a = c.as_if<FixedSizeUnpackedArrayType>())
+  {
+    if(result.id() == ID_array)
+      mark_four_state(to_array_type(result).element_type(), a->elementType);
+  }
+  else if(const auto *s = c.as_if<UnpackedStructType>())
+  {
+    if(result.id() != ID_struct)
+      return;
+    auto &components = to_struct_type(result).components();
+    if(components.size() != s->fields.size())
+      return;
+    for(std::size_t i = 0; i < components.size(); ++i)
+      mark_four_state(components[i].type(), s->fields[i]->getType());
+  }
+  else if(c.isIntegral() && uniformly_four_state(c))
+    result.set(ID_C_verilog_type, ID_verilog_logic);
+}
+
+/// The type of a variable: its lowered type, with its four-state bits
+/// marked as on native variables (1800-2017 6.3, 6.11).
+typet compilert::storage_type(const Type &t, SourceLocation fallback) const
+{
+  auto result = type(t, fallback);
+  mark_four_state(result, t);
+  return result;
+}
+
 exprt compilert::literal(const SVInt &v, const typet &t) const
 {
   if(v.hasUnknown())
@@ -154,8 +214,10 @@ void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
   }
   const bool string_parameter =
     s.kind == SymbolKind::Parameter && s.getType().isString();
-  auto t =
-    string_parameter ? typet(ID_verilog_string) : type(s.getType(), s.location);
+  auto t = string_parameter ? typet(ID_verilog_string)
+           : s.kind == SymbolKind::Variable
+             ? storage_type(s.getType(), s.location)
+             : type(s.getType(), s.location);
   auto &symbol = add(s, t);
   if(signal_metadata.empty())
     object.metadata.add("signals");

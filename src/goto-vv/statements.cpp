@@ -769,7 +769,7 @@ exprt compilert::declare_local(const VariableSymbol &v)
   if(!automatic_in_loop && init)
     fail(v.location, "unsupported initializer for a combinational local");
 
-  auto t = type(v.getType(), v.location);
+  auto t = storage_type(v.getType(), v.location);
   t.set("#vv_cycle_local", true);
   const auto id = name(*scope) + ".$local_" +
                   std::to_string(next_procedural_local++) + "." +

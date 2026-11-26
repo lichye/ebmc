@@ -216,6 +216,7 @@ public:
   [[noreturn]] void fail(SourceLocation l, const std::string &why) const;
   irept describe_type(const Type &type) const;
   typet type(const Type &t, SourceLocation fallback = {}) const;
+  typet storage_type(const Type &t, SourceLocation fallback = {}) const;
   exprt literal(const SVInt &v, const typet &t) const;
   ConstantValue eval_known(const Expression &e) const;
   exprt expr(

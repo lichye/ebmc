@@ -166,6 +166,20 @@ grep -Eq 'sampled_rose_invalid.sv:[0-9]+:[0-9]+: error: could not determine cloc
 for kind in direct_x direct_z folded_x folded_z; do
   grep -Eq 'sampled_rose_invalid.sv:[0-9]+:[0-9]+: unsupported X/Z constant argument to \$rose' "rose-invalid-$kind"
 done
+# An explicit x/z written to a four-state variable is an unknown value on
+# both routes, at bit and at word level; an explicit two-state cast is 0.
+compile procedural_x procedural_x.vv "$front/tests/procedural_x.sv"
+bind procedural_x.vv empty procedural_x-check.vv
+for check in "sampled_rose 6 aig" "sampled_rose 6 yices" "procedural_x 3 sat" "procedural_x 3 yices"; do
+  read -r top depth backend <<<"$check"
+  flags=(--undriven seq --bound "$depth")
+  [[ $backend == sat ]] || flags+=("--$backend")
+  run "$top-$backend.direct" "$eb" "${flags[@]}" --top "$top" "$front/tests/$top.sv"
+  run "$top-$backend.typed" "$eb" "${flags[@]}" "$top-check.vv"
+  while read -r name expected; do
+    compare "$top-$backend.direct" "$top-$backend.typed" "$top.$name" "$expected"
+  done <"$front/tests/$top.expected"
+done
 grep -Fq 'generate_nested.outer.lanes[0].even_lane.u' generate_nested.vv
 grep -Fq 'generate_nested.outer.lanes[1].odd_lane.u' generate_nested.vv
 if grep -Fq 'unused_lane' generate_nested.vv; then
