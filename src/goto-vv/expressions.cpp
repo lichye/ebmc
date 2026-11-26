@@ -735,11 +735,55 @@ exprt compilert::expr(
   case ExpressionKind::StructuredAssignmentPattern:
   {
     const auto *simple = e.as_if<SimpleAssignmentPatternExpression>();
-    const auto elements =
-      simple ? simple->elements()
-             : e.as<StructuredAssignmentPatternExpression>().elements();
-    if(
-      const auto *packed = e.type->getCanonicalType().as_if<PackedStructType>())
+    const auto *structured = e.as_if<StructuredAssignmentPatternExpression>();
+    const auto elements = simple ? simple->elements() : structured->elements();
+    const auto &target = e.type->getCanonicalType();
+    const auto lower_element = [&](const Expression &element, const typet &dest)
+    {
+      // A Slang conversion to a scalar in an assignment pattern truncates
+      // to one bit. EBMC's cast directly to Bool tests the entire value.
+      if(const auto *conversion = element.as_if<ConversionExpression>();
+         dest.id() == ID_bool && conversion && element.type->isIntegral() &&
+         element.type->getBitWidth() == 1 &&
+         conversion->operand().type->isIntegral() &&
+         conversion->operand().type->getBitWidth() > 1)
+      {
+        auto bit = typecast_exprt::conditional_cast(
+          expr(conversion->operand(), nullptr, lvalue), unsignedbv_typet{1});
+        return typecast_exprt::conditional_cast(std::move(bit), dest);
+      }
+      return typecast_exprt::conditional_cast(
+        expr(element, nullptr, lvalue), dest);
+    };
+    if(const auto *array = target.as_if<PackedArrayType>();
+       array && array->elementType.isScalar() && structured &&
+       structured->defaultSetter && structured->indexSetters.empty() &&
+       structured->typeSetters.empty())
+    {
+      const auto width = array->range.fullWidth();
+      if(
+        lvalue || elements.empty() || elements.size() != width ||
+        !std::all_of(
+          elements.begin(),
+          elements.end(),
+          [&](const auto *element) { return element == elements.front(); }))
+        fail(at, "unsupported assignment pattern");
+
+      // Slang binds a default-only vector to one typed scalar per bit. As
+      // with explicit replication, each position receives that scalar.
+      const auto &element = *elements.front();
+      require_read_only(element, "unsupported write in a packed default");
+      auto bit = lower_element(element, type(array->elementType, at));
+      if(width == 1)
+        r = typecast_exprt::conditional_cast(std::move(bit), t);
+      else
+      {
+        r = node(ID_concatenation, t);
+        r.operands().assign(width, bit);
+      }
+      break;
+    }
+    if(const auto *packed = target.as_if<PackedStructType>())
     {
       if((simple && simple->isLValue) || elements.empty())
         fail(at, "unsupported assignment pattern");
@@ -750,9 +794,8 @@ exprt compilert::expr(
       {
         if(element == elements.end())
           fail(at, "unsupported assignment pattern");
-        operands.push_back(typecast_exprt::conditional_cast(
-          expr(**element, nullptr, lvalue),
-          type(field.getType(), field.location)));
+        operands.push_back(
+          lower_element(**element, type(field.getType(), field.location)));
         ++element;
       }
       if(element != elements.end())
