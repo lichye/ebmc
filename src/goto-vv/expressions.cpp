@@ -15,6 +15,22 @@ exprt index_constant(uint64_t n)
 {
   return from_integer(n, integer_typet());
 }
+// For an integral `to`, the integral type `from` with the signedness of `to`.
+typet with_signedness(const typet &from, const typet &to)
+{
+  const bool signed_to =
+    to.id() == ID_signedbv || to.id() == ID_verilog_signedbv;
+  if(
+    !signed_to && to.id() != ID_unsignedbv && to.id() != ID_verilog_unsignedbv)
+    return from;
+  typet result = from;
+  if(from.id() == ID_signedbv || from.id() == ID_unsignedbv)
+    result.id(signed_to ? ID_signedbv : ID_unsignedbv);
+  else if(
+    from.id() == ID_verilog_signedbv || from.id() == ID_verilog_unsignedbv)
+    result.id(signed_to ? ID_verilog_signedbv : ID_verilog_unsignedbv);
+  return result;
+}
 exprt slice(exprt base, exprt hi, exprt lo, const typet &t)
 {
   return node(
@@ -565,9 +581,18 @@ exprt compilert::expr(
     r = literal(e.as<UnbasedUnsizedIntegerLiteral>().getValue(), t);
     break;
   case ExpressionKind::Conversion:
-    r = typecast_exprt::conditional_cast(
-      expr(e.as<ConversionExpression>().operand(), compound_target, lvalue), t);
+  {
+    auto &conversion = e.as<ConversionExpression>();
+    auto v = expr(conversion.operand(), compound_target, lvalue);
+    // A context-determined operand takes the signedness of the expression
+    // before it is extended (1800-2017 11.8.2; slang's ConversionExpression
+    // ::convert). A typecast extends by the signedness of its operand.
+    if(conversion.conversionKind == ConversionKind::Propagated && !lvalue)
+      v = typecast_exprt::conditional_cast(
+        std::move(v), with_signedness(v.type(), t));
+    r = typecast_exprt::conditional_cast(std::move(v), t);
     break;
+  }
   case ExpressionKind::UnaryOp:
   {
     auto &u = e.as<UnaryExpression>();

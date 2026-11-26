@@ -1,0 +1,23 @@
+p_add PROVED up to bound 3
+p_sub PROVED up to bound 3
+p_add_signed PROVED up to bound 3
+p_neg PROVED up to bound 3
+p_cast_unsigned PROVED up to bound 3
+p_cast_signed PROVED up to bound 3
+p_wide_unsigned PROVED up to bound 3
+p_wide_signed PROVED up to bound 3
+p_truncate PROVED up to bound 3
+p_fpu_shape PROVED up to bound 3
+p_x_agree PROVED up to bound 3
+e_wide_unsigned PROVED up to bound 3
+e_wide_signed PROVED up to bound 3
+e_truncate PROVED up to bound 3
+e_neg PROVED up to bound 3
+x_add_zero REFUTED
+x_add_nonzero REFUTED
+x_sub_zero REFUTED
+x_wide_top REFUTED
+bad_add REFUTED
+bad_wide_sign REFUTED
+bad_wide_zero REFUTED
+bad_neg REFUTED

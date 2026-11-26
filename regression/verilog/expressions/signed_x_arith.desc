@@ -1,0 +1,30 @@
+CORE
+signed_x_arith.sv
+--bound 1
+^\[main\.p_add\].*: PROVED up to bound 1$
+^\[main\.p_sub\].*: PROVED up to bound 1$
+^\[main\.p_add_signed\].*: PROVED up to bound 1$
+^\[main\.p_neg\].*: PROVED up to bound 1$
+^\[main\.p_cast_unsigned\].*: PROVED up to bound 1$
+^\[main\.p_cast_signed\].*: PROVED up to bound 1$
+^\[main\.p_wide_unsigned\].*: PROVED up to bound 1$
+^\[main\.p_wide_signed\].*: PROVED up to bound 1$
+^\[main\.p_truncate\].*: PROVED up to bound 1$
+^\[main\.p_fpu_shape\].*: PROVED up to bound 1$
+^\[main\.p_x_agree\].*: PROVED up to bound 1$
+^\[main\.e_wide_unsigned\].*: PROVED up to bound 1$
+^\[main\.e_wide_signed\].*: PROVED up to bound 1$
+^\[main\.e_truncate\].*: PROVED up to bound 1$
+^\[main\.e_neg\].*: PROVED up to bound 1$
+^\[main\.x_add_zero\].*: REFUTED$
+^\[main\.x_add_nonzero\].*: REFUTED$
+^\[main\.x_sub_zero\].*: REFUTED$
+^\[main\.x_wide_top\].*: REFUTED$
+^\[main\.bad_add\].*: REFUTED$
+^\[main\.bad_wide_sign\].*: REFUTED$
+^\[main\.bad_wide_zero\].*: REFUTED$
+^\[main\.bad_neg\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+Invariant check failed
