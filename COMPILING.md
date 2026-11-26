@@ -132,6 +132,22 @@ the typed counter values within that loop. The loop body retains its original
 assignments and their nonblocking scheduling. Reading the eliminated counter
 from outside the loop is diagnosed.
 
+### Procedural case qualifiers
+
+For ordinary matching, `unique case` and `priority case` select the first
+matching item in source order, or the default if present. To create
+procedural assertions at the case statement, pass `--assert-case-qualifiers`
+to `goto-vv compile`. The assertions use the same grouped matches as branch
+selection. `unique` checks that at most one item matches. Both qualifiers
+check that some item matches if the default is omitted. An empty default
+still counts as a default. The assertions are guarded by the path that
+reaches the case and add no assumptions.
+
+Checked case statements in runtime functions, loops or asynchronously reset
+gated processes are diagnosed when they would require repeated or unsupported
+sampling. Ordinary matching and existing package function lowering remain
+available without the assertion option.
+
 ### Temporary Coral clock gate contract
 
 `goto-vv compile --clock-gate-contract FILE` opts into the temporary Coral W4

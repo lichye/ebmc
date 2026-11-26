@@ -298,6 +298,8 @@ protected:
     statet &,
     const framest &);
   void build_if(const verilog_ift &, statet &, const framest &);
+  template <typename Then, typename Else>
+  void build_branches(const exprt &, statet &, Then, Else);
   void build_incdec(const verilog_statementt &, statet &);
 
   /// record an assert, assume or cover statement as a property;
@@ -305,7 +307,8 @@ protected:
   void build_check(
     const verilog_assert_assume_cover_statementt &,
     const irep_idt &label,
-    statet &);
+    statet &,
+    bool already_evaluated = false);
 
   /// assign the given (already substituted) rhs to the given lvalue
   void assign_to(
@@ -3204,7 +3207,25 @@ void verilog_rtl_buildert::build_if(
 {
   auto cond = typecast_exprt::conditional_cast(
     substitute(if_statement.cond(), state), bool_typet{});
+  build_branches(
+    cond,
+    state,
+    [&](statet &branch)
+    { build_statement(if_statement.then_case(), branch, frames); },
+    [&](statet &branch)
+    {
+      if(if_statement.has_else_case())
+        build_statement(if_statement.else_case(), branch, frames);
+    });
+}
 
+template <typename Then, typename Else>
+void verilog_rtl_buildert::build_branches(
+  const exprt &cond,
+  statet &state,
+  Then take_then,
+  Else take_else)
+{
   // Constant conditions do not branch; the path condition
   // of break, continue and return statements in the branch
   // that is taken becomes the path condition of the if statement.
@@ -3212,13 +3233,12 @@ void verilog_rtl_buildert::build_if(
 
   if(cond_simplified.is_true())
   {
-    build_statement(if_statement.then_case(), state, frames);
+    take_then(state);
     return;
   }
   else if(cond_simplified.is_false())
   {
-    if(if_statement.has_else_case())
-      build_statement(if_statement.else_case(), state, frames);
+    take_else(state);
     return;
   }
 
@@ -3227,10 +3247,8 @@ void verilog_rtl_buildert::build_if(
   then_state.guard.push_back(cond);
   else_state.guard.push_back(not_exprt{cond});
 
-  build_statement(if_statement.then_case(), then_state, frames);
-
-  if(if_statement.has_else_case())
-    build_statement(if_statement.else_case(), else_state, frames);
+  take_then(then_state);
+  take_else(else_state);
 
   // A branch that has been terminated by a break, continue or return
   // statement does not reach the end of the if statement; what it
@@ -3665,7 +3683,15 @@ void verilog_rtl_buildert::build_case(
       default_case = case_item.case_statement();
   }
 
-  std::optional<verilog_statementt> chain = std::move(default_case);
+  const auto &overlap =
+    statement.find(verilog_case_statement_baset::overlap_check);
+  const auto &coverage =
+    statement.find(verilog_case_statement_baset::coverage_check);
+  const bool checked = !overlap.is_nil() || !coverage.is_nil();
+  std::vector<std::pair<exprt, const verilog_statementt *>> matches;
+  std::optional<verilog_statementt> chain;
+  if(!checked)
+    chain = std::move(default_case);
 
   // Iterate over the case items in reverse to build the chain
   // inside out.
@@ -3679,6 +3705,11 @@ void verilog_rtl_buildert::build_case(
     auto cond =
       case_values(statement.id(), case_item.case_value(), case_operand, state);
 
+    if(checked)
+    {
+      matches.emplace_back(std::move(cond), &case_item.case_statement());
+      continue;
+    }
     if(chain.has_value())
     {
       chain = verilog_ift{
@@ -3688,8 +3719,57 @@ void verilog_rtl_buildert::build_case(
       chain = verilog_ift{std::move(cond), case_item.case_statement()};
   }
 
-  if(chain.has_value())
-    build_statement(*chain, state, frames);
+  if(!checked)
+  {
+    if(chain.has_value())
+      build_statement(*chain, state, frames);
+    return;
+  }
+
+  // Finish evaluating the normal branch predicates at the case entry, in
+  // source order as for the if chain above. Use the same predicate for the
+  // branch and the qualifier checks, even if a branch subsequently writes
+  // the selector or a value read by an item label.
+  exprt seen = false_exprt{};
+  exprt::operandst conflicts;
+  for(auto it = matches.rbegin(); it != matches.rend(); ++it)
+  {
+    auto &matched = it->first;
+    matched = typecast_exprt::conditional_cast(
+      substitute(std::move(matched), state), bool_typet{});
+    if(!overlap.is_nil())
+      conflicts.push_back(and_exprt{seen, matched});
+    seen = or_exprt{std::move(seen), matched};
+  }
+
+  const auto assert_case = [&](const irept &check, exprt condition)
+  {
+    auto assertion = to_verilog_assert_assume_cover_statement(
+      static_cast<const verilog_statementt &>(check));
+    assertion.condition() = std::move(condition);
+    build_check(assertion, irep_idt{}, state, true);
+  };
+  if(!overlap.is_nil())
+    assert_case(overlap, not_exprt{disjunction(std::move(conflicts))});
+  if(!coverage.is_nil())
+    assert_case(coverage, std::move(seen));
+
+  auto dispatch = [&](auto &&self, std::size_t count, statet &branch) -> void
+  {
+    if(count == 0)
+    {
+      if(default_case)
+        build_statement(*default_case, branch, frames);
+      return;
+    }
+    const auto &[condition, body] = matches[count - 1];
+    build_branches(
+      condition,
+      branch,
+      [&](statet &taken) { build_statement(*body, taken, frames); },
+      [&](statet &missed) { self(self, count - 1, missed); });
+  };
+  dispatch(dispatch, matches.size(), state);
 }
 
 /*******************************************************************\
@@ -3993,12 +4073,14 @@ Function: verilog_rtl_buildert::build_check
 void verilog_rtl_buildert::build_check(
   const verilog_assert_assume_cover_statementt &statement,
   const irep_idt &label,
-  statet &state)
+  statet &state,
+  bool already_evaluated)
 {
   auto kind_opt = property_kind(statement.id());
   CHECK_RETURN(kind_opt.has_value());
 
-  auto condition = substitute(statement.condition(), state);
+  auto condition = already_evaluated ? statement.condition()
+                                     : substitute(statement.condition(), state);
 
   // A 'default disable iff (expr)' (1800-2017 16.15) applies to all
   // concurrent assertions in the module, including procedural concurrent

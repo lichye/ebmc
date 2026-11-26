@@ -2,6 +2,7 @@
 
 #include <util/std_expr.h>
 
+#include "verilog_expr.h"
 #include "verilog_types.h"
 
 #include <algorithm>
@@ -473,6 +474,22 @@ void vv_objectt::validate(bool require_constraints) const
             n.id() ||
           !bound_properties.insert(target->name).second)
           error(where, "bad property binding");
+      }
+      for(const auto key :
+          {verilog_case_statement_baset::overlap_check,
+           verilog_case_statement_baset::coverage_check})
+      {
+        const auto &check = n.find(key);
+        if(check.is_nil())
+          continue;
+        if(
+          n.id() != ID_verilog_case ||
+          check.id() != ID_verilog_immediate_assert ||
+          metadata.find("properties")
+              .find(check.get(ID_identifier))
+              .get("origin") != "case-qualifier")
+          error(where, "invalid case qualifier assertion");
+        self(self, check);
       }
       for(const auto &c : n.get_sub())
         self(self, c);
