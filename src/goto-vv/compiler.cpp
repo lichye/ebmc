@@ -217,7 +217,7 @@ void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
   val.add_source_location() = symbol.location;
   if(init)
   {
-    auto v = expr(*init);
+    auto v = s.kind == SymbolKind::Net ? evaluated_expr(*init) : expr(*init);
     if(s.kind == SymbolKind::Net)
     {
       auto a = item(
@@ -268,6 +268,13 @@ exprt compilert::runtime_call(const CallExpression &call)
   const auto formals = callee.getArguments();
   if(formals.size() != call.arguments().size())
     fail(at, "unbound runtime function arguments");
+  const bool checked = checked_function(callee);
+  const bool evaluated = evaluated_call == &call;
+  if(
+    checked &&
+    (!evaluated || in_clocked_property || !locals.empty() ||
+     !expanded_indices.empty()))
+    fail(at, "cannot preserve evaluation path for a runtime diagnostic call");
   std::set<const Symbol *> written;
   const auto record_write = [&](const Expression &target)
   {
@@ -296,7 +303,8 @@ exprt compilert::runtime_call(const CallExpression &call)
       fail(formals[i]->location, "runtime function requires input formals");
     if(!formals[i]->getType().isIntegral())
       fail(formals[i]->location, "runtime function requires integral formals");
-    arguments.push_back(expr(*call.arguments()[i]));
+    const auto &actual = *call.arguments()[i];
+    arguments.push_back(evaluated ? evaluated_expr(actual) : expr(actual));
     // Specialize only on immutable, known arguments. A loop bound or inner
     // function call can then use a value such as the caller's FP field width.
     if(!written.count(formals[i]))
@@ -314,6 +322,8 @@ exprt compilert::runtime_call(const CallExpression &call)
     }
   }
 
+  if(checked)
+    id += "$diagnostic_call_" + std::to_string(next_diagnostic_call++);
   const auto result_type = type(callee.getReturnType(), at);
   const auto *existing = object.symbols.lookup(id);
   if(existing && existing->type.id() != ID_code)
@@ -336,12 +346,25 @@ exprt compilert::runtime_call(const CallExpression &call)
     auto &result = add(
       *callee.returnValVar, result_type, id + "." + std::string(callee.name));
     result.is_lvalue = true;
+    const auto result_identifier = result.name;
     auto signature = code_typet(std::move(parameters), result_type);
     signature.set(ID_verilog_lifetime, ID_automatic);
+    if(checked)
+      signature.set("#vv_function_diagnostics", true);
     add(callee, signature, id);
 
     // Only the function body has its own lowering scope. Arguments already
     // refer to the caller's symbols and, in SVA, the caller's sample.
+    std::optional<diagnostic_callt> caller;
+    if(checked)
+      caller = diagnostic_callt{
+        diagnostic_call ? diagnostic_call->instance : name(*scope),
+        diagnostic_call ? diagnostic_call->entry : at,
+        at};
+    auto saved_diagnostic_call =
+      std::exchange(diagnostic_call, std::move(caller));
+    const auto saved_has_diagnostic =
+      std::exchange(function_has_diagnostic, false);
     const auto *saved_scope = std::exchange(scope, &callee);
     const auto *saved_function = std::exchange(function, &callee);
     auto saved_identifier = std::exchange(function_identifier, id);
@@ -353,7 +376,15 @@ exprt compilert::runtime_call(const CallExpression &call)
     const auto saved_comb = std::exchange(in_always_comb, false);
     active_functions.insert(&callee);
     auto body = item(ID_block, {stmt(callee.getBody())});
+    if(
+      function_has_diagnostic &&
+      !supplies_function_result(body, result_identifier))
+      fail(
+        callee.location,
+        "runtime diagnostic function requires a defined return");
     active_functions.erase(&callee);
+    function_has_diagnostic = saved_has_diagnostic;
+    diagnostic_call = std::move(saved_diagnostic_call);
     in_always_comb = saved_comb;
     expanded_indices = std::move(saved_indices);
     procedural_locals = std::move(saved_procedural);
@@ -594,7 +625,7 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
                         ? equal_exprt{
                             signal(*target, a.left()),
                             signal(*link->second.source, a.right())}
-                        : equal_exprt{lhs(a.left()), expr(a.right())};
+                        : equal_exprt{lhs(a.left()), evaluated_expr(a.right())};
       auto assign = item(ID_continuous_assign, {std::move(equality)});
       assign.add_source_location() = loc(s.location);
       items.operands().push_back(std::move(assign));
@@ -695,7 +726,7 @@ int compile_design(int argc, char **argv)
   {
     std::cerr
       << "usage: goto-vv compile OUTPUT [-mfcu|-sfcu] "
-         "[--assert-diagnostic-tasks=warning,error] [--assert-case-qualifiers] "
+         "[--assert-diagnostic-tasks=warning,error,fatal] [--assert-case-qualifiers] "
          "[slang options] INPUT...\n";
     return 2;
   }
@@ -718,7 +749,7 @@ int compile_design(int argc, char **argv)
       "--assert-diagnostic-tasks",
       diagnostic_tasks,
       "Assert when selected procedural diagnostic tasks execute",
-      "warning,error");
+      "warning,error,fatal");
     std::optional<bool> case_qualifiers;
     driver.cmdLine.add(
       "--assert-case-qualifiers",
@@ -730,11 +761,25 @@ int compile_design(int argc, char **argv)
       !driver.parseCommandLine(argc - 1, argv + 1) ||
       !driver.processOptions() || !driver.parseAllSources())
       return 2;
-    const auto tasks = diagnostic_tasks.value_or("");
-    const bool both = tasks == "warning,error" || tasks == "error,warning";
-    if(diagnostic_tasks && !both && tasks != "warning" && tasks != "error")
-      throw std::runtime_error(
-        "--assert-diagnostic-tasks expects warning, error, or warning,error");
+    std::set<std::string_view> tasks;
+    if(diagnostic_tasks)
+    {
+      std::string_view remaining = *diagnostic_tasks;
+      for(;;)
+      {
+        const auto comma = remaining.find(',');
+        const auto task = remaining.substr(0, comma);
+        if(
+          (task != "warning" && task != "error" && task != "fatal") ||
+          !tasks.insert(task).second)
+          throw std::runtime_error(
+            "--assert-diagnostic-tasks expects a comma-separated selection "
+            "of warning, error, and fatal");
+        if(comma == std::string_view::npos)
+          break;
+        remaining.remove_prefix(comma + 1);
+      }
+    }
     auto c = driver.createCompilation();
     driver.reportCompilation(*c, true);
     if(driver.diagEngine.getNumErrors() != 0)
@@ -745,8 +790,9 @@ int compile_design(int argc, char **argv)
     analysis::AnalysisManager am(
       driver.getAnalysisOptions(), driver.threadPool);
     compilert lower(driver.sourceManager, am);
-    lower.assert_warnings = both || tasks == "warning";
-    lower.assert_errors = both || tasks == "error";
+    lower.assert_warnings = tasks.count("warning");
+    lower.assert_errors = tasks.count("error");
+    lower.assert_fatals = tasks.count("fatal");
     lower.assert_case_qualifiers = case_qualifiers.value_or(false);
     std::mutex lock;
     am.addListener(
@@ -810,6 +856,13 @@ int compile_design(int argc, char **argv)
                 << symbol.pretty_name;
       if(!task.empty())
         std::cout << " (" << task << ')';
+      if(property.get("origin") == "function-diagnostic-task")
+      {
+        const auto &site = static_cast<const source_locationt &>(
+          property.find("function_location"));
+        std::cout << " at " << site.get_file() << ':' << site.get_line() << ':'
+                  << site.get_column();
+      }
       std::cout << '\n';
     }
     return 0;

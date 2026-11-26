@@ -186,6 +186,8 @@ ConstantValue compilert::eval_known(const Expression &e) const
               " read before assignment: " +
               std::string(symbol.name));
       });
+  if(has_checked_call(e))
+    return {};
   EvalContext context(*scope);
   for(const auto &[formal, value] : function_constants)
     context.createLocal(formal, value);
@@ -526,6 +528,7 @@ exprt compilert::expr(
       // result type to the base. Evaluate without binding procedural locals.
       const char *diagnostic = "unsupported binary Power";
       require_read_only(b, diagnostic);
+      reject_checked_call(b);
       EvalContext context(*scope);
       const auto value = b.eval(context);
       if(!value.isInteger())
@@ -537,6 +540,7 @@ exprt compilert::expr(
       (b.op == O::Equality || b.op == O::Inequality) &&
       (b.left().type->isString() || b.right().type->isString()))
     {
+      reject_checked_call(b);
       EvalContext context(*scope);
       auto value = b.eval(context);
       if(!value.isInteger())
@@ -665,6 +669,7 @@ exprt compilert::expr(
     EvalContext ctx(*scope);
     auto constant_bound = [&](const Expression &bound)
     {
+      reject_checked_call(bound);
       auto v = bound.eval(ctx);
       if(!v.isInteger() || v.integer().hasUnknown())
         fail(bound.sourceRange.start(), "nonconstant part-select bound");
@@ -945,7 +950,7 @@ exprt compilert::expr(
         fail(at, "$onehot0 requires one packed integral argument");
       require_read_only(*c.arguments().front(), "unsupported write in $onehot0");
       EvalContext context(*scope);
-      const auto value = c.eval(context);
+      const auto value = has_checked_call(c) ? ConstantValue{} : c.eval(context);
       if(value.isInteger())
         r = literal(value.integer(), t);
       else
@@ -962,14 +967,16 @@ exprt compilert::expr(
       if(active_functions.count(callee))
         fail(at, "recursive runtime function");
       EvalContext context(*scope);
-      const auto value = c.eval(context);
+      const auto value = has_checked_call(c) ? ConstantValue{} : c.eval(context);
       r = value.isInteger() ? literal(value.integer(), t) : runtime_call(c);
     }
     else if(
       c.getSubroutineName() == "$clog2" || c.getSubroutineName() == "$bits")
     {
       EvalContext context(*scope);
-      auto value = c.eval(context);
+      const auto value = subroutine == "$clog2" && has_checked_call(c)
+                           ? ConstantValue{}
+                           : c.eval(context);
       if(!value.isInteger())
         fail(
           at,

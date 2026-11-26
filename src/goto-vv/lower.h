@@ -105,6 +105,17 @@ public:
   std::map<const VariableSymbol *, ConstantValue> function_constants;
   bool assert_warnings = false;
   bool assert_errors = false;
+  bool assert_fatals = false;
+  struct diagnostic_callt
+  {
+    std::string instance;
+    SourceLocation entry, call;
+  };
+  std::optional<diagnostic_callt> diagnostic_call;
+  const Expression *evaluated_call = nullptr;
+  bool function_has_diagnostic = false;
+  std::size_t next_diagnostic_call = 0;
+  mutable std::map<const SubroutineSymbol *, bool> checked_functions;
   bool assert_case_qualifiers = false;
   bool in_clocked_property = false;
   bool in_always_comb = false;
@@ -211,6 +222,12 @@ public:
   void check_diagnostic_argument(const Expression &argument) const;
   bool assert_diagnostic(std::string_view task) const;
   exprt diagnostic_statement(const CallExpression &call);
+  bool checked_function(const SubroutineSymbol &) const;
+  bool has_checked_call(const Expression &) const;
+  void reject_checked_call(const Expression &) const;
+  exprt evaluated_expr(const Expression &);
+  exprt function_diagnostic_statement(const CallExpression &);
+  static bool supplies_function_result(const exprt &, const irep_idt &);
   symbol_exprt temporary_local(
     typet type,
     SourceLocation at,

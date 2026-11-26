@@ -218,7 +218,8 @@ void compilert::check_diagnostic_argument(const Expression &argument) const
 bool compilert::assert_diagnostic(std::string_view task) const
 {
   return (task == "$warning" && assert_warnings) ||
-         (task == "$error" && assert_errors);
+         (task == "$error" && assert_errors) ||
+         (task == "$fatal" && assert_fatals);
 }
 
 exprt compilert::diagnostic_statement(const CallExpression &call)
@@ -380,7 +381,9 @@ bool compilert::initial_parameter_check(
     return false;
   const auto *action = a.ifFalse->as_if<ExpressionStatement>();
   const auto *call = action ? action->expr.as_if<CallExpression>() : nullptr;
-  if(!call || !call->isSystemCall() || call->getSubroutineName() != "$fatal")
+  if(
+    !call || !call->isSystemCall() || call->getSubroutineName() != "$fatal" ||
+    has_checked_call(a.cond))
     return false;
 
   // A fresh context only sees elaborated constants, including instance
@@ -622,6 +625,9 @@ exprt compilert::counted_loop(
     require_read_only(*loop.stopExpr, "unsupported write in a loop guard");
   }
 
+  reject_checked_call(*init);
+  reject_checked_call(*loop.stopExpr);
+  reject_checked_call(step);
   EvalContext context(v);
   for(const auto &[formal, value] : function_constants)
     context.createLocal(formal, value);
@@ -814,7 +820,9 @@ exprt compilert::declare_function_local(const VariableSymbol &v)
     add(v, type(v.getType(), v.location), id).is_lvalue = true;
   const auto &local = object.symbols.lookup_ref(id);
   if(const auto *init = v.getInitializer())
-    return item(ID_verilog_blocking_assign, {local.symbol_expr(), expr(*init)})
+    return item(
+             ID_verilog_blocking_assign,
+             {local.symbol_expr(), evaluated_expr(*init)})
       .with_source_location(local.location);
   return item(ID_skip).with_source_location(local.location);
 }
@@ -929,7 +937,7 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
     const auto *value = s.as<ReturnStatement>().expr;
     if(!function || !value)
       fail(at, "unsupported return statement");
-    r = verilog_returnt(expr(*value));
+    r = verilog_returnt(evaluated_expr(*value));
     break;
   }
   case StatementKind::VariableDeclaration:
@@ -1111,6 +1119,7 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
           labels.operands().push_back(expr(*x));
           continue;
         }
+        reject_checked_call(*x);
         EvalContext context(*scope);
         auto pattern = x->eval(context);
         if(!pattern.isInteger())
@@ -1186,7 +1195,7 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
       r = item(ID_skip);
       break;
     }
-    auto condition = boolean(expr(test));
+    auto condition = boolean(evaluated_expr(test));
     const auto entered = procedural_locals;
     auto when_true = stmt(c.ifTrue);
     const auto after_true = std::move(procedural_locals);
@@ -1203,8 +1212,7 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
     if(const auto *call = e.as_if<CallExpression>())
     {
       if(in_package_function())
-        fail(
-          at, "unsupported call statement in a pure runtime package function");
+        return function_diagnostic_statement(*call);
       return diagnostic_statement(*call);
     }
     if(e.kind == ExpressionKind::UnaryOp)
@@ -1256,7 +1264,8 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
           a.left().sourceRange.start(),
           "combinational local read before assignment: " +
             std::string(target->name));
-      auto rhs = expr(a.right(), packed_or ? &local.ref : nullptr);
+      auto rhs = packed_or ? expr(a.right(), &local.ref)
+                           : evaluated_expr(a.right());
       local.constant = packed_or ? ConstantValue{} : eval_known(a.right());
       local.assigned = true;
       r = item(ID_verilog_blocking_assign, {local.ref, std::move(rhs)});
@@ -1303,7 +1312,7 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
     }
     auto target_expr = gated_write ? gated_async_lhs(a.left()) : lhs(a.left());
     // The typed RHS reads this target in the current procedural state.
-    auto rhs = expr(a.right(), a.op ? &target_expr : nullptr);
+    auto rhs = a.op ? expr(a.right(), &target_expr) : evaluated_expr(a.right());
     r = item(
       a.isNonBlocking() ? ID_verilog_non_blocking_assign
                         : ID_verilog_blocking_assign,

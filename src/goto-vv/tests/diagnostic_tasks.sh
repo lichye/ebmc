@@ -130,7 +130,7 @@ reject unknown-call diagnostic_unknown_call 'diagnostic_tasks\.sv:[0-9]+:[0-9]+:
 for task in fatal finish; do
   reject "$task" "diagnostic_$task" "diagnostic_tasks\\.sv:[0-9]+:[0-9]+: unsupported procedural call .*$task" --assert-diagnostic-tasks=warning,error
 done
-reject invalid-option diagnostic_tasks '--assert-diagnostic-tasks expects warning, error, or warning,error' --assert-diagnostic-tasks=info
+reject invalid-option diagnostic_tasks '--assert-diagnostic-tasks expects a comma-separated selection' --assert-diagnostic-tasks=info
 reject elab-error diagnostic_elaboration_error 'elaboration error'
 reject elab-error-option diagnostic_elaboration_error 'elaboration error' --assert-diagnostic-tasks=warning,error
 cmp elab-error.compile elab-error-option.compile
