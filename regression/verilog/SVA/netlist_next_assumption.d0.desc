@@ -1,0 +1,14 @@
+CORE
+netlist_next_assumption.sv
+--aig --finite-prefix --bound 0 --property main.initial_reset --trace
+^\[main\.hold_reset\].*: ASSUMED$
+^\[main\.initial_reset\].*: REFUTED$
+^Transition system state 0$
+^  main\.released = 0$
+^EXIT=10$
+^SIGNAL=0$
+--
+^Transition system state 1$
+assumption not supported
+--
+The next-frame assumption has no due obligation at the end of a bound-zero finite prefix.
