@@ -652,7 +652,7 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
         timed->timing.kind == TimingControlKind::EventList)
         statement = clock_reset_block(*timed);
       else
-        statement = stmt(body);
+        statement = stmt(body, p.procedureKind == ProceduralBlockKind::Initial);
       in_always_comb = false;
       in_posedge_process = false;
       auto process = item(op, {std::move(statement)});
