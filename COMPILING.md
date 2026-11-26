@@ -122,6 +122,16 @@ An X/Z label with a variable four-state selector requires a representation
 the runtime package path does not provide and is diagnosed. Package state,
 nonlocal writes, recursion and effectful statements are also diagnosed.
 
+### Clocked block-local loop counters
+
+A sequential named block in a single positive-edge procedure can contain an
+uninitialized `integer` declaration followed by a counted `for` loop.
+The loop must initialize that counter with a blocking constant assignment
+and have a statically determined unit-increment bound. goto-vv substitutes
+the typed counter values within that loop. The loop body retains its original
+assignments and their nonblocking scheduling. Reading the eliminated counter
+from outside the loop is diagnosed.
+
 ### Temporary Coral clock gate contract
 
 `goto-vv compile --clock-gate-contract FILE` opts into the temporary Coral W4

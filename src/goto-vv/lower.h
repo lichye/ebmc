@@ -104,6 +104,7 @@ public:
   bool assert_errors = false;
   bool in_clocked_property = false;
   bool in_always_comb = false;
+  bool in_posedge_process = false;
   bool in_gated_async = false;
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
   std::map<std::string, std::string> clock_alias;
@@ -203,6 +204,7 @@ public:
     const decltype(procedural_locals) &other);
   void require_empty_final(const Statement &s) const;
   exprt stmt(const Statement &s);
+  std::optional<exprt> named_clocked_loop(const BlockStatement &);
   exprt counted_loop(
     const VariableSymbol &index,
     const ForLoopStatement &loop,
