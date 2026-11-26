@@ -480,6 +480,19 @@ exprt compilert::expr(
   {
     auto &b = e.as<BinaryExpression>();
     using O = BinaryOperator;
+    if(b.op == O::Power)
+    {
+      // Slang has already specialized generate constants and propagated the
+      // result type to the base. Evaluate without binding procedural locals.
+      const char *diagnostic = "unsupported binary Power";
+      require_read_only(b, diagnostic);
+      EvalContext context(*scope);
+      const auto value = b.eval(context);
+      if(!value.isInteger())
+        fail(at, diagnostic);
+      r = literal(value.integer(), t);
+      break;
+    }
     if(
       (b.op == O::Equality || b.op == O::Inequality) &&
       (b.left().type->isString() || b.right().type->isString()))
