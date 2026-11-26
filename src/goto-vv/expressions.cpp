@@ -165,6 +165,7 @@ bool hierarchical_procedural_local(
 
 ConstantValue compilert::eval_known(const Expression &e) const
 {
+  bool needs_slice_read_check = false;
   if(!procedural_locals.empty())
     e.visitSymbolReferences(
       [&](const Expression &reference, const Symbol &symbol)
@@ -177,16 +178,24 @@ ConstantValue compilert::eval_known(const Expression &e) const
             "hierarchical reference to a procedural local outside its "
             "lexical scope");
         const auto local = procedural_locals.find(&symbol);
-        if(local != procedural_locals.end() && !local->second.assigned)
-          fail(
-            reference.sourceRange.start(),
-            std::string(
-              local->second.require_full_assignment ? "combinational local"
-                                                    : "automatic local") +
-              " read before assignment: " +
-              std::string(symbol.name));
+        if(local == procedural_locals.end() || local->second.assigned)
+          return;
+        if(!local->second.assigned_bits.empty())
+        {
+          // The reference alone does not identify which bits are read.
+          // Defer validation to expression lowering.
+          needs_slice_read_check = true;
+          return;
+        }
+        fail(
+          reference.sourceRange.start(),
+          std::string(
+            local->second.require_full_assignment ? "combinational local"
+                                                  : "automatic local") +
+            " read before assignment: " +
+            std::string(symbol.name));
       });
-  if(has_checked_call(e))
+  if(needs_slice_read_check || has_checked_call(e))
     return {};
   EvalContext context(*scope);
   for(const auto &[formal, value] : function_constants)
@@ -231,6 +240,90 @@ ConstantRange compilert::packed_range(
     selection->isDescending() != array.range.isDescending())
     fail(at, "packed range select goes against the declared direction");
   return *selection;
+}
+
+std::optional<compilert::local_slicet>
+compilert::static_local_slice(const Expression &e) const
+{
+  if(!in_always_comb_procedure || procedural_locals.empty())
+    return {};
+  const auto *bit = e.as_if<ElementSelectExpression>();
+  const auto *range = e.as_if<RangeSelectExpression>();
+  if(!bit && !range)
+    return {};
+  const auto &base = bit ? bit->value() : range->value();
+  const auto *symbol = base.getSymbolReference();
+  const auto local = procedural_locals.find(symbol);
+  // Use the combinational-local lifecycle. Expanded-loop locals retain their
+  // existing initializer and whole-write rules.
+  if(
+    base.kind != ExpressionKind::NamedValue || local == procedural_locals.end() ||
+    !local->second.require_full_assignment)
+    return {};
+  const auto *array = base.type->getCanonicalType().as_if<PackedArrayType>();
+  if(!array || !array->elementType.isScalar() ||
+     symbol->as<VariableSymbol>().lifetime != VariableLifetime::Automatic)
+    return {};
+
+  const auto &index = bit ? bit->selector() : range->left();
+  require_read_only(index, "unsupported write in a packed local slice index");
+  const auto start = known_int32(eval_known(index));
+  if(!start)
+    return {};
+  std::optional<ConstantRange> selection = ConstantRange{*start, *start};
+  if(range)
+  {
+    require_read_only(
+      range->right(), "unsupported write in a packed local slice bound");
+    const auto bound = known_int32(eval_known(range->right()));
+    if(!bound)
+      return {};
+    const auto kind = range->getSelectionKind();
+    selection = kind == RangeSelectionKind::Simple
+                  ? std::optional{ConstantRange{*start, *bound}}
+                  : indexed_range(*start, *bound, array->range, kind);
+  }
+  if(
+    !selection || !array->range.contains(*selection) ||
+    (selection->left != selection->right &&
+     selection->isDescending() != array->range.isDescending()))
+    return {};
+
+  const auto [offset, width] = packed_slice_layout(*array, *selection);
+  if(width != e.type->getBitWidth())
+    return {};
+  return local_slicet{symbol, offset, width};
+}
+
+exprt compilert::local_slice_expr(
+  const local_slicet &selection,
+  const typet &type,
+  SourceLocation at,
+  bool lvalue) const
+{
+  const auto &local = procedural_locals.at(selection.symbol);
+  if(!lvalue && !local.assigned)
+  {
+    const auto &bits = local.assigned_bits;
+    if(
+      bits.empty() ||
+      !std::all_of(
+        bits.begin() + selection.offset,
+        bits.begin() + selection.offset + selection.width,
+        [](bool assigned) { return assigned; }))
+      fail(
+        at,
+        "combinational local slice read before assignment: " +
+          std::string(selection.symbol->name));
+  }
+  auto result = local.ref.type().id() == ID_bool && type.id() == ID_bool
+                  ? exprt{local.ref}
+                  : slice(
+                      local.ref,
+                      index_constant(selection.offset + selection.width - 1),
+                      index_constant(selection.offset),
+                      type);
+  return result.with_source_location(loc(at));
 }
 
 /// A read of a packed array element with a runtime index whose values can
@@ -661,6 +754,8 @@ exprt compilert::expr(
   }
   case ExpressionKind::RangeSelect:
   {
+    if(auto selection = lvalue ? std::nullopt : static_local_slice(e))
+      return local_slice_expr(*selection, t, at, false);
     const auto &rs = e.as<RangeSelectExpression>();
     const auto *array =
       rs.value().type->getCanonicalType().as_if<PackedArrayType>();
@@ -735,6 +830,8 @@ exprt compilert::expr(
   }
   case ExpressionKind::ElementSelect:
   {
+    if(auto selection = lvalue ? std::nullopt : static_local_slice(e))
+      return local_slice_expr(*selection, t, at, false);
     const auto &el = e.as<ElementSelectExpression>();
     const auto *array =
       el.value().type->getCanonicalType().as_if<PackedArrayType>();

@@ -368,7 +368,22 @@ void compilert::merge_procedural_locals(
     const auto *symbol = entry.first;
     auto &local = procedural_locals.at(symbol);
     const auto &alternative = other.at(symbol);
-    local.assigned &= alternative.assigned;
+    if(local.assigned_bits.empty() && alternative.assigned_bits.empty())
+      local.assigned &= alternative.assigned;
+    else
+    {
+      auto &bits = local.assigned_bits;
+      const auto &alternative_bits = alternative.assigned_bits;
+      if(bits.empty())
+        bits.assign(alternative_bits.size(), local.assigned);
+      for(std::size_t bit = 0; bit < bits.size(); ++bit)
+        bits[bit] =
+          bits[bit] &&
+          (alternative_bits.empty() ? alternative.assigned
+                                    : alternative_bits[bit]);
+      local.assigned = std::all_of(
+        bits.begin(), bits.end(), [](bool assigned) { return assigned; });
+    }
     if(!local.assigned || !(local.constant == alternative.constant))
       local.constant = {};
   }
@@ -767,7 +782,9 @@ exprt compilert::declare_local(const VariableSymbol &v)
   if(object.symbols.add(symbol))
     fail(v.location, "duplicate procedural local " + id);
   auto [entry, inserted] = procedural_locals.emplace(
-    &v, procedural_localt{symbol.symbol_expr(), false, !automatic_in_loop, {}});
+    &v,
+    procedural_localt{
+      symbol.symbol_expr(), false, !automatic_in_loop, {}, false, {}});
   if(!inserted)
     fail(v.location, "procedural local scope overlaps a previous declaration");
   auto &local = entry->second;
@@ -918,7 +935,9 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
       {
         if(entered.count(entry.first))
           return false;
-        if(entry.second.require_full_assignment && !entry.second.assigned)
+        if(
+          entry.second.require_full_assignment && !entry.second.assigned &&
+          entry.second.assigned_bits.empty())
           fail(
             entry.first->location,
             "combinational local is not assigned on every path");
@@ -1249,9 +1268,11 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
       const bool packed_or =
         in_always_comb && a.op == BinaryOperator::BinaryOr &&
         is_automatic_packed_struct(target->as<VariableSymbol>());
+      const bool whole = a.left().kind == ExpressionKind::NamedValue;
+      const auto selection = whole ? std::nullopt : static_local_slice(a.left());
       if(
-        a.left().kind != ExpressionKind::NamedValue || a.isNonBlocking() ||
-        (a.op && !packed_or) || a.timingControl)
+        (!whole && !selection) || a.isNonBlocking() ||
+        (a.op && !(whole && packed_or)) || a.timingControl)
         fail(
           at,
           local.require_full_assignment
@@ -1266,8 +1287,27 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
             std::string(target->name));
       auto rhs = packed_or ? expr(a.right(), &local.ref)
                            : evaluated_expr(a.right());
+      if(selection)
+      {
+        auto &bits = local.assigned_bits;
+        if(bits.empty())
+          bits.assign(
+            target->as<VariableSymbol>().getType().getBitWidth(), local.assigned);
+        std::fill_n(bits.begin() + selection->offset, selection->width, true);
+        local.assigned = std::all_of(
+          bits.begin(), bits.end(), [](bool assigned) { return assigned; });
+        local.constant = {};
+        auto part = local_slice_expr(
+          *selection,
+          type(*a.left().type),
+          a.left().sourceRange.start(),
+          true);
+        r = item(ID_verilog_blocking_assign, {std::move(part), std::move(rhs)});
+        break;
+      }
       local.constant = packed_or ? ConstantValue{} : eval_known(a.right());
       local.assigned = true;
+      std::fill(local.assigned_bits.begin(), local.assigned_bits.end(), true);
       r = item(ID_verilog_blocking_assign, {local.ref, std::move(rhs)});
       break;
     }

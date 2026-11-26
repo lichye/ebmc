@@ -186,6 +186,14 @@ public:
     bool require_full_assignment = false;
     ConstantValue constant;
     bool case_read_only = false;
+    // Empty denotes uniform coverage, represented by assigned.
+    std::vector<bool> assigned_bits;
+  };
+  struct local_slicet
+  {
+    const Symbol *symbol;
+    std::size_t offset;
+    std::size_t width;
   };
   std::map<const Symbol *, procedural_localt> procedural_locals;
   std::map<const Symbol *, ConstantValue> expanded_indices;
@@ -218,6 +226,9 @@ public:
     const typet &);
   ConstantRange
   packed_range(const RangeSelectExpression &, const PackedArrayType &) const;
+  std::optional<local_slicet> static_local_slice(const Expression &) const;
+  exprt local_slice_expr(
+    const local_slicet &, const typet &, SourceLocation, bool lvalue) const;
   void require_read_only(const Expression &expr, const char *diagnostic) const;
   void check_diagnostic_argument(const Expression &argument) const;
   bool assert_diagnostic(std::string_view task) const;
