@@ -591,6 +591,15 @@ exprt compilert::expr(
       v = typecast_exprt::conditional_cast(
         std::move(v), with_signedness(v.type(), t));
     r = typecast_exprt::conditional_cast(std::move(v), t);
+    // An explicit cast to a two-state type converts x and z to 0
+    // (1800-2017 6.11, 6.24.1). Mark it as the native type checker does, so
+    // that a write of the result is not sampled like an explicit x/z.
+    if(
+      !conversion.isImplicit() && !lvalue && !e.type->isFourState() &&
+      conversion.operand().type->isFourState())
+    {
+      r = verilog_explicit_type_cast_exprt{std::move(r), t};
+    }
     break;
   }
   case ExpressionKind::UnaryOp:

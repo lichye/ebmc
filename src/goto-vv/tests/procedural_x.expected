@@ -1,0 +1,21 @@
+r_x_is0 REFUTED
+r_x_is1 REFUTED
+r_z_is0 REFUTED
+r_z_is1 REFUTED
+cast_x_is0 PROVED up to bound 3
+cast_x_is1 REFUTED
+cast_z_is0 PROVED up to bound 3
+cast_z_is1 REFUTED
+mixed_known PROVED up to bound 3
+mixed_is0 REFUTED
+mixed_is1 REFUTED
+bit_x_is0 PROVED up to bound 3
+mem_is0 REFUTED
+mem_is1 REFUTED
+us4_is0 REFUTED
+us4_is1 REFUTED
+us2_is0 PROVED up to bound 3
+comb_is0 REFUTED
+comb_is1 REFUTED
+net_is0 REFUTED
+net_is1 REFUTED

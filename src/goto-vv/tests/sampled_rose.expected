@@ -9,16 +9,34 @@ upper_rises PROVED up to bound 6
 lsb_rises PROVED up to bound 6
 upper_falls PROVED up to bound 6
 lsb_falls PROVED up to bound 6
+rises_wrong REFUTED
+lsb_rises_wrong REFUTED
 zero_to_x REFUTED
-x_to_one PROVED up to bound 6
+x_to_one REFUTED
 one_to_z REFUTED
 z_to_zero REFUTED
 zero_to_z REFUTED
-z_to_one PROVED up to bound 6
+z_to_one REFUTED
 wide_zero_to_x REFUTED
-wide_x_to_one PROVED up to bound 6
-wide_zero_to_z PROVED up to bound 6
+wide_x_to_one REFUTED
+wide_zero_to_z REFUTED
 wide_z_to_one REFUTED
+zero_to_x_held REFUTED
+x_to_one_held REFUTED
+one_to_z_held PROVED up to bound 6
+z_to_zero_held PROVED up to bound 6
+zero_to_z_held REFUTED
+z_to_one_held REFUTED
+wide_zero_to_x_held REFUTED
+wide_x_to_one_held REFUTED
+wide_zero_to_z_held REFUTED
+wide_z_to_one_held REFUTED
+upper_x_rises PROVED up to bound 6
+upper_x_rises_wrong REFUTED
+upper_x_falls PROVED up to bound 6
+cast_falls PROVED up to bound 6
+cast_rises PROVED up to bound 6
+cast_rises_wrong REFUTED
 assume_next ASSUMED
 next_blocked REFUTED up to bound 6
 next_live PROVED
