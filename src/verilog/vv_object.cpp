@@ -6,6 +6,7 @@
 #include "verilog_types.h"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -144,39 +145,64 @@ vv_objectt vv_objectt::read(const std::string &path)
       path + ":" + std::to_string(nodes.size() + 2) +
       ": malformed typed object");
   };
-  auto count = [&]
+  // Counts and references are written as size_t. They are bounded by the
+  // data that follows and by the records read so far, not by a fixed size.
+  auto number = [&]
   {
     numbert n;
-    if(!(in >> n) || n > 2000000)
+    in >> std::ws;
+    if(!std::isdigit(in.peek()) || !(in >> n))
       bad();
     return n;
   };
   auto ref = [&]() -> const irept &
   {
-    auto n = count();
+    auto n = number();
     if(n >= nodes.size())
       bad();
     return nodes[n];
   };
+  std::vector<std::pair<irep_idt, irept>> fields;
   while(in >> std::ws && in.peek() != EOF)
   {
-    if(in.peek() != '"' || !(in >> std::quoted(id)) || nodes.size() >= 2000000)
+    if(in.peek() != '"' || !(in >> std::quoted(id)))
       bad();
     irept n(id);
-    for(numbert k = count(); k; --k)
+    for(numbert k = number(); k; --k)
       n.get_sub().push_back(ref());
-    for(numbert k = count(); k; --k)
+    fields.clear();
+    for(numbert k = number(); k; --k)
     {
       std::string key;
-      if(
-        !(in >> std::quoted(key)) ||
-        n.get_named_sub().find(key) != n.get_named_sub().end())
+      if(!(in >> std::ws) || in.peek() != '"' || !(in >> std::quoted(key)))
         bad();
-      n.add(key) = ref();
+      fields.emplace_back(key, ref());
     }
+    // The writer orders fields by name; named_sub orders them by identifier.
+    // Sort once and append, instead of a search per field.
+    std::sort(
+      fields.begin(),
+      fields.end(),
+      [](const auto &a, const auto &b) { return a.first < b.first; });
+    if(
+      std::adjacent_find(
+        fields.begin(),
+        fields.end(),
+        [](const auto &a, const auto &b) { return a.first == b.first; }) !=
+      fields.end())
+      bad();
+    auto &named = n.get_named_sub();
+#if NAMED_SUB_IS_FORWARD_LIST
+    auto tail = named.before_begin();
+    for(auto &f : fields)
+      tail = named.emplace_after(tail, f.first, std::move(f.second));
+#else
+    for(auto &f : fields)
+      named.emplace_hint(named.end(), f.first, std::move(f.second));
+#endif
     nodes.push_back(std::move(n));
   }
-  if(nodes.empty() || nodes.back().id() != "object")
+  if(in.bad() || nodes.empty() || nodes.back().id() != "object")
     bad();
   vv_objectt result;
   result.metadata = nodes.back().find("metadata");

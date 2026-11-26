@@ -42,6 +42,54 @@ for config in empty reset env both; do
   expected=REFUTED; if [[ $config = both ]]; then expected='PROVED up to bound 2'; fi
   compare "$config.direct" "$config.typed" bridge.u.p_clean "$expected"
 done
+# Corrupt node records are rejected before binding writes an object.
+for kind in truncated self-reference forward-reference out-of-range \
+  duplicate-field signed-count signed-reference unquoted-field; do
+  input="bad-record-$kind.vv"
+  head -n 1 bridge-1.vv >"$input"
+  case "$kind" in
+    truncated) printf '"leaf" 0 1 "missing" ' >>"$input" ;;
+    self-reference) printf '"leaf" 1 0 0\n' >>"$input" ;;
+    forward-reference) printf '"leaf" 0 1 "next" 1\n' >>"$input" ;;
+    out-of-range) printf '"leaf" 0 0\n"object" 0 1 "metadata" 2000002\n' >>"$input" ;;
+    duplicate-field)
+      printf '"leaf" 0 0\n"object" 0 3 "metadata" 0 "x" 0 "metadata" 0\n' >>"$input" ;;
+    signed-count) sed -n '2,$p' bridge-1.vv | sed '1s/ 0 0$/ -0 0/' >>"$input" ;;
+    signed-reference) sed -n '2,$p' bridge-1.vv | sed '$s/ \([0-9]*\)$/ +\1/' >>"$input" ;;
+    unquoted-field) sed -n '2,$p' bridge-1.vv | sed '$s/"metadata"/metadata/' >>"$input" ;;
+  esac
+  run "bad-record-$kind" bind "$input" empty "bad-record-$kind-out.vv"
+  test "$(cat "bad-record-$kind.rc")" = 2
+  grep -q 'malformed typed object' "bad-record-$kind"
+  test ! -e "bad-record-$kind-out.vv"
+done
+# More than 2,000,000 node records and a record with more than 2,000,000
+# operands, added to the metadata (the record before the root): bind and
+# read back like the small object.
+rows=2000001
+awk -v rows=$rows 'NR == FNR { last = FNR; next }
+  FNR < last - 1 { print; next }
+  FNR == last - 1 {
+    base = FNR - 2
+    for(i = 0; i < rows; ++i) printf "\"e27_row_%d\" 0 0\n", i
+    printf "\"e27_table\" %d", rows
+    for(i = 0; i < rows; ++i) printf " %d", base + i
+    printf " 0\n"
+    fields = 3 + $2
+    $fields = $fields + 1
+    print $0, "\"e27\"", base + rows
+    next }
+  { sub(/ "metadata" [0-9]+$/, " \"metadata\" " base + rows + 1); print }' \
+  bridge-1.vv bridge-1.vv >large.vv
+test "$(wc -l <large.vv)" = $(($(wc -l <bridge-1.vv) + rows + 1))
+bind large.vv empty large-bound.vv
+grep -q "^\"e27_table\" $rows " large-bound.vv
+test "$(wc -l <large-bound.vv)" -gt 2000002
+run large-properties "$eb" --show-properties large-bound.vv
+run small-properties "$eb" --show-properties empty.vv
+test "$(cat large-properties.rc)" = 0
+diff <(sed "/^EBMC version /d" large-properties) <(sed "/^EBMC version /d" small-properties)
+rm large.vv large-bound.vv
 run typed-symbols "$eb" --show-symbol-table both.vv
 test "$(cat typed-symbols.rc)" = 0
 grep -Fq 'Verilog::$root.bridge.u.q' typed-symbols
