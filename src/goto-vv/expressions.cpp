@@ -1,4 +1,7 @@
+#include <util/bitvector_expr.h>
 #include <verilog/sva_expr.h>
+
+#include <slang/ast/ASTVisitor.h>
 
 #include "lower.h"
 
@@ -902,6 +905,23 @@ exprt compilert::expr(
       (c.getSubroutineName() == "$signed" ||
        c.getSubroutineName() == "$unsigned"))
       r = typecast_exprt::conditional_cast(expr(*c.arguments().front()), t);
+    else if(c.isSystemCall() && subroutine == "$onehot0")
+    {
+      if(c.arguments().size() != 1 || !c.arguments().front()->type->isIntegral())
+        fail(at, "$onehot0 requires one packed integral argument");
+      require_read_only(*c.arguments().front(), "unsupported write in $onehot0");
+      EvalContext context(*scope);
+      const auto value = c.eval(context);
+      if(value.isInteger())
+        r = literal(value.integer(), t);
+      else
+      {
+        auto argument = expr(*c.arguments().front());
+        if(argument.type().id() == ID_bool)
+          argument = typecast_exprt{std::move(argument), unsignedbv_typet{1}};
+        r = onehot0_exprt{std::move(argument)};
+      }
+    }
     else if(!c.isSystemCall())
     {
       const auto *callee = std::get<const SubroutineSymbol *>(c.subroutine);
@@ -1152,6 +1172,39 @@ exprt compilert::assertion(
   r.add_source_location() = loc(at);
   return r;
 }
+exprt compilert::gated_assertion(const AssertionExpr &a, SourceLocation at)
+{
+  if(a.syntax)
+    at = a.syntax->sourceRange().start();
+  const auto diagnostic =
+    "clock gate contract requires a single-sample assertion";
+  if(const auto *binary = a.as_if<BinaryAssertionExpr>();
+     binary && binary->op == BinaryAssertionOperator::OverlappedImplication)
+    return verilog_implies_exprt{
+      gated_assertion(binary->left, at), gated_assertion(binary->right, at)}
+      .with_source_location(loc(at));
+
+  const auto *simple = a.as_if<SimpleAssertionExpr>();
+  if(
+    !simple || simple->repetition ||
+    simple->expr.kind == ExpressionKind::AssertionInstance)
+    fail(at, diagnostic);
+
+  require_read_only(simple->expr, "unsupported write in a gated assertion");
+  simple->expr.visit(makeVisitor(
+    [&](auto &visitor, const CallExpression &call)
+    {
+      const auto task = call.getSubroutineName();
+      if(
+        call.isSystemCall() &&
+        (task == "$past" || task == "$rose" || task == "$fell" ||
+         task == "$stable" || task == "$changed" || task == "$sampled"))
+        fail(call.sourceRange.start(), diagnostic);
+      visitor.visitDefault(call);
+    }));
+  return boolean(expr(simple->expr)).with_source_location(loc(at));
+}
+
 void compilert::property(
   const ConcurrentAssertionStatement &a,
   const Symbol &label,
@@ -1159,12 +1212,42 @@ void compilert::property(
 {
   auto at = a.sourceRange.start();
   const auto *timing = clocks.count(&a) ? clocks.at(&a) : nullptr;
-  auto timing_at = timing ? timing->sourceRange.start() : SourceLocation{};
-  auto actual = clock(timing, timing_at ? timing_at : at);
-  if(
-    (a.ifTrue && a.ifTrue->kind != StatementKind::Empty) ||
-    (a.ifFalse && a.ifFalse->kind != StatementKind::Empty))
+  const auto timing_at = timing ? timing->sourceRange.start() : SourceLocation{};
+  const auto *event = timing ? timing->as_if<SignalEventControl>() : nullptr;
+  const auto enable = event ? gated_clock_enable(event->expr) : std::string{};
+  auto actual = enable.empty() ? clock(timing, timing_at ? timing_at : at)
+                              : clock_gate->clock;
+  const AssertionExpr *body = &a.propertySpec;
+  if(!enable.empty())
+  {
+    if(
+      event->edge != EdgeKind::PosEdge || event->iffCondition ||
+      !event->expr.type->isIntegral() || event->expr.type->getBitWidth() != 1 ||
+      a.assertionKind != AssertionKind::Assert)
+      fail(timing_at, "clock gate contract requires an unguarded posedge assert");
+    if(const auto *explicit_clock = body->as_if<ClockingAssertionExpr>())
+    {
+      if(!explicit_clock->clocking.isEquivalentTo(*timing))
+        fail(timing_at, "clock gate contract requires one assertion clock");
+      body = &explicit_clock->expr;
+    }
+  }
+
+  if(a.ifTrue && a.ifTrue->kind != StatementKind::Empty)
     fail(at, "unsupported assertion action");
+  const CallExpression *fatal = nullptr;
+  if(a.ifFalse && a.ifFalse->kind != StatementKind::Empty)
+  {
+    const auto *action = a.ifFalse->as_if<ExpressionStatement>();
+    fatal = action ? action->expr.as_if<CallExpression>() : nullptr;
+    if(
+      enable.empty() || !fatal || !fatal->isSystemCall() ||
+      fatal->getSubroutineName() != "$fatal")
+      fail(at, "unsupported assertion action");
+    for(const auto *argument : fatal->arguments())
+      check_diagnostic_argument(*argument);
+  }
+
   auto &s = add(label, bool_typet());
   s.is_property = true;
   auto origin = a.assertionKind;
@@ -1179,7 +1262,13 @@ void compilert::property(
     fail(at, "unsupported assertion kind");
   irept references("property_references");
   in_clocked_property = true;
-  auto property_expr = as_property(assertion(a.propertySpec, at, references));
+  // The existing gate enable denotes a passed root edge in this preponed
+  // sample. The Boolean implication cannot advance to a later root tick.
+  auto property_expr =
+    enable.empty() ? as_property(assertion(a.propertySpec, at, references))
+                   : exprt{verilog_implies_exprt{
+                       symbol_exprt{enable, bool_typet()},
+                       gated_assertion(*body, at)}};
   in_clocked_property = false;
   auto entry = item(
     id,
@@ -1196,6 +1285,19 @@ void compilert::property(
   info.set("origin", "source");
   info.set("kind", id);
   info.add(ID_C_source_location) = s.location;
+  if(!enable.empty())
+  {
+    const auto source_clock = name(*event->expr.getSymbolReference());
+    info.set("source_clock", source_clock);
+    info.set("gate_output", connected_signal(source_clock));
+    info.set("gate_enable", enable);
+    info.add("source_clock_location") = loc(timing_at);
+    if(fatal)
+    {
+      info.set("failure_action", "$fatal");
+      info.add("failure_action_location") = loc(fatal->sourceRange.start());
+    }
+  }
   if(!references.get_sub().empty())
     info.add("references") = std::move(references);
 }

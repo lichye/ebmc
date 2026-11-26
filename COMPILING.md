@@ -185,6 +185,14 @@ in this order.
     RstSync top.core.rst_sync
     reset-mux top.core.internal_reset
 
+Under the contract, a concurrent assert on a registered gated posedge can
+check a Boolean expression or a chain of overlapping implications evaluated
+at that edge. The check uses the existing effective gate enable and the
+root edge's preponed values. It retains its source label and gated clock
+binding. An `else $fatal` with read-only arguments remains an assertion
+failure. Temporal operators, sampled-history functions and other actions
+require a separate lowering and are diagnosed on gated assertions.
+
 After those bindings, add one line per independent ClockGate to project. Use
 the elaborated instance path. For example:
 

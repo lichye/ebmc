@@ -1,0 +1,6 @@
+coral-w4-env1-env2.v1
+ENV1 gated_sva.test_enable_i
+ENV2 gated_sva.rst_ni gated_sva.clk_i
+RstSync gated_sva.sync
+reset-mux gated_sva.parent_reset
+ClockGate gated_sva.child

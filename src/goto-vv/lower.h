@@ -229,6 +229,7 @@ public:
     const Symbol *label,
     bool at_initial_entry);
   exprt assertion(const AssertionExpr &a, SourceLocation at, irept &references);
+  exprt gated_assertion(const AssertionExpr &a, SourceLocation at);
   std::string clock(const TimingControl *ev, SourceLocation at);
   void module(const InstanceSymbol &inst, bool top);
   void finish_signal_metadata();
