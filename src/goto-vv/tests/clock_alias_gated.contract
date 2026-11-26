@@ -1,0 +1,6 @@
+coral-w4-env1-env2.v1
+ENV1 clock_alias_gated.test_enable_i
+ENV2 clock_alias_gated.rst_ni clock_alias_gated.clk_i
+RstSync clock_alias_gated.sync
+reset-mux clock_alias_gated.parent_reset
+ClockGate clock_alias_gated.child

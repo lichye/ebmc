@@ -560,9 +560,6 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
             ? symbol_exprt{name(*e->getSymbolReference()), type(*e->type)}
           : p.direction == ArgumentDirection::In ? expr(*e)
                                                  : lhs(*e);
-        if(v.id() == ID_symbol)
-          clock_alias[id2string(formal.get_identifier())] =
-            id2string(v.get(ID_identifier));
         inner.operands().push_back(
           item(ID_verilog_named_port_connection, {formal, v}));
       }
@@ -581,8 +578,24 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
         fail(s.location, "unsupported driver strength");
       if(ca.getDelay())
         fail(s.location, "delayed continuous assign");
-      auto assign = item(
-        ID_continuous_assign, {equal_exprt(lhs(a.left()), expr(a.right()))});
+      const auto *target = scalar_clock_signal(&a.left());
+      const auto link = clock_links.find(target);
+      // A pass-through of a registered gate can carry its modeled clock to
+      // another event. Other uses still go through the clock-data check.
+      const bool gated_alias =
+        link != clock_links.end() && link->second.driver == &ca &&
+        gated_clock(a.left());
+      const auto signal = [&](const ValueSymbol &value, const Expression &e)
+      {
+        return symbol_exprt{name(value), type(value.getType())}
+          .with_source_location(loc(e.sourceRange.start()));
+      };
+      auto equality = gated_alias
+                        ? equal_exprt{
+                            signal(*target, a.left()),
+                            signal(*link->second.source, a.right())}
+                        : equal_exprt{lhs(a.left()), expr(a.right())};
+      auto assign = item(ID_continuous_assign, {std::move(equality)});
       assign.add_source_location() = loc(s.location);
       items.operands().push_back(std::move(assign));
       break;
@@ -764,6 +777,7 @@ int compile_design(int argc, char **argv)
     meta.set("undriven", "seq");
     meta.set("sampling", sampling);
     meta.add(ID_C_source_location) = lower.loc(top.location);
+    lower.index_clock_links(top);
     if(clock_gate_contract)
     {
       lower.load_clock_gate(*clock_gate_contract, top);
