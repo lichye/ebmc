@@ -1,0 +1,19 @@
+CORE
+array_read_x_index_uniform1.sv
+--new-ic3
+^\[main\.p3_last\] .*: PROVED$
+^\[main\.p3_oob\] .*: PROVED$
+^\[main\.p4_zero\] .*: PROVED$
+^\[main\.p4_top\] .*: PROVED$
+^\[main\.ps_top\] .*: PROVED$
+^\[main\.ps_neg1\] .*: PROVED$
+^\[main\.ps_neg2\] .*: PROVED$
+^\[main\.x_any\] .*: REFUTED$
+^\[main\.bad4_top\] .*: REFUTED$
+^\[main\.bad3_oob\] .*: REFUTED$
+^\[main\.bads_neg\] .*: REFUTED$
+^\[main\.w_real\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
