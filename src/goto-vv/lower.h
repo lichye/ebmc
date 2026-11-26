@@ -108,6 +108,7 @@ public:
   bool assert_case_qualifiers = false;
   bool in_clocked_property = false;
   bool in_always_comb = false;
+  bool in_always_comb_procedure = false;
   bool in_posedge_process = false;
   bool in_gated_async = false;
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
@@ -173,6 +174,7 @@ public:
     bool assigned = false;
     bool require_full_assignment = false;
     ConstantValue constant;
+    bool case_read_only = false;
   };
   std::map<const Symbol *, procedural_localt> procedural_locals;
   std::map<const Symbol *, ConstantValue> expanded_indices;
