@@ -15,6 +15,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <util/expr_util.h>
 #include <util/mathematical_types.h>
 #include <util/namespace.h>
+#include <util/replace_expr.h>
 #include <util/simplify_expr.h>
 #include <util/std_expr.h>
 #include <util/symbol_table.h>
@@ -1403,6 +1404,39 @@ Function: verilog_rtl_buildert::lower_lhs
 
 \*******************************************************************/
 
+/// An array update a WITH [i:=v] with a single index, as built below.
+static const with_exprt *single_array_update(const exprt &value)
+{
+  if(
+    value.id() != ID_with || value.operands().size() != 3 ||
+    value.type().id() != ID_array)
+    return nullptr;
+  return &to_with_expr(value);
+}
+
+/// The element at internal index \p index of \p array. An element that was
+/// just written at the same index is taken directly.
+static exprt array_element(const exprt &array, const exprt &index)
+{
+  if(const auto *update = single_array_update(array))
+    if(update->where() == index)
+      return update->new_value();
+  return index_exprt{array, index, to_array_type(array.type()).element_type()};
+}
+
+/// \p array WITH [index:=value]. An earlier update of the same index is
+/// overwritten, so it is dropped: (a WITH [i:=v1]) WITH [i:=v2] is
+/// a WITH [i:=v2]. Successive writes to one element, e.g. the byte and bit
+/// writes of a memory word at a runtime address, then remain a single
+/// update of the array, and only the element value grows.
+static exprt update_array_element(exprt array, exprt index, exprt value)
+{
+  if(const auto *update = single_array_update(array))
+    if(update->where() == index)
+      array = update->old();
+  return with_exprt{std::move(array), std::move(index), std::move(value)};
+}
+
 verilog_rtl_buildert::loweredt verilog_rtl_buildert::lower_lhs(
   const exprt &lhs,
   exprt rhs,
@@ -1470,6 +1504,27 @@ verilog_rtl_buildert::loweredt verilog_rtl_buildert::lower_lhs(
 
       if(src.type().get_bool(ID_C_increasing))
         index = minus_exprt{from_integer(width - 1, index.type()), index};
+    }
+
+    if(src.type().id() == ID_array)
+    {
+      // A read of the element being written, e.g. by the read-modify-write
+      // of a part-select write, is the element of the pending update of the
+      // same index, if there is one. Out of range, the update is ignored
+      // either way.
+      if(const auto *update = single_array_update(old_value))
+      {
+        if(update->where() == index)
+        {
+          auto element_read = read_lhs(lhs, state, blocking);
+          replace_expr(element_read, update->new_value(), rhs);
+        }
+      }
+      auto new_value = update_array_element(
+        std::move(old_value), std::move(index), std::move(rhs));
+
+      // recursive call
+      return lower_lhs(src, std::move(new_value), state, blocking);
     }
 
     with_exprt new_value{
@@ -2974,8 +3029,54 @@ void verilog_rtl_buildert::merge_slices(
 
     exprt merged;
 
+    // A guarded whole-word nonblocking write keeps its choice between the
+    // updated and the original memory, which commit_ram_port matches.
+    const auto word_update =
+      process_word_updates.find(symbol_expr.get_identifier());
+    auto element_update = [&](const exprt &value) -> const with_exprt *
+    {
+      if(
+        word_update != process_word_updates.end() &&
+        value == word_update->second)
+        return nullptr;
+      return single_array_update(value);
+    };
+    const auto *then_update = element_update(then_value);
+    const auto *else_update = element_update(else_value);
     if(then_value == else_value)
       merged = then_value;
+    else if(
+      then_update && else_update &&
+      then_update->where() == else_update->where() &&
+      then_update->old() == else_update->old())
+    {
+      // c ? (a WITH [i:=v1]) : (a WITH [i:=v2])  is  a WITH [i:=(c ? v1 : v2)]
+      exprt element =
+        if_exprt{cond, then_update->new_value(), else_update->new_value()};
+      if(bind)
+        element = bind_value(std::move(element), symbol_expr.get_identifier());
+      merged = with_exprt{then_update->old(), then_update->where(), element};
+    }
+    else if(then_update && then_update->old() == else_value)
+    {
+      // c ? (a WITH [i:=v]) : a  is  a WITH [i:=(c ? v : a[i])], an update
+      // of one element instead of a choice between two arrays.
+      const auto &index = then_update->where();
+      exprt element = if_exprt{
+        cond, then_update->new_value(), array_element(else_value, index)};
+      if(bind)
+        element = bind_value(std::move(element), symbol_expr.get_identifier());
+      merged = update_array_element(else_value, index, std::move(element));
+    }
+    else if(else_update && else_update->old() == then_value)
+    {
+      const auto &index = else_update->where();
+      exprt element = if_exprt{
+        cond, array_element(then_value, index), else_update->new_value()};
+      if(bind)
+        element = bind_value(std::move(element), symbol_expr.get_identifier());
+      merged = update_array_element(then_value, index, std::move(element));
+    }
     else
     {
       merged = if_exprt{

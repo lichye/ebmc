@@ -1,0 +1,21 @@
+CORE
+array_partial_writes.sv
+--top main --bound 2
+^\[main\.p_A\] .*: PROVED up to bound 2$
+^\[main\.p_B\] .*: PROVED up to bound 2$
+^\[main\.p_C\] .*: PROVED up to bound 2$
+^\[main\.p_E\] .*: PROVED up to bound 2$
+^\[main\.p_F\] .*: PROVED up to bound 2$
+^\[main\.p_G\] .*: PROVED up to bound 2$
+^\[main\.r_A\] .*: REFUTED$
+^\[main\.r_C\] .*: REFUTED$
+^\[main\.r_G\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+Partial writes into memory words at runtime addresses, compared with a
+reference memory written with one whole word per cycle: byte enables and an
+overlapping write (the later wins), guarded bit writes, writes at two
+addresses that may be equal, blocking writes with reads of the written word,
+nonblocking writes with a read of the old word, read-modify-write of bits.
