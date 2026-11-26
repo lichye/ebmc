@@ -629,7 +629,8 @@ exprt compilert::expr(
       break;
     }
     case UnaryOperator::Minus:
-      r = node(ID_unary_minus, t, {v});
+      r = typecast_exprt::conditional_cast(
+        node(ID_unary_minus, vector_type(t), {as_vector(v)}), t);
       break;
     default:
       fail(at, "unsupported unary " + std::string(toString(u.op)));
@@ -740,6 +741,16 @@ exprt compilert::expr(
         id = ID_or;
       if(id == ID_bitxor)
         id = ID_xor;
+    }
+    if(
+      id == ID_plus || id == ID_minus || id == ID_mult || id == ID_div ||
+      id == ID_mod || id == ID_shl || id == ID_lshr || id == ID_ashr)
+    {
+      // Arithmetic and shifts of scalars, including a scalar shift distance,
+      // are on one-bit vectors.
+      r = typecast_exprt::conditional_cast(
+        node(id, vector_type(t), {as_vector(l), as_vector(v)}), t);
+      break;
     }
     r = node(id, t, {l, v});
     break;
