@@ -1,0 +1,12 @@
+p_x_known PROVED up to bound 3
+r_x_bit0 REFUTED
+r_x_bit1 REFUTED
+p_x_in0 PROVED up to bound 3
+r_x_oob0 REFUTED
+r_x_oob1 REFUTED
+p_b_in0 PROVED up to bound 3
+p_b_in1 PROVED up to bound 3
+r_xs_oob0 REFUTED
+p_xs_oob1 PROVED up to bound 3
+p_bs_oob PROVED up to bound 3
+r_x_prop REFUTED

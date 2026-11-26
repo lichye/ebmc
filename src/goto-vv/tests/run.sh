@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in always_clock_reset type_parameter temporal sampled_sequence sampled_rose wires generate_nested open_outputs local_enum clock_reset clock_reset_low packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read past_depth; do
+for top in always_clock_reset type_parameter temporal sampled_sequence sampled_rose wires generate_nested open_outputs local_enum clock_reset clock_reset_low packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read past_depth packed_runtime_read packed_runtime_read_states; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -207,10 +207,15 @@ for kind in empty standalone; do
 done
 grep -qE 'zero_replication_invalid.sv:2:[0-9]+: error: .*concatenation' zero-replication-empty
 grep -qE 'zero_replication_invalid.sv:7:[0-9]+: error: replication constant can only be zero inside' zero-replication-standalone
+# A runtime index wider than the packed dimension is a guarded read (Spec 31 E9).
 run packed-select-dynamic compile packed_select_dynamic packed-dynamic.vv "$front/tests/packed_select_dynamic.sv"
-grep -qE 'packed_select_dynamic.sv:2:[0-9]+: packed element select requires a known constant index' packed-select-dynamic
-test "$(cat packed-select-dynamic.rc)" = 2
-test ! -e packed-dynamic.vv
+test "$(cat packed-select-dynamic.rc)" = 0
+test -e packed-dynamic.vv
+# An out-of-range runtime read of a two-state element is 0 (1800-2017 7.4.6),
+# as for the explicit flat slice; the native element select leaves it free.
+grep -E '^\[packed_runtime_read_states\.p_b_oob\].*: PROVED up to bound 3$' packed_runtime_read_states.typed >/dev/null
+grep -E '^\[packed_runtime_read_states\.p_b_prop\].*: PROVED up to bound 3$' packed_runtime_read_states.typed >/dev/null
+grep -E '^\[packed_runtime_read_states\.p_b_oob\].*: REFUTED$' packed_runtime_read_states.direct >/dev/null
 run packed-select-oob "$vv" compile packed-oob.vv --top packed_select_oob -Wno-error=index-oob "$front/tests/packed_select_oob.sv"
 grep -qE 'packed_select_oob.sv:2:[0-9]+: packed element select index is out of range' packed-select-oob
 test "$(cat packed-select-oob.rc)" = 2
@@ -218,7 +223,9 @@ test ! -e packed-oob.vv
 grep -Fqx '"1z" 0 0' packed_select.vv
 grep -Fqx '"x1" 0 0' packed_select.vv
 automatic_invalid="$front/tests/automatic_locals_invalid.sv"
-for kind in unassigned partial dynamic oob; do
+run automatic-dynamic compile automatic_dynamic automatic-dynamic.vv "$front/tests/automatic_locals_invalid.sv"
+test "$(cat automatic-dynamic.rc)" = 0
+for kind in unassigned partial oob; do
   log="automatic-$kind"
   run "$log" compile "automatic_$kind" "$log.vv" "$automatic_invalid"
   test "$(cat "$log.rc")" = 2
@@ -226,7 +233,6 @@ for kind in unassigned partial dynamic oob; do
 done
 grep -qE 'automatic_locals_invalid.sv:8:[0-9]+: automatic local read before assignment: tmp' automatic-unassigned
 grep -qE 'automatic_locals_invalid.sv:19:[0-9]+: unsupported assignment to an automatic local' automatic-partial
-grep -qE 'automatic_locals_invalid.sv:31:[0-9]+: packed element select requires a known constant index' automatic-dynamic
 grep -qE 'automatic_locals_invalid.sv:42:[0-9]+: packed element select index is out of range' automatic-oob
 run constant-guard-indivisible "$vv" compile indivisible.vv --top constant_guard \
   -G MLEN=7 "$front/tests/constant_guard.sv"
@@ -250,13 +256,14 @@ run packed-range-oob "$vv" compile packed-range-oob.vv --top packed_range_oob -W
 grep -qE 'packed_range_oob.sv:2:[0-9]+: packed range select is out of range' packed-range-oob
 test "$(cat packed-range-oob.rc)" = 2
 test ! -e packed-range-oob.vv
-for kind in dynamic oob; do
+run counted-packed-dynamic compile counted_packed_dynamic counted-packed-dynamic.vv "$front/tests/counted_packed_invalid.sv"
+test "$(cat counted-packed-dynamic.rc)" = 0
+for kind in oob; do
   log="counted-packed-$kind"
   run "$log" compile "counted_packed_$kind" "$log.vv" "$front/tests/counted_packed_invalid.sv"
   test "$(cat "$log.rc")" = 2
   test ! -e "$log.vv"
 done
-grep -qE 'counted_packed_invalid.sv:6:[0-9]+: packed element select requires a known constant index' counted-packed-dynamic
 grep -qE 'counted_packed_invalid.sv:16:[0-9]+: packed element select index is out of range' counted-packed-oob
 for kind in live dynamic write; do
   log="counted-guard-$kind"
@@ -306,14 +313,17 @@ run modulo-flat.direct "$eb" --top modulo_bank_read --undriven seq --bound 3 \
 while read -r name expected; do
   compare modulo-flat.direct modulo_bank_read.typed "modulo_bank_read.$name" "$expected"
 done <"$front/tests/modulo_bank_read.expected"
-for probe in signed:3 zero:9 dynamic:15 wrong_count:21 nonzero_base:27; do
-  kind=${probe%:*}
-  line=${probe#*:}
+# Remainders that can leave the declared range are guarded runtime reads
+# (Spec 31 E9); the result matches the native front end.
+for kind in signed zero dynamic wrong_count nonzero_base; do
   log="modulo-read-$kind"
-  run "$log" compile "modulo_bank_read_$kind" "$log.vv" "$front/tests/modulo_bank_read_invalid.sv"
-  test "$(cat "$log.rc")" = 2
-  test ! -e "$log.vv"
-  grep -qE "modulo_bank_read_invalid.sv:$line:[0-9]+: packed element select requires a known constant index" "$log"
+  top="modulo_bank_read_$kind"
+  run "$log" compile "$top" "$log.vv" "$front/tests/modulo_bank_read_invalid.sv"
+  test "$(cat "$log.rc")" = 0
+  bind "$log.vv" empty "$log-check.vv"
+  run "$log.direct" "$eb" --top "$top" --undriven seq --bound 3 "$front/tests/modulo_bank_read_invalid.sv"
+  run "$log.typed" "$eb" --undriven seq --bound 3 "$log-check.vv"
+  compare "$log.direct" "$log.typed" "$top.p" REFUTED
 done
 run final-control-compile "$vv" compile final-control.vv --single-unit --top empty_final \
   -D OMIT_FINAL "$front/tests/empty_final.sv"
@@ -360,7 +370,14 @@ for probe in wide:3 gap:8 negative:13 lvalue:20; do
   run "$log" compile "packed_read_$kind" "$log.vv" "$front/tests/packed_read_invalid.sv"
   test "$(cat "$log.rc")" = 2
   test ! -e "$log.vv"
-  grep -qE "packed_read_invalid.sv:$line:[0-9]+: packed element select requires a known constant index" "$log"
+  if [[ $kind == lvalue ]]; then
+    grep -qE "packed_read_invalid.sv:$line:[0-9]+: packed element select requires a known constant index" "$log"
+  else
+    # Wide, gapped and signed runtime reads are guarded reads (Spec 31 E9),
+    # see packed_runtime_read; these modules only lack a clock.
+    ! grep -qE "packed element select requires" "$log"
+    grep -qE "packed_read_invalid.sv:[0-9]+: unbound primary clock" "$log"
+  fi
 done
 open_inputs="$front/tests/open_inputs.sv"
 compile open_inputs open-inputs.vv "$open_inputs"

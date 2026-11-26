@@ -122,6 +122,19 @@ typet full_packed_offset_type(
                              : typet(unsignedbv_typet(width));
 }
 
+/// A signed type that holds every value of a selector of \p selector type
+/// and its distance from any declared index of \p array, times the element
+/// width, so that the layout arithmetic cannot wrap.
+signedbv_typet
+wide_packed_offset_type(const PackedArrayType &array, const Type &selector)
+{
+  const std::size_t index_bits =
+    std::max<std::size_t>(selector.getBitWidth(), 32);
+  const std::size_t stride_bits =
+    std::bit_width(uint64_t(array.elementType.getBitWidth()));
+  return signedbv_typet(index_bits + stride_bits + 3);
+}
+
 exprt as_sequence(exprt e)
 {
   if(e.type().id() == ID_bool)
@@ -196,6 +209,50 @@ ConstantRange compilert::packed_range(
     selection->isDescending() != array.range.isDescending())
     fail(at, "packed range select goes against the declared direction");
   return *selection;
+}
+
+/// A read of a packed array element with a runtime index whose values can
+/// fall outside the declared range, e.g. data_i[in][in_p] with a one-bit
+/// in_p on a one-element dimension (1800-2017 7.4.6, 11.5.1). The index is
+/// compared with the declared bounds at its full value, never narrowed
+/// first, so an out-of-range value cannot wrap onto a declared element. It
+/// then reads x for a four-state element and 0 for a two-state element.
+exprt compilert::runtime_packed_element_read(
+  const ElementSelectExpression &el,
+  const PackedArrayType &array,
+  const typet &t)
+{
+  const auto &selector = el.selector();
+  const auto wide = wide_packed_offset_type(array, *selector.type);
+  // Sign or zero extension keeps the selector value.
+  auto index = typecast_exprt::conditional_cast(expr(selector), wide);
+  auto in_range = and_exprt{
+    binary_relation_exprt{
+      index, ID_ge, from_integer(array.range.lower(), wide)},
+    binary_relation_exprt{
+      index, ID_le, from_integer(array.range.upper(), wide)}};
+  auto offset = packed_element_offset(array, std::move(index));
+  auto base = expr(el.value());
+  const auto element_width = array.elementType.getBitWidth();
+  exprt read;
+  if(t.id() == ID_bool)
+    read = verilog_bit_select_exprt(std::move(base), std::move(offset), t);
+  else
+    read = verilog_indexed_part_select_plus_or_minus_exprt(
+      ID_verilog_indexed_part_select_plus,
+      std::move(base),
+      std::move(offset),
+      index_constant(element_width),
+      t);
+  exprt missing = array.elementType.isFourState()
+                    ? typecast_exprt::conditional_cast(
+                        constant_exprt(
+                          std::string(element_width, 'x'),
+                          verilog_unsignedbv_typet(element_width)),
+                        t)
+                    : typecast_exprt::conditional_cast(
+                        from_integer(0, unsignedbv_typet(element_width)), t);
+  return if_exprt{std::move(in_range), std::move(read), std::move(missing), t};
 }
 
 std::optional<exprt>
@@ -622,14 +679,18 @@ exprt compilert::expr(
     const auto selected = eval_known(selector);
     if(!selected.isInteger() || selected.integer().hasUnknown())
     {
-      if(
-        lvalue || selected ||
-        (!covers_packed_dimension(*selector.type, array->range) &&
-         !modulo_covers_packed_dimension(selector, array->range, *scope)))
+      if(lvalue || selected)
         fail(
           index_at,
           "packed element select requires a known constant index or a "
           "runtime read index whose value domain matches the declared range");
+      if(
+        !covers_packed_dimension(*selector.type, array->range) &&
+        !modulo_covers_packed_dimension(selector, array->range, *scope))
+      {
+        r = runtime_packed_element_read(el, *array, t);
+        break;
+      }
       // Evaluate the selector at its original type before converting its
       // proven in-range result for the packed layout calculation.
       auto offset = packed_element_offset(

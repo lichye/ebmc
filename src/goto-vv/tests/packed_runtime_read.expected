@@ -1,0 +1,17 @@
+p_one PROVED up to bound 3
+p_two PROVED up to bound 3
+p_bit_in PROVED up to bound 3
+r_bit_wrap REFUTED
+r_bit_free REFUTED
+p_vc_in0 PROVED up to bound 3
+p_vc_in1 PROVED up to bound 3
+r_vc_wrap2 REFUTED
+r_vc_wrap3 REFUTED
+p_wide_in PROVED up to bound 3
+r_wide_wrap5 REFUTED
+r_wide_wrap129 REFUTED
+p_neg_in PROVED up to bound 3
+r_neg_wrap1 REFUTED
+r_neg_wrap2 REFUTED
+p_slice PROVED up to bound 3
+p_member PROVED up to bound 3
