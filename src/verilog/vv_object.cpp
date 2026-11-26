@@ -357,6 +357,7 @@ void vv_objectt::validate(bool require_constraints) const
   std::map<irep_idt, irep_idt> connections;
   std::vector<std::pair<irep_idt, source_locationt>> edges;
   std::set<irep_idt> bound_properties;
+  std::map<irep_idt, std::size_t> diagnostic_calls;
   for(auto &entry : symbols.symbols)
   {
     const auto &s = entry.second;
@@ -376,8 +377,12 @@ void vv_objectt::validate(bool require_constraints) const
         p.get("sampling") != metadata.get("sampling"))
         error(s.location, "unverified clock for " + id2string(s.name));
     }
-    if(s.value.id() != ID_verilog_module)
+    const bool function_diagnostics =
+      s.type.id() == ID_code && s.type.get_bool("#vv_function_diagnostics");
+    if(s.value.id() != ID_verilog_module && !function_diagnostics)
       continue;
+    if(function_diagnostics && s.value.id() != ID_block)
+      error(s.location, "invalid runtime diagnostic function");
     auto check = [&](auto &&self, const irept &n) -> void
     {
       const auto &where =
@@ -488,18 +493,36 @@ void vv_objectt::validate(bool require_constraints) const
             "bad signal binding " + id2string(n.get(ID_identifier)));
       }
       if(
+        n.id() == ID_function_call && n.get_sub().size() == 2 &&
+        n.get_sub().front().id() == ID_symbol)
+      {
+        const auto *callee =
+          symbols.lookup(n.get_sub().front().get(ID_identifier));
+        if(callee && callee->type.get_bool("#vv_function_diagnostics"))
+          ++diagnostic_calls[callee->name];
+      }
+      if(
         n.id() == ID_verilog_assert_property ||
         n.id() == ID_verilog_assume_property ||
         n.id() == ID_verilog_cover_property ||
         n.id() == ID_verilog_immediate_assert)
       {
         auto target = symbols.lookup(n.get(ID_identifier));
+        const auto &property =
+          metadata.find("properties").find(n.get(ID_identifier));
         if(
           !target || !target->is_property || n.get_sub().size() != 2 ||
-          metadata.find("properties").find(target->name).get("kind") !=
-            n.id() ||
+          property.get("kind") != n.id() ||
           !bound_properties.insert(target->name).second)
           error(where, "bad property binding");
+        if(
+          function_diagnostics &&
+          (n.id() != ID_verilog_immediate_assert ||
+           property.get("origin") != "function-diagnostic-task" ||
+           property.get("function") != s.name ||
+           property.find("function_location").is_nil() ||
+           property.find("inner_call_location").is_nil()))
+          error(where, "bad runtime diagnostic property binding");
       }
       for(const auto key :
           {verilog_case_statement_baset::overlap_check,
@@ -522,9 +545,13 @@ void vv_objectt::validate(bool require_constraints) const
     };
     check(check, s.value);
   }
-  for(const auto &s : symbols.symbols)
-    if(s.second.is_property && !bound_properties.count(s.first))
-      error(s.second.location, "property symbol without a module item");
+  for(const auto &[id, s] : symbols.symbols)
+  {
+    if(s.is_property && !bound_properties.count(id))
+      error(s.location, "property symbol without a module item");
+    if(s.type.get_bool("#vv_function_diagnostics") && diagnostic_calls[id] != 1)
+      error(s.location, "runtime diagnostic function requires one bound call");
+  }
   for(auto &edge : edges)
   {
     std::set<irep_idt> seen;
