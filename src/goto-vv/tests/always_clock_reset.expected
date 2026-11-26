@@ -1,0 +1,6 @@
+p_high_reset PROVED up to bound 3
+p_high_update PROVED up to bound 3
+p_low_reset PROVED up to bound 3
+p_low_update PROVED up to bound 3
+p_high_bad REFUTED
+p_low_bad REFUTED
