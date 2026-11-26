@@ -1,0 +1,12 @@
+CORE
+netlist_next_assumption.sv
+--aig --finite-prefix --bound 1 --property main.initial_reset --trace
+^\[main\.hold_reset\].*: ASSUMED$
+^\[main\.initial_reset\].*: PROVED up to bound 1$
+^EXIT=0$
+^SIGNAL=0$
+--
+^Transition system state 0$
+assumption not supported
+--
+The in-bound next-frame assumption rules out the finite path that releases reset.

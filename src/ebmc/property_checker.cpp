@@ -280,7 +280,9 @@ bool compile_bounded_netlist_property(
       literals->resize(bound + 1);
     }
   }
-  else if(!cmdline.isset("finite-prefix") && !cmdline.isset("dimacs"))
+  else if(
+    !cmdline.isset("dimacs") &&
+    (p.is_assumed() || !cmdline.isset("finite-prefix")))
     literals = bounded_netlist_obligations(
       p, netlist.var_map, frames, bound, ns, solver, messages);
   if(!literals)
