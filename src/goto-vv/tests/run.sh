@@ -50,7 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
-for top in type_parameter temporal sampled_sequence sampled_rose wires generate_nested open_outputs local_enum clock_reset clock_reset_low packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read past_depth; do
+for top in always_clock_reset type_parameter temporal sampled_sequence sampled_rose wires generate_nested open_outputs local_enum clock_reset clock_reset_low packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read past_depth; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"
   bind "$top.vv" empty "$top-check.vv"
@@ -148,6 +148,28 @@ sed 's/^"negedge" /"posedge" /' clock_reset_low-check.vv >wrong-reset-object.vv
 run wrong-reset-object "$eb" --show-symbol-table wrong-reset-object.vv
 grep -qE 'clock_reset_low\.sv:3:.*invalid clock/reset guard in always_ff' wrong-reset-object
 test "$(cat wrong-reset-object.rc)" = 6
+for polarity in high low; do
+  if [[ $polarity = high ]]; then
+    line=3
+    sed 's/if (rst)/if (!rst)/' "$front/tests/always_clock_reset.sv" >"always-wrong-$polarity.sv"
+  else
+    line=9
+    sed 's/if (!rst_n)/if (rst_n)/' "$front/tests/always_clock_reset.sv" >"always-wrong-$polarity.sv"
+  fi
+  run "always-wrong-$polarity" compile always_clock_reset "always-wrong-$polarity.vv" "always-wrong-$polarity.sv"
+  grep -qE "always-wrong-$polarity.sv:$line:[0-9]+: expected a reset edge matching the outer if" "always-wrong-$polarity"
+  test "$(cat "always-wrong-$polarity.rc")" = 2
+  test ! -e "always-wrong-$polarity.vv"
+  for route in direct typed; do
+    grep -Fq "always_clock_reset.p_${polarity}_bad: finite bad frame 1 has an infinite extension by totality" "always_clock_reset.$route"
+  done
+done
+grep -q '^"verilog_always" ' always_clock_reset-check.vv
+if grep -q '^"verilog_always_ff" ' always_clock_reset-check.vv; then exit 1; fi
+sed 's/^"negedge" /"posedge" /' always_clock_reset-check.vv >always-wrong-object.vv
+run always-wrong-object "$eb" --show-symbol-table always-wrong-object.vv
+grep -qE 'always_clock_reset\.sv:9:.*invalid clock/reset guard in always$' always-wrong-object
+test "$(cat always-wrong-object.rc)" = 6
 # A semantic analysis error must stop compilation before an object is written.
 sed '/always_ff/i\  initial q = 0;' "$front/tests/bridge.sv" >driver-conflict.sv
 run driver-conflict compile bridge driver-rejected.vv driver-conflict.sv
