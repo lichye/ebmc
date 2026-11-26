@@ -1,0 +1,6 @@
+coral-w4-env1-env2.v1
+ENV1 low_reset_gate.test_enable_i
+ENV2 low_reset_gate.rst_ni low_reset_gate.clk_i
+RstSync low_reset_gate.sync
+reset-mux low_reset_gate.parent_reset
+ClockGate low_reset_gate.child
