@@ -1,0 +1,6 @@
+coral-w4-env1-env2.v1
+ENV1 sliced.test_enable_i
+ENV2 sliced.rst_ni sliced.clk_i
+RstSync sliced.sync
+reset-mux sliced.parent_reset
+ClockGate sliced.child

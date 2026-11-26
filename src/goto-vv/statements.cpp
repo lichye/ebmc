@@ -1087,13 +1087,21 @@ exprt compilert::stmt(const Statement &s)
           a.left().sourceRange.start(),
           "unsupported compound assignment target");
     }
-    if(auto write = a.isNonBlocking() ? dynamic_packed_write(a)
-                                     : dynamic_packed_bank_write(a))
+    const bool gated_write = in_gated_async && a.isNonBlocking();
+    if(gated_write && a.timingControl)
+      fail(
+        at, "clock gate contract requires undelayed nonblocking assignments");
+    if(!gated_write)
     {
-      r = std::move(*write);
-      break;
+      if(
+        auto write = a.isNonBlocking() ? dynamic_packed_write(a)
+                                       : dynamic_packed_bank_write(a))
+      {
+        r = std::move(*write);
+        break;
+      }
     }
-    auto target_expr = lhs(a.left());
+    auto target_expr = gated_write ? gated_async_lhs(a.left()) : lhs(a.left());
     // The typed RHS reads this target in the current procedural state.
     auto rhs = expr(a.right(), a.op ? &target_expr : nullptr);
     r = item(

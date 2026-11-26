@@ -103,6 +103,7 @@ public:
   bool assert_errors = false;
   bool in_clocked_property = false;
   bool in_always_comb = false;
+  bool in_gated_async = false;
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
   std::map<std::string, std::string> clock_alias;
   struct clock_gate_branch_t
@@ -144,6 +145,7 @@ public:
   void load_clock_gate(const std::string &, const InstanceSymbol &);
   void emit_clock_gate(exprt &);
   void emit_clock_environment(exprt &);
+  exprt gated_async_lhs(const Expression &);
   std::optional<exprt> gated_statement(
     const ProceduralBlockSymbol &,
     const TimedStatement &,

@@ -36,8 +36,8 @@ sed 's/\.arst_n(~reset)/.arst_n(reset)/' "$fixture" > wrong-source-polarity.sv
 reject wrong-source-polarity 'wrong-source-polarity.sv:[0-9]+:[0-9]+: .*cannot prove the independent asynchronous reset timing' --clock-gate-contract "$contract" wrong-source-polarity.sv
 sed 's/\.reset(test_enable_i ? ~rst_ni : csr_reset | debug_reset)/.reset(foreign_rst)/' "$fixture" > unknown-source.sv
 reject unknown-source 'unknown-source.sv:[0-9]+:[0-9]+: .*cannot prove the independent asynchronous reset timing' --clock-gate-contract "$contract" unknown-source.sv
-sed 's/__q <= (__reset_value)/__q[0] <= (__reset_value)/' "$fixture" > partial-reset.sv
-reject partial-reset 'partial-reset.sv:[0-9]+:[0-9]+: .*requires full constant nonblocking reset assignments' --clock-gate-contract "$contract" partial-reset.sv
+sed 's/__q <= (__reset_value)/__q[data[0]] <= (__reset_value)/' "$fixture" > dynamic-reset.sv
+reject dynamic-reset 'dynamic-reset.sv:[0-9]+:[0-9]+: .*requires a static in-range packed target' --clock-gate-contract "$contract" dynamic-reset.sv
 
 run compile "$vv" compile compiled.vv "${flags[@]}" --clock-gate-contract "$contract" "$fixture"
 test "$(cat compile.rc)" = 0

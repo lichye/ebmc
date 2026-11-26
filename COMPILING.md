@@ -161,6 +161,11 @@ supported. The scalar reset signal may resolve through aliases and inversions
 to a proved reset source with the same assertion polarity. Synchronous clear
 and load in the remaining branch still require the gated clock edge.
 
+A gated asynchronous process can drive a statically resolved packed interval.
+The reset and each nonblocking update must target the same interval. Other
+drivers can own disjoint intervals, including continuous inputs to adjacent
+pipeline stages. Overlapping, dynamic or unproved writes are diagnosed.
+
 ENV1 fixes the bound test input to zero. ENV2 treats external reset as a
 boundary input driven after the root rising-edge preponed sample. The model
 requires at least two low samples for each assertion. Internal asynchronous
