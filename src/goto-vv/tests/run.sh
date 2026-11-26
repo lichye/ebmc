@@ -54,6 +54,7 @@ EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_contract.sh" "$work/clock-
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_cascade.sh" "$work/clock-gate-cascade"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_low_reset.sh" "$work/clock-gate-low-reset"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_static_slices.sh" "$work/clock-gate-static-slices"
+EBMC="$eb" VV_BIN="$vv" bash "$front/tests/gated_sva.sh" "$work/gated-sva"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clocked_loop_local.sh" "$work/clocked-loop-local"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/case_qualifiers.sh" "$work/case-qualifiers"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/initial_parameter_assertions.sh" "$work/initial-parameter-assertions"
