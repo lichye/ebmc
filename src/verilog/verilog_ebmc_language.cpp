@@ -25,6 +25,7 @@ Author: Daniel Kroening, dkr@amazon.com
 #include <trans-word-level/next_symbol.h>
 #include <trans-word-level/show_module_hierarchy.h>
 
+#include "clock_gate_contract.h"
 #include "top_level_modules.h"
 #include "verilog_bind.h"
 #include "verilog_elaborate_compilation_unit.h"
@@ -793,6 +794,28 @@ std::optional<transition_systemt> verilog_ebmc_languaget::transition_system(
   return transition_system;
 }
 
+void ebmc::apply_clock_gate_contract(
+  const vv_objectt &object,
+  transition_systemt &system,
+  bool start_reset)
+{
+  if(!object.has_clock_gate())
+    return;
+
+  const auto &gate = object.metadata.find("clock_gate_contract");
+  auto signal = [&](const char *key)
+  { return system.symbol_table.lookup_ref(gate.get(key)).symbol_expr(); };
+  auto reset = not_exprt{signal("ENV2")};
+  // The contract restricts the model even when a verification engine or a
+  // property selection treats the labelled assumptions as individual checks.
+  system.trans_expr.invar() = and_exprt{
+    system.trans_expr.invar(),
+    not_exprt{signal("ENV1")},
+    implies_exprt{signal("ENV2_due"), reset}};
+  if(start_reset)
+    system.trans_expr.init() = and_exprt{system.trans_expr.init(), reset};
+}
+
 std::optional<transition_systemt>
 verilog_ebmc_languaget::receive(vv_objectt object)
 {
@@ -835,21 +858,8 @@ verilog_ebmc_languaget::receive(vv_objectt object)
     std::move(object.symbols),
     undriven == "const",
     {});
-  if(object.has_clock_gate())
-  {
-    const auto &gate = object.metadata.find("clock_gate_contract");
-    auto signal = [&](const char *key)
-    { return result.symbol_table.lookup_ref(gate.get(key)).symbol_expr(); };
-    auto reset = not_exprt{signal("ENV2")};
-    // The contract restricts the model even when a verification engine or a
-    // property selection treats the labelled assumptions as individual checks.
-    result.trans_expr.invar() = and_exprt{
-      result.trans_expr.invar(),
-      not_exprt{signal("ENV1")},
-      implies_exprt{signal("ENV2_due"), reset}};
-    if(object.metadata.get_bool("clock_gate_start_reset"))
-      result.trans_expr.init() = and_exprt{result.trans_expr.init(), reset};
-  }
+  ebmc::apply_clock_gate_contract(
+    object, result, object.metadata.get_bool("clock_gate_start_reset"));
   const auto reset = object.metadata.get("reset");
   if(!reset.empty())
     create_reset_logic(id2string(reset), result);
