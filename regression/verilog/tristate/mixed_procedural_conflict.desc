@@ -1,0 +1,7 @@
+CORE
+mixed_procedural_conflict.sv
+--bound 1
+has multiple drivers$
+\[0\] overlaps \[1:0\] driven at .*mixed_procedural_conflict\.sv line 11
+^EXIT=2$
+^SIGNAL=0$
