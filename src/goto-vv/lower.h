@@ -217,6 +217,9 @@ public:
   exprt declare_function_local(const VariableSymbol &variable);
   exprt runtime_call(const CallExpression &call);
   exprt clock_reset_block(const TimedStatement &block);
+  bool checked_level_event(
+    const ProceduralBlockSymbol &procedure,
+    const TimedStatement &timed);
   exprt procedural_assertion(
     SourceLocation at,
     const std::string &base,

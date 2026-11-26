@@ -173,6 +173,19 @@ evaluation, including previous iterations of a statically bounded loop.
 The local symbol is scoped to the procedure and carries no state between
 evaluations.
 
+### Explicit level sensitivity
+
+A plain `always` with an outer list of level events uses the existing
+`always @*` lowering after the compiler proves coverage of the procedure's
+external reads. Named signals and static slices contribute their covered
+ranges. Slang's data-flow read sets include conditions, values and write
+selectors. Calls require an analyzable body or a supported pure system
+function. Block-local temporaries use definite assignment checks.
+
+Mixed edges, incomplete sensitivity, and behavior requiring storage or
+additional event scheduling are diagnosed. A dynamic write requires a
+separate unconditional whole-object assignment in the same procedure.
+
 ### Temporary Coral clock gate contract
 
 `goto-vv compile --clock-gate-contract FILE` opts into the temporary Coral W4

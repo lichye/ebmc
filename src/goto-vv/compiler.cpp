@@ -631,7 +631,9 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       // Explicit edge controls retain their resolved signals.
       const auto *timed = body.as_if<TimedStatement>();
       exprt statement;
-      in_always_comb = kind == "AlwaysComb";
+      const bool level_combinational =
+        kind == "Always" && timed && checked_level_event(p, *timed);
+      in_always_comb = kind == "AlwaysComb" || level_combinational;
       const auto *event =
         timed ? timed->timing.as_if<SignalEventControl>() : nullptr;
       in_posedge_process = (kind == "Always" || kind == "AlwaysFF") && event &&
@@ -642,7 +644,8 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
         statement = std::move(*gated);
       else if(
         kind == "Always" && timed &&
-        timed->timing.kind == TimingControlKind::ImplicitEvent)
+        (level_combinational ||
+         timed->timing.kind == TimingControlKind::ImplicitEvent))
         statement = item(
           ID_event_guard,
           {typecast_exprt(item(ID_verilog_star_event), bool_typet()),
