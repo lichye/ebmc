@@ -8,6 +8,14 @@
 // Experiment schema. Stable identities are fully-qualified symbol names.
 struct vv_objectt
 {
+  static constexpr auto clock_gate_v1 = "coral-w4-env1-env2.v1";
+  static constexpr auto clock_gate_sampling =
+    "posedge-preponed/after-edge-external-reset/async-priority";
+  bool has_clock_gate() const
+  {
+    return metadata.find("clock_gate_contract").is_not_nil();
+  }
+  std::string clock_gate_description() const;
   symbol_tablet symbols;
   irept metadata{"design"};
   void write(const std::string &path) const;

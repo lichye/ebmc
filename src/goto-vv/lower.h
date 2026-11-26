@@ -93,6 +93,25 @@ public:
   bool in_always_comb = false;
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
   std::map<std::string, std::string> clock_alias;
+  struct clock_gatet
+  {
+    const InstanceSymbol *sync = nullptr;
+    std::map<std::string, std::string> ports;
+    std::map<std::string, const ValueSymbol *> signals;
+    std::string clock, reset_n, test, output, reset;
+    std::string enable;
+  };
+  std::optional<clock_gatet> clock_gate;
+  std::map<std::string, std::string> gate_connections;
+  std::string connected_signal(std::string) const;
+  bool gated_clock(const Expression &) const;
+  void load_clock_gate(const std::string &, const InstanceSymbol &);
+  void emit_clock_gate(exprt &);
+  void emit_clock_environment(exprt &);
+  std::optional<exprt> gated_statement(
+    const ProceduralBlockSymbol &,
+    const TimedStatement &,
+    exprt &);
   std::map<const Symbol *, exprt> locals;
   struct procedural_localt
   {

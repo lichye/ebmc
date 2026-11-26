@@ -357,6 +357,8 @@ exprt compilert::expr(
   bool lvalue)
 {
   const auto at = e.sourceRange.start();
+  if(gated_clock(e))
+    fail(at, "clock gate contract does not support gated clock data use");
   auto t = type(*e.type, at);
   auto check_select = [&](const Expression &base)
   {
@@ -902,6 +904,8 @@ std::string compilert::clock(const TimingControl *tc, SourceLocation at)
     fail(at, "requires one resolved signal event");
   auto &ev = tc->as<SignalEventControl>();
   auto *sym = ev.expr.getSymbolReference();
+  if(gated_clock(ev.expr))
+    fail(at, "clock gate contract supports gated process clocks only");
   if(
     ev.edge != EdgeKind::PosEdge ||
     ev.expr.kind != ExpressionKind::NamedValue || !sym || ev.iffCondition ||

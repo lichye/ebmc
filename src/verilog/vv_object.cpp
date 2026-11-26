@@ -16,6 +16,7 @@
 namespace
 {
 const std::string header = "goto-vv 1 slang-11.0.0 ebmc-eae879de";
+const std::string clock_gate_header = header + " clock-gate-contract-v1";
 using numbert = std::size_t;
 using fields_t = std::map<std::string, const irept *>;
 
@@ -106,7 +107,7 @@ void vv_objectt::write(const std::string &path) const
   std::ofstream out(path);
   if(!out)
     throw std::runtime_error("cannot open " + path);
-  out << header << '\n';
+  out << (has_clock_gate() ? clock_gate_header : header) << '\n';
   irept root("object");
   root.add("metadata") = metadata;
   std::map<std::string, const symbolt *> sorted;
@@ -123,9 +124,10 @@ vv_objectt vv_objectt::read(const std::string &path)
 {
   std::ifstream in(path);
   std::string line;
-  if(!std::getline(in, line) || line != header)
+  if(!std::getline(in, line) || (line != header && line != clock_gate_header))
     throw std::runtime_error(
       path + ":1: unsupported goto-vv schema or tool versions");
+  const bool clock_gate = line == clock_gate_header;
   std::vector<irept> nodes;
   std::string id;
   auto bad = [&]
@@ -173,8 +175,28 @@ vv_objectt vv_objectt::read(const std::string &path)
   for(const auto &r : nodes.back().get_sub())
     if(r.id() != "symbol_record" || result.symbols.add(unpack(r)))
       bad();
+  if(result.has_clock_gate() != clock_gate)
+    bad();
   return result;
 }
+
+std::string vv_objectt::clock_gate_description() const
+{
+  const auto &gate = metadata.find("clock_gate_contract");
+  return id2string(gate.id()) + " (temporary) ENV1 " +
+         id2string(gate.get("ENV1")) + "=0 | ENV2 " +
+         id2string(gate.get("ENV2")) + " changes only at " +
+         id2string(gate.get("master")) +
+         " rising boundaries, at least two low samples | " +
+         id2string(gate.get("sampling")) + " | gate " +
+         id2string(gate.get("gate")) + " | RstSync " +
+         id2string(gate.get("RstSync")) + " | reset mux " +
+         id2string(gate.get("reset_mux")) +
+         (metadata.get_bool("clock_gate_start_reset")
+            ? " | initial low required"
+            : "");
+}
+
 void vv_objectt::validate(bool require_constraints) const
 {
   auto loc =
@@ -210,6 +232,43 @@ void vv_objectt::validate(bool require_constraints) const
     if(!primary_input(r))
       error(loc, "invalid reset binding");
   }
+  if(has_clock_gate())
+  {
+    const auto &gate = metadata.find("clock_gate_contract");
+    auto stage = metadata.get("stage");
+    const auto *gate_net = symbols.lookup(gate.get("gate"));
+    const auto *mux = symbols.lookup(gate.get("reset_mux"));
+    const auto *due = symbols.lookup(gate.get("ENV2_due"));
+    const bool initial = metadata.get_bool("clock_gate_start_reset");
+    if(
+      gate.id() != clock_gate_v1 ||
+      gate.get("sampling") != clock_gate_sampling ||
+      gate.get("master") != clock->name ||
+      !primary_input(symbols.lookup(gate.get("ENV1"))) ||
+      !primary_input(symbols.lookup(gate.get("ENV2"))) ||
+      gate.get("ENV1") == gate.get("ENV2") || gate.get("ENV1") == clock->name ||
+      gate.get("ENV2") == clock->name || !gate_net || !mux ||
+      gate_net->type.id() != ID_bool || mux->type.id() != ID_bool || !due ||
+      due->type.id() != ID_bool || !metadata.get("reset").empty() ||
+      gate.get("RstSync").empty() ||
+      (stage != "clock-gate-compiled" && stage != "constrained") ||
+      (initial && stage != "constrained"))
+      error(loc, "invalid clock gate contract or conflicting reset");
+    for(const auto &label : {"clock_gate_ENV1", "clock_gate_ENV2"})
+    {
+      const auto id = "Verilog::$root." + top + "." + label;
+      const auto *property = symbols.lookup(id);
+      if(
+        !property || !property->is_property ||
+        metadata.find("properties").find(id).get("kind") !=
+          ID_verilog_assume_property)
+        error(loc, "missing clock gate environment assumption " + id);
+    }
+  }
+  else if(
+    metadata.get("stage") == "clock-gate-compiled" ||
+    metadata.get_bool("clock_gate_start_reset"))
+    error(loc, "missing clock gate contract");
   std::map<irep_idt, irep_idt> connections;
   std::vector<std::pair<irep_idt, source_locationt>> edges;
   std::set<irep_idt> bound_properties;
