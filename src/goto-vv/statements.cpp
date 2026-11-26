@@ -88,6 +88,12 @@ bool completes_at_initial_entry(const Statement &s)
          s.kind == StatementKind::ImmediateAssertion;
 }
 
+bool is_automatic_packed_struct(const VariableSymbol &v)
+{
+  return v.lifetime == VariableLifetime::Automatic &&
+         v.getType().getCanonicalType().kind == SymbolKind::PackedStructType;
+}
+
 bool is_module_variable(const Symbol &symbol)
 {
   const auto *parent = symbol.getParentScope();
@@ -733,9 +739,11 @@ exprt compilert::declare_local(const VariableSymbol &v)
   const bool automatic_in_loop =
     !expanded_indices.empty() && v.lifetime == VariableLifetime::Automatic;
   const auto *init = v.getInitializer();
+  const bool packed_comb_local =
+    in_always_comb && is_automatic_packed_struct(v);
   if(
     (!automatic_in_loop && !in_always_comb) ||
-    !v.getType().isSimpleBitVector())
+    (!v.getType().isSimpleBitVector() && !packed_comb_local))
     fail(v.location, "unsupported procedural local declaration");
   if(!automatic_in_loop && init)
     fail(v.location, "unsupported initializer for a combinational local");
@@ -1200,17 +1208,27 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
     if(auto entry = procedural_locals.find(target);
        entry != procedural_locals.end())
     {
+      auto &local = entry->second;
+      const bool packed_or =
+        in_always_comb && a.op == BinaryOperator::BinaryOr &&
+        is_automatic_packed_struct(target->as<VariableSymbol>());
       if(
         a.left().kind != ExpressionKind::NamedValue || a.isNonBlocking() ||
-        a.op || a.timingControl)
+        (a.op && !packed_or) || a.timingControl)
         fail(
           at,
-          entry->second.require_full_assignment
+          local.require_full_assignment
             ? "unsupported assignment to a combinational local"
             : "unsupported assignment to an automatic local");
-      auto rhs = expr(a.right());
-      auto &local = entry->second;
-      local.constant = eval_known(a.right());
+      // A compound assignment reads the value from this evaluation before
+      // writing the result. Let the RTL builder forward the latest write.
+      if(packed_or && !local.assigned)
+        fail(
+          a.left().sourceRange.start(),
+          "combinational local read before assignment: " +
+            std::string(target->name));
+      auto rhs = expr(a.right(), packed_or ? &local.ref : nullptr);
+      local.constant = packed_or ? ConstantValue{} : eval_known(a.right());
       local.assigned = true;
       r = item(ID_verilog_blocking_assign, {local.ref, std::move(rhs)});
       break;

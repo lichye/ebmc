@@ -392,6 +392,9 @@ exprt compilert::expr(
     }
     if(auto l = procedural_locals.find(s); l != procedural_locals.end())
     {
+      // Whole local writes are handled by stmt, which tracks assignment.
+      if(lvalue)
+        fail(at, "unsupported assignment target containing a procedural local");
       if(!l->second.assigned)
         fail(
           at,

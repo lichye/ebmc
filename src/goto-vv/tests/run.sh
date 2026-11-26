@@ -58,6 +58,7 @@ EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clocked_loop_local.sh" "$work/clocked
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/case_qualifiers.sh" "$work/case-qualifiers"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/initial_parameter_assertions.sh" "$work/initial-parameter-assertions"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/packed_default_runtime.sh" "$work/packed-default-runtime"
+EBMC="$eb" VV_BIN="$vv" bash "$front/tests/packed_comb_status.sh" "$work/packed-comb-status"
 for top in always_clock_reset type_parameter temporal sampled_sequence sampled_rose wires generate_nested open_outputs local_enum clock_reset clock_reset_low packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read past_depth packed_runtime_read packed_runtime_read_states; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"

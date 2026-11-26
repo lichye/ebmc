@@ -164,6 +164,15 @@ the bound members in declaration order with each field's width and signedness.
 A one-bit field truncates a wider integral assignment to the low bit.
 Expressions with writes are diagnosed.
 
+### Packed struct combinational locals
+
+An `always_comb` block can use an automatic packed struct as a local
+accumulator. A whole-object blocking assignment must precede every read.
+Whole-object `|=` uses the value from the latest assignment in the same
+evaluation, including previous iterations of a statically bounded loop.
+The local symbol is scoped to the procedure and carries no state between
+evaluations.
+
 ### Temporary Coral clock gate contract
 
 `goto-vv compile --clock-gate-contract FILE` opts into the temporary Coral W4
