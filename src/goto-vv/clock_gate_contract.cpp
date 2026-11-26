@@ -3,6 +3,7 @@
 #include <util/simplify_expr.h>
 
 #include <slang/ast/ASTVisitor.h>
+#include <slang/ast/ValuePath.h>
 #include <slang/ast/expressions/Operator.h>
 #include <slang/syntax/SyntaxTree.h>
 
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <functional>
 #include <sstream>
+#include <tuple>
 
 namespace vv
 {
@@ -943,6 +945,48 @@ void compilert::emit_clock_environment(exprt &items)
     where);
 }
 
+exprt compilert::gated_async_lhs(const Expression &target)
+{
+  if(target.kind == ExpressionKind::NamedValue)
+    return lhs(target);
+  const auto at = target.sourceRange.start();
+  const auto diagnostic =
+    "clock gate contract requires a static in-range packed target";
+  if(
+    target.kind != ExpressionKind::ElementSelect &&
+    target.kind != ExpressionKind::RangeSelect)
+    fail(at, diagnostic);
+  require_read_only(target, diagnostic);
+  EvalContext context(*scope);
+  const ValuePath path(target, context);
+  if(!path.lsp || !path.isFullyStatic() || !named_value(path.rootExpr))
+    fail(at, diagnostic);
+  for(const auto &component : path)
+    if(
+      !component.type->isIntegral() ||
+      (component.kind != ExpressionKind::NamedValue &&
+       component.kind != ExpressionKind::ElementSelect &&
+       component.kind != ExpressionKind::RangeSelect))
+      fail(at, diagnostic);
+
+  // Slang's static path gives the same inclusive LSB-first interval used
+  // by driver analysis, including packed element width and declaration order.
+  const auto [lo, hi] = path.lspBounds;
+  const auto width = path.rootExpr->type->getBitWidth();
+  if(hi < lo || hi >= width || hi - lo + 1 != target.type->getBitWidth())
+    fail(at, diagnostic);
+  auto base = lhs(*path.rootExpr);
+  auto selected_type = type(*target.type, at);
+  if(lo == 0 && hi + 1 == width && base.type() == selected_type)
+    return base;
+  return verilog_non_indexed_part_select_exprt{
+    std::move(base),
+    from_integer(hi, integer_typet{}),
+    from_integer(lo, integer_typet{}),
+    std::move(selected_type)}
+    .with_source_location(loc(at));
+}
+
 std::optional<exprt> compilert::gated_statement(
   const ProceduralBlockSymbol &process,
   const TimedStatement &timed,
@@ -985,12 +1029,40 @@ std::optional<exprt> compilert::gated_statement(
         vv_objectt::clock_gate_independent_reset_sampling);
   const auto *condition = reset->body;
   auto reset_test = boolean(expr(*condition->conditions[0].expr));
+  const bool saved_gated_async = std::exchange(in_gated_async, true);
   auto reset_body = stmt(condition->ifTrue);
   auto normal = condition->ifFalse ? stmt(*condition->ifFalse) : item(ID_skip);
+  in_gated_async = saved_gated_async;
 
   // A constant reset action can be visible before the next root observation
-  // even if no gated clock event occurs. Store the clocked value separately.
-  std::map<irep_idt, symbol_exprt> storage;
+  // even if no gated clock event occurs. Keep private clocked storage for
+  // each exactly owned interval and mask only that interval on the original.
+  using targett = std::tuple<irep_idt, uint64_t, uint64_t>;
+  std::map<targett, symbol_exprt> storage;
+  auto target = [&](const exprt &lhs) -> targett
+  {
+    if(lhs.id() == ID_symbol)
+    {
+      const auto &type = lhs.type();
+      const uint64_t width =
+        type.id() == ID_bool ? 1
+        : type.id() == ID_unsignedbv || type.id() == ID_signedbv
+          ? to_bitvector_type(type).get_width()
+          : 0;
+      if(width != 0)
+        return {to_symbol_expr(lhs).identifier(), 0, width - 1};
+    }
+    else if(lhs.id() == ID_verilog_non_indexed_part_select)
+    {
+      const auto &slice = to_verilog_non_indexed_part_select_expr(lhs);
+      if(slice.src().id() == ID_symbol)
+        return {
+          to_symbol_expr(slice.src()).identifier(),
+          numeric_cast_v<uint64_t>(to_constant_expr(slice.lsb())),
+          numeric_cast_v<uint64_t>(to_constant_expr(slice.msb()))};
+    }
+    fail(at, "clock gate contract requires a static in-range packed target");
+  };
   auto rewrite_reset = [&](auto &&self, exprt &statement) -> void
   {
     if(statement.id() == ID_block)
@@ -999,16 +1071,14 @@ std::optional<exprt> compilert::gated_statement(
         self(self, child);
       return;
     }
-    if(
-      statement.id() != ID_verilog_non_blocking_assign ||
-      statement.operands().size() != 2 ||
-      statement.operands().front().id() != ID_symbol)
+    if(statement.id() != ID_verilog_non_blocking_assign)
       fail(
         at,
-        "clock gate contract requires full constant nonblocking reset "
-        "assignments");
+        "clock gate contract requires constant nonblocking reset assignments");
     auto &assignment = to_verilog_non_blocking_assign(statement);
-    auto original = to_symbol_expr(assignment.lhs());
+    auto original = assignment.lhs();
+    const auto key = target(original);
+    const auto &[id, lo, hi] = key;
     auto value = simplify_expr(assignment.rhs(), namespacet{object.symbols});
     if(
       !value.is_constant() || value.type() != original.type() ||
@@ -1016,21 +1086,43 @@ std::optional<exprt> compilert::gated_statement(
        value.type().id() != ID_signedbv))
       fail(at, "clock gate contract requires a known integral reset value");
     assignment.rhs() = std::move(value);
-    const auto signal = gate.signals.find(id2string(original.identifier()));
+    const auto signal = gate.signals.find(id2string(id));
     if(signal == gate.signals.end() || signal->second->getInitializer())
       fail(at, "clock gate contract requires an uninitialized reset target");
+
+    const bool partial = original.id() != ID_symbol;
+    bool owns_slice = false;
     for(const auto *driver : am.getDrivers(*signal->second))
+    {
+      const auto [driver_lo, driver_hi] = driver->getBounds();
+      if(partial && (hi < driver_lo || driver_hi < lo))
+        continue;
       if(&*driver->containingSymbol != &process)
         fail(at, "clock gate contract requires a uniquely driven reset target");
-    auto raw = add_local(
-      object,
-      id2string(original.identifier()) + "$clock_gate_raw",
-      original.type(),
-      loc(at));
-    if(!storage.emplace(original.identifier(), raw).second)
-      fail(at, "clock gate contract reset assigns a target more than once");
+      if(driver->path.isFullyStatic() && lo == driver_lo && hi == driver_hi)
+        owns_slice = true;
+    }
+    if(partial && !owns_slice)
+      fail(
+        at,
+        "clock gate contract cannot prove ownership of the static reset slice");
+
+    for(auto it = storage.lower_bound({id, 0, 0}); it != storage.end(); ++it)
+    {
+      const auto &[other_id, other_lo, other_hi] = it->first;
+      if(other_id != id || other_lo > hi)
+        break;
+      if(lo <= other_hi)
+        fail(at, "clock gate contract has overlapping reset assignments");
+    }
+    auto raw_name = id2string(id) + "$clock_gate_raw";
+    if(partial)
+      raw_name += "$" + std::to_string(lo) + "$" + std::to_string(hi);
+    auto raw = add_local(object, raw_name, original.type(), loc(at));
+    storage.emplace(key, raw);
     items.operands().push_back(
-      assign(original, if_exprt{reset_test, assignment.rhs(), raw}));
+      assign(original, if_exprt{reset_test, assignment.rhs(), raw})
+        .with_source_location(original.source_location()));
     assignment.lhs() = raw;
   };
   rewrite_reset(rewrite_reset, reset_body);
@@ -1050,15 +1142,15 @@ std::optional<exprt> compilert::gated_statement(
         self(self, statement.operands()[i]);
       return;
     }
-    if(
-      statement.id() != ID_verilog_non_blocking_assign ||
-      statement.operands().size() != 2 ||
-      statement.operands().front().id() != ID_symbol)
-      fail(at, "clock gate contract requires full nonblocking updates");
+    if(statement.id() != ID_verilog_non_blocking_assign)
+      fail(at, "clock gate contract requires nonblocking updates");
     auto &assignment = to_verilog_non_blocking_assign(statement);
-    auto found = storage.find(to_symbol_expr(assignment.lhs()).identifier());
-    if(found == storage.end())
-      fail(at, "clock gate contract update target lacks a constant reset");
+    auto found = storage.find(target(assignment.lhs()));
+    if(
+      found == storage.end() || found->second.type() != assignment.lhs().type())
+      fail(
+        at,
+        "clock gate contract update target lacks a matching constant reset");
     assignment.lhs() = found->second;
   };
   rewrite_normal(rewrite_normal, normal);
