@@ -632,6 +632,11 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       const auto *timed = body.as_if<TimedStatement>();
       exprt statement;
       in_always_comb = kind == "AlwaysComb";
+      const auto *event =
+        timed ? timed->timing.as_if<SignalEventControl>() : nullptr;
+      in_posedge_process = (kind == "Always" || kind == "AlwaysFF") && event &&
+                           event->edge == EdgeKind::PosEdge &&
+                           !event->iffCondition;
       auto gated = timed ? gated_statement(p, *timed, items) : std::nullopt;
       if(gated)
         statement = std::move(*gated);
@@ -649,6 +654,7 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       else
         statement = stmt(body);
       in_always_comb = false;
+      in_posedge_process = false;
       auto process = item(op, {std::move(statement)});
       process.add_source_location() = loc(s.location);
       items.operands().push_back(std::move(process));

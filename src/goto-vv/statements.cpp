@@ -469,6 +469,46 @@ exprt compilert::clock_reset_block(const TimedStatement &block)
   return guard;
 }
 
+std::optional<exprt> compilert::named_clocked_loop(const BlockStatement &block)
+{
+  if(
+    !in_posedge_process || function || !block.blockSymbol ||
+    block.blockSymbol->name.empty() ||
+    block.blockKind != StatementBlockKind::Sequential)
+    return {};
+  const auto *body = block.body.as_if<StatementList>();
+  if(!body || body->list.size() != 2)
+    return {};
+  const auto *declaration = body->list[0]->as_if<VariableDeclStatement>();
+  const auto *loop = body->list[1]->as_if<ForLoopStatement>();
+  if(!declaration || !loop)
+    return {};
+  const auto &index = declaration->symbol;
+  const auto *type =
+    index.getType().getCanonicalType().as_if<PredefinedIntegerType>();
+  if(
+    !type || type->integerKind != PredefinedIntegerType::Integer ||
+    index.getInitializer())
+    return {};
+  const auto *init =
+    loop->initializers.size() == 1
+      ? loop->initializers.front()->as_if<AssignmentExpression>()
+      : nullptr;
+  if(
+    !loop->loopVars.empty() || !init || init->isNonBlocking() ||
+    init->timingControl || init->op ||
+    init->left().kind != ExpressionKind::NamedValue ||
+    init->left().getSymbolReference() != &index)
+    fail(
+      loop->sourceRange.start(),
+      "requires a direct blocking initializer for the named block loop index");
+
+  // The counter is unused before this initializer or after the loop. Keep
+  // only its typed iteration values; a hierarchical use outside this body
+  // has no symbol binding and is diagnosed instead of becoming state.
+  return counted_loop(index, *loop, init);
+}
+
 exprt compilert::counted_loop(
   const VariableSymbol &v,
   const ForLoopStatement &loop,
@@ -533,8 +573,9 @@ exprt compilert::counted_loop(
     loop.body.visit(visitor);
   const bool expand = expand_nested || visitor.needs_expansion();
   auto expanded = item(ID_block);
-  const auto *external_symbol =
-    external_init ? &object.symbols.lookup_ref(name(v)) : nullptr;
+  const auto *external_symbol = external_init && is_module_variable(v)
+                                  ? &object.symbols.lookup_ref(name(v))
+                                  : nullptr;
   const auto write_index = [&](const ConstantValue &value, SourceLocation where)
   {
     auto write = item(
@@ -788,6 +829,8 @@ exprt compilert::stmt(const Statement &s)
       block.body.kind == StatementKind::ImmediateAssertion)
       return immediate(
         block.body.as<ImmediateAssertionStatement>(), block.blockSymbol);
+    if(auto loop = named_clocked_loop(block))
+      return std::move(*loop);
     const auto entered = procedural_locals;
     r = stmt(block.body);
     std::erase_if(
