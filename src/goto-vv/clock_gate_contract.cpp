@@ -72,16 +72,6 @@ constexpr auto clock_gate_v1 =
   assign clk_o = en_latch & clk_i;
 endmodule)sv";
 
-const Expression *port_expression(const PortConnection &connection)
-{
-  auto *expression = connection.getExpression();
-  if(const auto *assign =
-       expression ? expression->as_if<AssignmentExpression>() : nullptr;
-     assign && assign->isLValueArg())
-    expression = &assign->left();
-  return expression;
-}
-
 void collect_instances(
   const Scope &scope,
   std::vector<const InstanceSymbol *> &instances,
@@ -239,13 +229,11 @@ std::string compilert::clock_gate_enable(const std::string &output) const
 
 std::string compilert::gated_clock_enable(const Expression &expression) const
 {
-  if(
-    !clock_gate || (expression.kind != ExpressionKind::NamedValue &&
-                    expression.kind != ExpressionKind::HierarchicalValue))
+  if(!clock_gate)
     return {};
-  const auto *symbol = expression.getSymbolReference();
-  return symbol ? clock_gate_enable(connected_signal(name(*symbol)))
-                : std::string{};
+  const auto *signal = scalar_clock_signal(&expression);
+  const auto *source = signal ? clock_source(*signal) : nullptr;
+  return source ? clock_gate_enable(name(*source)) : std::string{};
 }
 
 bool compilert::gated_clock(const Expression &expression) const
@@ -1007,8 +995,19 @@ std::optional<exprt> compilert::gated_statement(
      process.procedureKind != ProceduralBlockKind::AlwaysFF))
     fail(at, "clock gate contract requires a positive-edge clocked process");
   auto enable = symbol_exprt{enable_id, bool_typet()};
+  auto with_clock = [&](exprt body)
+  {
+    auto guard = root_edge(gate.clock, std::move(body));
+    auto &sample = guard.operands().front().operands().front();
+    const auto where = loc(edge->expr.sourceRange.start());
+    sample.add("source_clock") =
+      symbol_exprt{name(*edge->expr.getSymbolReference()), type(*edge->expr.type)}
+        .with_source_location(where);
+    sample.add_source_location() = where;
+    return guard;
+  };
   if(!list)
-    return root_edge(gate.clock, item(ID_if, {enable, stmt(timed.stmt)}));
+    return with_clock(item(ID_if, {enable, stmt(timed.stmt)}));
   if(list->events.size() != 2)
     fail(at, "clock gate contract requires one asynchronous reset");
   const auto reset = match_async_reset(timed);
@@ -1154,8 +1153,7 @@ std::optional<exprt> compilert::gated_statement(
     assignment.lhs() = found->second;
   };
   rewrite_normal(rewrite_normal, normal);
-  return root_edge(
-    gate.clock,
+  return with_clock(
     item(
       ID_if,
       {std::move(reset_test),

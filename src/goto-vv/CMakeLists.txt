@@ -13,7 +13,7 @@ else()
 endif()
 get_filename_component(EBMC_SRC "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 set(CBMC "${EBMC_SRC}/../lib/cbmc/src")
-add_executable(goto-vv main.cpp compiler.cpp expressions.cpp statements.cpp constrain.cpp clock_gate_contract.cpp level_events.cpp)
+add_executable(goto-vv main.cpp compiler.cpp expressions.cpp statements.cpp constrain.cpp clock_gate_contract.cpp clock_alias.cpp level_events.cpp)
 target_include_directories(goto-vv PRIVATE "${EBMC_SRC}" "${CBMC}")
 target_compile_definitions(goto-vv PRIVATE "LOCAL_IREP_IDS=<hw_cbmc_irep_ids.h>")
 target_link_libraries(goto-vv PRIVATE slang::slang

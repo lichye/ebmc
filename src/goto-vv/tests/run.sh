@@ -103,6 +103,7 @@ EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_cascade.sh" "$work/clock-g
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_low_reset.sh" "$work/clock-gate-low-reset"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_static_slices.sh" "$work/clock-gate-static-slices"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/gated_sva.sh" "$work/gated-sva"
+EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_alias.sh" "$work/clock-alias"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/level_events.sh" "$work/level-events"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clocked_loop_local.sh" "$work/clocked-loop-local"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/case_qualifiers.sh" "$work/case-qualifiers"

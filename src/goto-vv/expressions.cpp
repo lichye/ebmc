@@ -992,22 +992,12 @@ std::string compilert::clock(const TimingControl *tc, SourceLocation at)
   if(!tc || tc->kind != TimingControlKind::SignalEvent)
     fail(at, "requires one resolved signal event");
   auto &ev = tc->as<SignalEventControl>();
-  auto *sym = ev.expr.getSymbolReference();
-  if(gated_clock(ev.expr))
-    fail(at, "clock gate contract supports gated process clocks only");
-  if(
-    ev.edge != EdgeKind::PosEdge ||
-    ev.expr.kind != ExpressionKind::NamedValue || !sym || ev.iffCondition ||
-    !ev.expr.type->isIntegral() || ev.expr.type->getBitWidth() != 1)
+  const auto *signal = scalar_clock_signal(&ev.expr);
+  if(ev.edge != EdgeKind::PosEdge || !signal || ev.iffCondition)
     fail(at, "expected an unguarded single posedge");
-  auto id = name(*sym);
-  std::set<std::string> visited;
-  while(clock_alias.count(id))
-  {
-    if(!visited.insert(id).second)
-      fail(at, "cycle in clock connections");
-    id = clock_alias.at(id);
-  }
+  const auto id = name(*clock_source(*signal, at));
+  if(clock_gate && !clock_gate_enable(id).empty())
+    fail(at, "clock gate contract supports gated process clocks only");
   auto &meta = object.metadata;
   if(!meta.get("clock").empty() && id2string(meta.get("clock")) != id)
     fail(at, "multiple clock domains");
@@ -1222,8 +1212,14 @@ void compilert::property(
 {
   auto at = a.sourceRange.start();
   const auto *timing = clocks.count(&a) ? clocks.at(&a) : nullptr;
+  // Analysis can report only the canonical occurrence of an assertion.
+  // For an explicit clock, use the bound event from this instance.
+  if(!timing)
+    if(const auto *explicit_clock = a.propertySpec.as_if<ClockingAssertionExpr>())
+      timing = &explicit_clock->clocking;
   const auto timing_at = timing ? timing->sourceRange.start() : SourceLocation{};
   const auto *event = timing ? timing->as_if<SignalEventControl>() : nullptr;
+  const auto *source = event ? scalar_clock_signal(&event->expr) : nullptr;
   const auto enable = event ? gated_clock_enable(event->expr) : std::string{};
   auto actual = enable.empty() ? clock(timing, timing_at ? timing_at : at)
                               : clock_gate->clock;
@@ -1295,13 +1291,15 @@ void compilert::property(
   info.set("origin", "source");
   info.set("kind", id);
   info.add(ID_C_source_location) = s.location;
+  if(source && name(*source) != actual)
+  {
+    info.set("source_clock", name(*source));
+    info.add("source_clock_location") = loc(timing_at);
+  }
   if(!enable.empty())
   {
-    const auto source_clock = name(*event->expr.getSymbolReference());
-    info.set("source_clock", source_clock);
-    info.set("gate_output", connected_signal(source_clock));
+    info.set("gate_output", name(*clock_source(*source, timing_at)));
     info.set("gate_enable", enable);
-    info.add("source_clock_location") = loc(timing_at);
     if(fatal)
     {
       info.set("failure_action", "$fatal");

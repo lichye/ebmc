@@ -56,6 +56,9 @@ struct async_resett
 
 std::optional<async_resett> match_async_reset(const TimedStatement &);
 
+const Expression *port_expression(const PortConnection &);
+const ValueSymbol *scalar_clock_signal(const Expression *);
+
 inline std::string name(const Symbol &s)
 {
   return std::string(root) + "." + s.getHierarchicalPath();
@@ -108,7 +111,17 @@ public:
   bool in_posedge_process = false;
   bool in_gated_async = false;
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
-  std::map<std::string, std::string> clock_alias;
+  struct clock_linkt
+  {
+    const ValueSymbol *source;
+    const Symbol *driver;
+  };
+  std::map<const ValueSymbol *, clock_linkt> clock_links;
+  std::set<const ValueSymbol *> clock_inputs;
+  void index_clock_links(const InstanceSymbol &);
+  const ValueSymbol *
+  clock_source(const ValueSymbol &, SourceLocation diagnose = {}) const;
+  exprt clock_edge(const Expression &, const std::string &);
   struct clock_gate_branch_t
   {
     const InstanceSymbol *instance;

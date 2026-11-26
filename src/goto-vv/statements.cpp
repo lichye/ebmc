@@ -516,7 +516,7 @@ exprt compilert::clock_reset_block(const TimedStatement &block)
   const auto events = block.timing.as<EventListControl>().events;
   if(events.size() != 2)
     fail(at, "expected a clock and one reset edge");
-  clock(events[0], at);
+  const auto clock_id = clock(events[0], at);
   const auto reset = match_async_reset(block);
   if(!reset)
     fail(at, "expected a reset edge matching the outer if");
@@ -525,7 +525,7 @@ exprt compilert::clock_reset_block(const TimedStatement &block)
   auto event = node(
     ID_verilog_event,
     bool_typet(),
-    {node(ID_posedge, bool_typet(), {expr(clk.expr)}),
+    {clock_edge(clk.expr, clock_id),
      node(
        reset->active_low ? ID_negedge : ID_posedge,
        bool_typet(),
@@ -1136,9 +1136,9 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
     if(!expanded_indices.empty())
       fail(at, "unsupported timing in a statically expanded loop");
     auto &ts = s.as<TimedStatement>();
-    clock(&ts.timing, at);
+    const auto clock_id = clock(&ts.timing, at);
     auto &ev = ts.timing.as<SignalEventControl>();
-    auto edge = node(ID_posedge, bool_typet(), {expr(ev.expr)});
+    auto edge = clock_edge(ev.expr, clock_id);
     r = item(
       ID_event_guard,
       {node(ID_verilog_event, bool_typet(), {edge}), stmt(ts.stmt)});
