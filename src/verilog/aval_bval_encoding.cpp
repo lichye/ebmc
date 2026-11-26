@@ -240,8 +240,11 @@ exprt aval_bval_conversion(const exprt &src, const typet &dest)
 
     if(src_width == dest_width)
     {
-      // same size
-      return typecast_exprt::conditional_cast(src, dest);
+      // Same size. The signedness of an encoded type is a comment, which
+      // type equality ignores, so set the type of the result explicitly.
+      exprt result = typecast_exprt::conditional_cast(src, dest);
+      result.type() = dest;
+      return result;
     }
     else if(src_width > dest_width)
     {
