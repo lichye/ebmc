@@ -1,0 +1,17 @@
+CORE
+explicit_x_merged_writes.sv
+--top main --bound 3
+^\[main\.p_known\] .*: PROVED up to bound 3$
+^\[main\.p_hold\] .*: PROVED up to bound 3$
+^\[main\.r_x_free0\] .*: REFUTED$
+^\[main\.r_x_free1\] .*: REFUTED$
+^\[main\.p_two_state\] .*: PROVED up to bound 3$
+^\[main\.p_same\] .*: PROVED up to bound 3$
+^\[main\.r_independent\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+64 guarded bit writes with explicit x in one always construct. The commit
+samples the x bits of the four-state target: one value per write, read
+consistently, independent between bits; the two-state target reads 0.

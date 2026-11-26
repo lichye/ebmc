@@ -22,6 +22,7 @@ Module: Verilog net resolution and charge storage (IEEE 1800, 6.6 and 28)
 
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 bool is_tristate_switch(const irep_idt &id)
 {
@@ -746,6 +747,81 @@ exprt verilog_sample_drive(
     return result;
   }
   return e;
+}
+
+/// Follows the operands that verilog_sample_drive samples. Keep in sync.
+bool verilog_sample_drive_reaches_unknowns(const exprt &e)
+{
+  auto unknown_digits = [](const exprt &constant)
+  {
+    const auto &digits = id2string(to_constant_expr(constant).get_value());
+    return std::any_of(
+      digits.begin(),
+      digits.end(),
+      [](char digit) { return digit != '0' && digit != '1'; });
+  };
+  std::unordered_set<const void *> visited;
+  std::vector<const exprt *> stack{&e};
+  while(!stack.empty())
+  {
+    const exprt &node = *stack.back();
+    stack.pop_back();
+    if(!visited.insert(&node.read()).second)
+      continue;
+    if(node.id() == ID_verilog_unbased_unsized_literal)
+    {
+      if(verilog_sample_drive_reaches_unknowns(
+           to_verilog_unbased_unsized_literal_expr(node).expand()))
+        return true;
+    }
+    else if(node.id() == ID_verilog_based_unsized_literal)
+    {
+      if(verilog_sample_drive_reaches_unknowns(
+           to_verilog_based_unsized_literal_expr(node).expand()))
+        return true;
+    }
+    else if(node.is_constant() && is_four_valued(node))
+    {
+      if(unknown_digits(node))
+        return true;
+    }
+    else if(node.id() == ID_struct && node.type().get_bool(ID_packed))
+    {
+      const auto &components = to_struct_type(node.type()).components();
+      for(std::size_t i = 0; i < components.size(); ++i)
+      {
+        const auto &member_type = components[i].type();
+        if(member_type.id() == ID_struct || is_four_state_vector(member_type))
+          stack.push_back(&node.operands()[i]);
+      }
+    }
+    else if(node.id() == ID_if)
+    {
+      const auto &mux = to_if_expr(node);
+      stack.push_back(&mux.true_case());
+      stack.push_back(&mux.false_case());
+    }
+    else if(node.id() == ID_replication)
+      stack.push_back(&to_replication_expr(node).op());
+    else if(is_tristate_switch(node.id()))
+      return true;
+    else if(node.id() == ID_concatenation)
+    {
+      for(const auto &op : node.operands())
+        stack.push_back(&op);
+    }
+    else if(
+      node.id() == ID_typecast || node.id() == ID_member ||
+      node.id() == ID_index || node.id() == ID_extractbit ||
+      node.id() == ID_extractbits || node.id() == ID_verilog_bit_select ||
+      node.id() == ID_verilog_non_indexed_part_select ||
+      node.id() == ID_verilog_indexed_part_select_plus ||
+      node.id() == ID_verilog_indexed_part_select_minus)
+    {
+      stack.push_back(&node.operands().front());
+    }
+  }
+  return false;
 }
 
 void verilog_resolve_nets(

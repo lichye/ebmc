@@ -39,6 +39,7 @@ Author: Daniel Kroening, kroening@kroening.com
 #include <ostream>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 
 /*******************************************************************\
 
@@ -822,6 +823,27 @@ Function: verilog_rtl_buildert::bind_value
 
 \*******************************************************************/
 
+/// Whether \p expr contains an explicit x/z literal. Each shared subterm is
+/// visited once: the values of merged branches share their common parts, and
+/// a walk of the tree would take time exponential in the number of merges.
+static bool has_unknown_literal(const exprt &expr)
+{
+  std::unordered_set<const void *> visited;
+  std::vector<const exprt *> stack{&expr};
+  while(!stack.empty())
+  {
+    const exprt &e = *stack.back();
+    stack.pop_back();
+    if(!visited.insert(&e.read()).second)
+      continue;
+    if(is_verilog_unknown_literal(e))
+      return true;
+    for(const auto &op : e.operands())
+      stack.push_back(&op);
+  }
+  return false;
+}
+
 exprt verilog_rtl_buildert::bind_value(exprt value, const irep_idt &identifier)
 {
   if(!bind_values || value.id() == ID_symbol || value.is_constant())
@@ -831,9 +853,12 @@ exprt verilog_rtl_buildert::bind_value(exprt value, const irep_idt &identifier)
     return value;
 
   // Keep explicit x/z visible until the value is committed, see
-  // sample_committed_unknowns.
-  if(has_subexpr(
-       value, [](const exprt &e) { return is_verilog_unknown_literal(e); }))
+  // sample_committed_unknowns, as far as the sampling reaches them. An
+  // auxiliary wire hides them from the sampling. Explicit x/z that the
+  // sampling does not reach, e.g. in array elements, stay as they are with or
+  // without the wire, so such a value is bound: otherwise a value merged from
+  // many guarded writes, e.g. bit writes into a memory word, keeps growing.
+  if(verilog_sample_drive_reaches_unknowns(value))
     return value;
 
   // A module wire has one value per cycle. A local assertion variable
@@ -2564,12 +2589,6 @@ exprt verilog_rtl_buildert::fragment_value(
 
   // not recorded: the fragment holds its current value
   return slice_of(symbol, fragment);
-}
-
-static bool has_unknown_literal(const exprt &expr)
-{
-  return has_subexpr(
-    expr, [](const exprt &e) { return is_verilog_unknown_literal(e); });
 }
 
 /*******************************************************************\
@@ -4497,8 +4516,7 @@ exprt verilog_rtl_buildert::sample_committed_unknowns(
   const verilog_rtl_slicet &slice,
   const exprt &value)
 {
-  if(!has_subexpr(
-       value, [](const exprt &e) { return is_verilog_unknown_literal(e); }))
+  if(!has_unknown_literal(value))
     return value;
 
   // The variable is stored with two-valued bits. An explicit x or z
