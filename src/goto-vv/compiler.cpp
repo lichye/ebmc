@@ -377,7 +377,16 @@ void compilert::module(const InstanceSymbol &i, bool top)
         type(p.getType(), p.location),
         p.direction == ArgumentDirection::In ? ID_input : ID_output);
     }
-  members(i.body, ports, items);
+  if(clock_gate && clock_gate->sync == &i)
+  {
+    for(const auto &[signal, port] : ports)
+      declare(signal->as<ValueSymbol>(), port, items);
+    emit_clock_gate(items);
+  }
+  else
+    members(i.body, ports, items);
+  if(clock_gate && top)
+    emit_clock_environment(items);
   symbolt mod(id, mt, ID_Verilog);
   mod.module = id;
   mod.base_name = std::string(i.getDefinition().name);
@@ -491,7 +500,11 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
             e->sourceRange.start(), "unbound child port " + std::string(p.name));
         if(e->kind == ExpressionKind::Assignment)
           e = &e->as<AssignmentExpression>().left();
-        auto v = p.direction == ArgumentDirection::In ? expr(*e) : lhs(*e);
+        auto v =
+          gated_clock(*e)
+            ? symbol_exprt{name(*e->getSymbolReference()), type(*e->type)}
+          : p.direction == ArgumentDirection::In ? expr(*e)
+                                                 : lhs(*e);
         if(v.id() == ID_symbol)
           clock_alias[id2string(formal.get_identifier())] =
             id2string(v.get(ID_identifier));
@@ -553,14 +566,23 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       else if(kind == "Always")
         op = ID_verilog_always;
       else
-        fail(s.location, "unsupported procedure " + std::string(kind));
+      {
+        auto diagnostic = "unsupported procedure " + std::string(kind);
+        if(clock_gate)
+          diagnostic += " in " + scope->getHierarchicalPath();
+        fail(s.location, diagnostic);
+      }
       // An outer @* responds to the implicit combinational sensitivity set.
       // Explicit edge controls retain their resolved signals.
       const auto *timed = body.as_if<TimedStatement>();
       exprt statement;
       in_always_comb = kind == "AlwaysComb";
-      if(kind == "Always" && timed &&
-         timed->timing.kind == TimingControlKind::ImplicitEvent)
+      auto gated = timed ? gated_statement(p, *timed, items) : std::nullopt;
+      if(gated)
+        statement = std::move(*gated);
+      else if(
+        kind == "Always" && timed &&
+        timed->timing.kind == TimingControlKind::ImplicitEvent)
         statement = item(
           ID_event_guard,
           {typecast_exprt(item(ID_verilog_star_event), bool_typet()),
@@ -603,6 +625,12 @@ int compile_design(int argc, char **argv)
       throw std::runtime_error("goto-vv schema 1 requires slang 11.0.0");
     driver::Driver driver;
     driver.addStandardArgs();
+    std::optional<std::string> clock_gate_contract;
+    driver.cmdLine.add(
+      "--clock-gate-contract",
+      clock_gate_contract,
+      "Use an explicit temporary clock gate contract",
+      "<file>");
     driver.cmdLine.addRenameCommand("-mfcu,--single-unit");
     driver.cmdLine.addRenameCommand("-sfcu,--single-unit=false");
     if(
@@ -651,6 +679,12 @@ int compile_design(int argc, char **argv)
     meta.set("undriven", "seq");
     meta.set("sampling", sampling);
     meta.add(ID_C_source_location) = lower.loc(top.location);
+    if(clock_gate_contract)
+    {
+      lower.load_clock_gate(*clock_gate_contract, top);
+      meta.set("stage", "clock-gate-compiled");
+      std::cerr << lower.object.clock_gate_description() << '\n';
+    }
     lower.module(top, true);
     lower.object.validate(false);
     lower.object.write(argv[1]);

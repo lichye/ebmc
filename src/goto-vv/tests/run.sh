@@ -50,6 +50,7 @@ bind live.vv reset live-constrained.vv
 run live.direct "$eb" --top bridge --reset bridge.rst --undriven seq --bound 2 --trace --property bridge.u.live "$front/tests/bridge-cover.sv"
 run live.typed "$eb" --undriven seq --bound 2 --trace --property bridge.u.live live-constrained.vv
 compare live.direct live.typed bridge.u.live PROVED
+EBMC="$eb" VV_BIN="$vv" bash "$front/tests/clock_gate_contract.sh" "$work/clock-gate"
 for top in always_clock_reset type_parameter temporal sampled_sequence sampled_rose wires generate_nested open_outputs local_enum clock_reset clock_reset_low packed_fields decoder_features immediate generate_scopes fixed_arithmetic counted_break wildcard_case scalar_concat string_parameter compound_field packed_pattern empty_member zero_replication packed_select automatic_locals constant_guard packed_range packed_write counted_packed combinational_locals packed_read counted_guard empty_final reduction_xor assignment_step module_loop_index packed_bank_write modulo_bank_read past_depth packed_runtime_read packed_runtime_read_states; do
   src="$front/tests/$top.sv"
   compile "$top" "$top.vv" "$src"

@@ -797,6 +797,14 @@ std::optional<transition_systemt>
 verilog_ebmc_languaget::receive(vv_objectt object)
 {
   object.validate(true);
+  if(object.has_clock_gate())
+  {
+    if(cmdline.isset('p'))
+      throw ebmc_errort{}
+        << "select a compiled property for a clock gate contract";
+    messaget{message_handler}.status()
+      << object.clock_gate_description() << messaget::eom;
+  }
   const auto top = object.metadata.get("top");
   const auto undriven = object.metadata.get("undriven");
   if(cmdline.isset("top") && cmdline.get_value("top") != id2string(top))
@@ -827,6 +835,21 @@ verilog_ebmc_languaget::receive(vv_objectt object)
     std::move(object.symbols),
     undriven == "const",
     {});
+  if(object.has_clock_gate())
+  {
+    const auto &gate = object.metadata.find("clock_gate_contract");
+    auto signal = [&](const char *key)
+    { return result.symbol_table.lookup_ref(gate.get(key)).symbol_expr(); };
+    auto reset = not_exprt{signal("ENV2")};
+    // The contract restricts the model even when a verification engine or a
+    // property selection treats the labelled assumptions as individual checks.
+    result.trans_expr.invar() = and_exprt{
+      result.trans_expr.invar(),
+      not_exprt{signal("ENV1")},
+      implies_exprt{signal("ENV2_due"), reset}};
+    if(object.metadata.get_bool("clock_gate_start_reset"))
+      result.trans_expr.init() = and_exprt{result.trans_expr.init(), reset};
+  }
   const auto reset = object.metadata.get("reset");
   if(!reset.empty())
     create_reset_logic(id2string(reset), result);

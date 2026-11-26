@@ -114,6 +114,34 @@ An empty contract is a zero-length file. Contract lines can specify
 Run the cross-process interface fixtures with
 `bash src/goto-vv/tests/run.sh /path/to/test-output`.
 
+### Temporary Coral clock gate contract
+
+`goto-vv compile --clock-gate-contract FILE` opts into the temporary Coral W4
+root-clock model. The file gives the contract version and elaborated bindings,
+in this order.
+
+    coral-w4-env1-env2.v1
+    ENV1 top.test_enable_i
+    ENV2 top.rst_ni top.clk_i
+    RstSync top.core.rst_sync
+    reset-mux top.core.internal_reset
+
+ENV1 fixes the bound test input to zero. ENV2 treats external reset as a
+boundary input driven after the root rising-edge preponed sample. The model
+requires at least two low samples for each assertion. Internal asynchronous
+reset takes priority before the next sample. The gate uses the preceding
+low-phase enable. The version checks the active Coral RstSync and ClockGate
+definitions, their port bindings and reset mux. The supported use of the gated
+output is a process clock.
+
+The object records these bindings and assumptions. Inspect them with
+`ebmc --show-symbol-table RUN.vv`. Select a compiled property by ID for
+verification. To require a reset at startup, use a binding file containing
+`clock-gate-start-reset` with `goto-vv constrain`. This activates initial low
+and the existing two-low-sample rule then applies. The ordinary `reset`
+directive requires a single cycle and conflicts with this model.
+
+
 The decoder comparison takes an external PLENA checkout, its decode_spec.sv
 wrapper and a fresh output path. It builds the adapted closure, retains the
 strict diagnostic and compares both routes at bound 20:

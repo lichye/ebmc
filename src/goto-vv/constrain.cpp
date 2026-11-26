@@ -56,8 +56,20 @@ void apply(vv_objectt &o, const std::string &path)
       o.metadata.add("undriven_location") = loc;
       continue;
     }
+    if(op == "clock-gate-start-reset")
+    {
+      if(
+        !o.has_clock_gate() || in >> rest ||
+        o.metadata.get_bool("clock_gate_start_reset"))
+        reject("clock-gate-start-reset requires one clock gate contract");
+      o.metadata.set("clock_gate_start_reset", true);
+      continue;
+    }
     if(op == "reset")
     {
+      if(o.has_clock_gate())
+        reject(
+          "single-cycle reset conflicts with ENV2; use clock-gate-start-reset");
       std::string n;
       if(
         !(in >> n) || in >> rest || signal(n).type.id() != ID_bool ||
@@ -131,7 +143,9 @@ int constrain_design(int argc, char **argv)
   {
     auto o = vv_objectt::read(argv[1]);
     o.validate(false);
-    if(o.metadata.get("stage") != "compiled")
+    if(
+      o.metadata.get("stage") !=
+      (o.has_clock_gate() ? "clock-gate-compiled" : "compiled"))
       throw std::runtime_error("expected a compiled object");
     apply(o, argv[2]);
     o.metadata.set("stage", "constrained");
