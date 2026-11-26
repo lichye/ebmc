@@ -405,50 +405,65 @@ exprt compilert::immediate(
     .with_source_location(where);
 }
 
-// Retain both native event operands for the clocked RTL builder. Only the
-// clock is a property sampling domain. The second edge must be the reset
-// tested by the process's outermost conditional.
+std::optional<async_resett> match_async_reset(const TimedStatement &timed)
+{
+  const auto *list = timed.timing.as_if<EventListControl>();
+  if(!list || list->events.size() != 2)
+    return {};
+  const auto *event = list->events[1]->as_if<SignalEventControl>();
+  if(
+    !event ||
+    (event->edge != EdgeKind::PosEdge && event->edge != EdgeKind::NegEdge) ||
+    event->iffCondition || event->expr.kind != ExpressionKind::NamedValue ||
+    !event->expr.type->isIntegral() || event->expr.type->getBitWidth() != 1)
+    return {};
+  const auto *signal = &event->expr.as<NamedValueExpression>().symbol;
+  const Statement *body = &timed.stmt;
+  while(const auto *block = body->as_if<BlockStatement>())
+    body = &block->body;
+  const auto *condition = body->as_if<ConditionalStatement>();
+  if(
+    !condition || condition->conditions.size() != 1 ||
+    condition->conditions[0].pattern)
+    return {};
+
+  const bool active_low = event->edge == EdgeKind::NegEdge;
+  const Expression *test = &*condition->conditions[0].expr;
+  if(active_low)
+  {
+    const auto *negation = test->as_if<UnaryExpression>();
+    if(!negation || negation->op != UnaryOperator::LogicalNot)
+      return {};
+    test = &negation->operand();
+  }
+  if(
+    test->kind != ExpressionKind::NamedValue ||
+    test->getSymbolReference() != signal)
+    return {};
+  return async_resett{event, signal, condition, active_low};
+}
+
+// Preserve both native operands. Only the first edge samples properties.
 exprt compilert::clock_reset_block(const TimedStatement &block)
 {
   const auto at = block.timing.sourceRange.start();
-  auto events = block.timing.as<EventListControl>().events;
+  const auto events = block.timing.as<EventListControl>().events;
   if(events.size() != 2)
     fail(at, "expected a clock and one reset edge");
   clock(events[0], at);
-  const auto *reset = events[1]->as_if<SignalEventControl>();
-  const Statement *body = &block.stmt;
-  while(const auto *compound = body->as_if<BlockStatement>())
-    body = &compound->body;
-  const auto *cond = body->as_if<ConditionalStatement>();
-  const char *diagnostic = "expected a reset edge matching the outer if";
-  if(
-    !reset ||
-    (reset->edge != EdgeKind::PosEdge && reset->edge != EdgeKind::NegEdge) ||
-    reset->iffCondition || reset->expr.kind != ExpressionKind::NamedValue ||
-    !reset->expr.type->isIntegral() || reset->expr.type->getBitWidth() != 1 ||
-    !cond || cond->conditions.size() != 1 || cond->conditions[0].pattern)
-    fail(at, diagnostic);
-
-  const bool active_low = reset->edge == EdgeKind::NegEdge;
-  const Expression *tested_signal = &*cond->conditions[0].expr;
-  if(active_low)
-  {
-    const auto *test = tested_signal->as_if<UnaryExpression>();
-    if(!test || test->op != UnaryOperator::LogicalNot)
-      fail(at, diagnostic);
-    tested_signal = &test->operand();
-  }
-  if(
-    tested_signal->kind != ExpressionKind::NamedValue ||
-    tested_signal->getSymbolReference() != reset->expr.getSymbolReference())
-    fail(at, diagnostic);
+  const auto reset = match_async_reset(block);
+  if(!reset)
+    fail(at, "expected a reset edge matching the outer if");
 
   const auto &clk = events[0]->as<SignalEventControl>();
   auto event = node(
     ID_verilog_event,
     bool_typet(),
     {node(ID_posedge, bool_typet(), {expr(clk.expr)}),
-     node(active_low ? ID_negedge : ID_posedge, bool_typet(), {expr(reset->expr)})});
+     node(
+       reset->active_low ? ID_negedge : ID_posedge,
+       bool_typet(),
+       {expr(reset->event->expr)})});
   auto guard = item(ID_event_guard, {std::move(event), stmt(block.stmt)});
   guard.add_source_location() = loc(at);
   return guard;

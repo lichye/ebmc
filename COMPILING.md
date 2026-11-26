@@ -156,6 +156,11 @@ gate is closed. ENV2 applies to the original bound external reset only. The
 object and readback record the additional gate bindings and independent reset
 sampling.
 
+A falling asynchronous edge with a matching outer logical negation is also
+supported. The scalar reset signal may resolve through aliases and inversions
+to a proved reset source with the same assertion polarity. Synchronous clear
+and load in the remaining branch still require the gated clock edge.
+
 ENV1 fixes the bound test input to zero. ENV2 treats external reset as a
 boundary input driven after the root rising-edge preponed sample. The model
 requires at least two low samples for each assertion. Internal asynchronous

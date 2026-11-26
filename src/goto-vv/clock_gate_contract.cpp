@@ -108,33 +108,6 @@ void collect_instances(
   }
 }
 
-struct async_resett
-{
-  const ValueSymbol *signal;
-  const ConditionalStatement *body;
-};
-
-std::optional<async_resett> positive_async_reset(const TimedStatement &timed)
-{
-  const auto *list = timed.timing.as_if<EventListControl>();
-  if(!list || list->events.size() != 2)
-    return {};
-  const auto *edge = list->events[1]->as_if<SignalEventControl>();
-  const auto *signal = edge ? named_value(&edge->expr) : nullptr;
-  if(!signal || edge->edge != EdgeKind::PosEdge || edge->iffCondition)
-    return {};
-  const Statement *body = &timed.stmt;
-  while(const auto *block = body->as_if<BlockStatement>())
-    body = &block->body;
-  const auto *condition = body->as_if<ConditionalStatement>();
-  if(
-    !condition || condition->conditions.size() != 1 ||
-    condition->conditions[0].pattern ||
-    named_value(&*condition->conditions[0].expr) != signal)
-    return {};
-  return async_resett{signal, condition};
-}
-
 const SignalEventControl *first_event(const TimedStatement &timed)
 {
   if(const auto *list = timed.timing.as_if<EventListControl>())
@@ -390,6 +363,62 @@ compilert::clock_gate_register_driver(const ValueSymbol &value) const
   return has_assignment && all_nonblocking ? process : nullptr;
 }
 
+std::optional<compilert::clock_gate_resett> compilert::clock_gate_reset_source(
+  const async_resett &reset,
+  bool allow_independent) const
+{
+  const auto &gate = *clock_gate;
+  auto is_bit = [](const Type &type)
+  { return type.isIntegral() && type.getBitWidth() == 1; };
+  std::set<const ValueSymbol *> seen;
+  const auto *signal = reset.signal;
+  bool active_low = reset.active_low;
+  while(is_bit(signal->getType()) && seen.insert(signal).second)
+  {
+    const auto id = name(*signal);
+    if(id == gate.reset_n)
+      return active_low ? std::optional{clock_gate_resett::External}
+                        : std::nullopt;
+    if(id == gate.reset)
+      return active_low ? std::nullopt
+                        : std::optional{clock_gate_resett::Synchronized};
+
+    if(auto output = gate.output_sources.find(id);
+       output != gate.output_sources.end())
+    {
+      if(!output->second || am.getDrivers(*signal).size() != 1)
+        return {};
+      signal = output->second;
+      continue;
+    }
+
+    const Expression *source = clock_gate_value_source(*signal);
+    if(!source || !is_bit(*source->type))
+      return {};
+    // Only a one-bit inverter is transparent to the timing proof. Its
+    // output edge corresponds to the opposite edge at the actual source.
+    while(const auto *negation = source->as_if<UnaryExpression>())
+    {
+      if(
+        (negation->op != UnaryOperator::BitwiseNot &&
+         negation->op != UnaryOperator::LogicalNot) ||
+        !is_bit(*negation->operand().type))
+        return {};
+      active_low = !active_low;
+      source = &negation->operand();
+    }
+    if(const auto *alias = named_value(source))
+    {
+      signal = alias;
+      continue;
+    }
+    if(!active_low && allow_independent && certifies_clock_gate_reset(*signal))
+      return clock_gate_resett::Independent;
+    return {};
+  }
+  return {};
+}
+
 bool compilert::certifies_clock_gate_reset(const ValueSymbol &reset) const
 {
   const auto &gate = *clock_gate;
@@ -443,8 +472,10 @@ bool compilert::certifies_clock_gate_reset(const ValueSymbol &reset) const
     const auto &timed = proc->getBody().as<TimedStatement>();
     if(gated_clock_enable(first_event(timed)->expr) != gate.enable)
       return {};
-    const auto async = positive_async_reset(timed);
-    if(!async || connected_signal(name(*async->signal)) != gate.reset)
+    const auto async = match_async_reset(timed);
+    if(
+      !async ||
+      clock_gate_reset_source(*async, false) != clock_gate_resett::Synchronized)
       return {};
     const auto *assign = reset_assignment(async->body->ifTrue, *reg);
     if(!assign)
@@ -527,10 +558,8 @@ void compilert::verify_clock_gate_enable(const Expression &enable) const
       const auto &timed = process->getBody().as<TimedStatement>();
       if(timed.timing.kind == TimingControlKind::EventList)
       {
-        const auto reset = positive_async_reset(timed);
-        if(
-          !reset || (connected_signal(name(*reset->signal)) != gate.reset &&
-                     !certifies_clock_gate_reset(*reset->signal)))
+        const auto reset = match_async_reset(timed);
+        if(!reset || !clock_gate_reset_source(*reset, true))
           fail(
             value.location,
             "clock gate contract cannot prove enable reset timing");
@@ -634,7 +663,7 @@ void compilert::load_clock_gate(
       const auto *internal = p && p->internalSymbol
                                ? p->internalSymbol->as_if<ValueSymbol>()
                                : nullptr;
-      if(!listed.empty() && internal && value)
+      if(internal && value)
       {
         if(p->direction == ArgumentDirection::In)
           gate.input_values.emplace(name(*p->internalSymbol), value);
@@ -938,24 +967,22 @@ std::optional<exprt> compilert::gated_statement(
     return root_edge(gate.clock, item(ID_if, {enable, stmt(timed.stmt)}));
   if(list->events.size() != 2)
     fail(at, "clock gate contract requires one asynchronous reset");
-  const auto reset = positive_async_reset(timed);
+  const auto reset = match_async_reset(timed);
   if(!reset)
-    fail(
-      at,
-      "clock gate contract requires a positive asynchronous reset in the outer "
-      "if");
-  const auto reset_id = connected_signal(name(*reset->signal));
-  if(
-    reset_id != gate.reset &&
-    (enable_id == gate.enable || !certifies_clock_gate_reset(*reset->signal)))
+    fail(at, "clock gate contract requires a reset edge matching the outer if");
+  const auto reset_source =
+    clock_gate_reset_source(*reset, enable_id != gate.enable);
+  if(!reset_source)
     fail(
       at,
       "clock gate contract cannot prove the independent asynchronous reset "
       "timing");
-  if(reset_id != gate.reset)
+  if(reset_source == clock_gate_resett::Independent)
     object.metadata.add("clock_gate_contract")
       .add("independent_resets")
-      .set(reset_id, vv_objectt::clock_gate_independent_reset_sampling);
+      .set(
+        connected_signal(name(*reset->signal)),
+        vv_objectt::clock_gate_independent_reset_sampling);
   const auto *condition = reset->body;
   auto reset_test = boolean(expr(*condition->conditions[0].expr));
   auto reset_body = stmt(condition->ifTrue);

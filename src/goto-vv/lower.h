@@ -46,6 +46,16 @@ using namespace slang;
 using namespace slang::ast;
 constexpr auto root = "Verilog::$root";
 constexpr auto sampling = "single-posedge/preponed/disable-current";
+struct async_resett
+{
+  const SignalEventControl *event;
+  const ValueSymbol *signal;
+  const ConditionalStatement *body;
+  bool active_low;
+};
+
+std::optional<async_resett> match_async_reset(const TimedStatement &);
+
 inline std::string name(const Symbol &s)
 {
   return std::string(root) + "." + s.getHierarchicalPath();
@@ -120,6 +130,14 @@ public:
   const Expression *clock_gate_value_source(const ValueSymbol &) const;
   const ProceduralBlockSymbol *
   clock_gate_register_driver(const ValueSymbol &) const;
+  enum class clock_gate_resett
+  {
+    External,
+    Synchronized,
+    Independent
+  };
+  std::optional<clock_gate_resett>
+  clock_gate_reset_source(const async_resett &, bool allow_independent) const;
   bool certifies_clock_gate_reset(const ValueSymbol &) const;
   void verify_clock_gate_enable(const Expression &) const;
   void emit_clock_gate_branch(const clock_gate_branch_t &, exprt &);
