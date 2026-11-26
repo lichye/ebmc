@@ -613,8 +613,8 @@ int compile_design(int argc, char **argv)
   using namespace vv;
   if(argc < 4)
   {
-    std::cerr << "usage: goto-vv compile OUTPUT [-mfcu|-sfcu] [slang options] "
-                 "INPUT...\n";
+    std::cerr << "usage: goto-vv compile OUTPUT [-mfcu|-sfcu] "
+                 "[--assert-diagnostic-tasks=warning,error] [slang options] INPUT...\n";
     return 2;
   }
   try
@@ -631,12 +631,23 @@ int compile_design(int argc, char **argv)
       clock_gate_contract,
       "Use an explicit temporary clock gate contract",
       "<file>");
+    std::optional<std::string> diagnostic_tasks;
+    driver.cmdLine.add(
+      "--assert-diagnostic-tasks",
+      diagnostic_tasks,
+      "Assert when selected procedural diagnostic tasks execute",
+      "warning,error");
     driver.cmdLine.addRenameCommand("-mfcu,--single-unit");
     driver.cmdLine.addRenameCommand("-sfcu,--single-unit=false");
     if(
       !driver.parseCommandLine(argc - 1, argv + 1) ||
       !driver.processOptions() || !driver.parseAllSources())
       return 2;
+    const auto tasks = diagnostic_tasks.value_or("");
+    const bool both = tasks == "warning,error" || tasks == "error,warning";
+    if(diagnostic_tasks && !both && tasks != "warning" && tasks != "error")
+      throw std::runtime_error(
+        "--assert-diagnostic-tasks expects warning, error, or warning,error");
     auto c = driver.createCompilation();
     driver.reportCompilation(*c, true);
     if(driver.diagEngine.getNumErrors() != 0)
@@ -647,6 +658,8 @@ int compile_design(int argc, char **argv)
     analysis::AnalysisManager am(
       driver.getAnalysisOptions(), driver.threadPool);
     compilert lower(driver.sourceManager, am);
+    lower.assert_warnings = both || tasks == "warning";
+    lower.assert_errors = both || tasks == "error";
     std::mutex lock;
     am.addListener(
       [&](const analysis::AnalyzedAssertion &a)
@@ -688,6 +701,17 @@ int compile_design(int argc, char **argv)
     lower.module(top, true);
     lower.object.validate(false);
     lower.object.write(argv[1]);
+    for(const auto &[id, property] : meta.find("properties").get_named_sub())
+    {
+      const auto &task = property.get("diagnostic_task");
+      if(task.empty())
+        continue;
+      const auto &symbol = lower.object.symbols.lookup_ref(id);
+      const auto &where = symbol.location;
+      std::cout << where.get_file() << ':' << where.get_line() << ':'
+                << where.get_column() << ": diagnostic assertion "
+                << symbol.pretty_name << " (" << task << ")\n";
+    }
     return 0;
   }
   catch(const std::exception &e)

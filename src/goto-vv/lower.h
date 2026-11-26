@@ -89,6 +89,8 @@ public:
   std::set<const SubroutineSymbol *> active_functions;
   std::string function_identifier;
   std::map<const VariableSymbol *, ConstantValue> function_constants;
+  bool assert_warnings = false;
+  bool assert_errors = false;
   bool in_clocked_property = false;
   bool in_always_comb = false;
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
@@ -152,6 +154,16 @@ public:
   ConstantRange
   packed_range(const RangeSelectExpression &, const PackedArrayType &) const;
   void require_read_only(const Expression &expr, const char *diagnostic) const;
+  void check_diagnostic_argument(const Expression &argument) const;
+  bool assert_diagnostic(std::string_view task) const;
+  exprt diagnostic_statement(const CallExpression &call);
+  symbol_exprt temporary_local(
+    typet type,
+    SourceLocation at,
+    std::string_view stem);
+  void merge_procedural_locals(
+    const decltype(procedural_locals) &entered,
+    const decltype(procedural_locals) &other);
   void require_empty_final(const Statement &s) const;
   exprt stmt(const Statement &s);
   exprt counted_loop(
@@ -164,6 +176,12 @@ public:
   exprt declare_function_local(const VariableSymbol &variable);
   exprt runtime_call(const CallExpression &call);
   exprt clock_reset_block(const TimedStatement &block);
+  exprt procedural_assertion(
+    SourceLocation at,
+    const std::string &base,
+    const std::string &id,
+    exprt condition,
+    std::string_view diagnostic_task = {});
   exprt immediate(const ImmediateAssertionStatement &s, const Symbol *label);
   exprt assertion(const AssertionExpr &a, SourceLocation at, irept &references);
   std::string clock(const TimingControl *ev, SourceLocation at);
