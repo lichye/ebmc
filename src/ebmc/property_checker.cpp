@@ -8,6 +8,9 @@ Author: Daniel Kroening, dkr@amazon.com
 
 #include "property_checker.h"
 
+#include <util/arith_tools.h>
+#include <util/bitvector_expr.h>
+#include <util/bitvector_types.h>
 #include <util/output_file.h>
 #include <util/string2int.h>
 
@@ -136,6 +139,38 @@ property_checker_resultt word_level_bmc(
   }
 }
 
+static std::size_t obligation_bit_width(const typet &type)
+{
+  if(type.id() == ID_bool)
+    return 1;
+  if(type.id() == ID_unsignedbv || type.id() == ID_signedbv)
+    return to_bitvector_type(type).get_width();
+  return 0;
+}
+
+static bool supported_obligation_extractbit(const extractbit_exprt &extract)
+{
+  const auto width = obligation_bit_width(extract.src().type());
+  if(extract.type().id() != ID_bool || width == 0)
+    return false;
+
+  // The existing bit-blaster supplies an unconstrained bit for an
+  // out-of-range select. Require the entire index domain to be in range.
+  const auto &index = extract.index();
+  if(index.is_constant())
+  {
+    const auto value = numeric_cast<mp_integer>(index);
+    return value && *value >= 0 && *value < width;
+  }
+
+  if(index.type().id() != ID_bool && index.type().id() != ID_unsignedbv)
+    return false;
+  const auto index_width = obligation_bit_width(index.type());
+  return index_width != 0 &&
+         index_width < std::numeric_limits<std::size_t>::digits &&
+         (std::size_t{1} << index_width) <= width;
+}
+
 // Translate finite Boolean/bit-vector obligations against the actual AIG
 // timeframe map. Do not let the bit-blaster invent independent inputs.
 static std::optional<bvt> bounded_netlist_obligations(
@@ -200,6 +235,12 @@ static std::optional<bvt> bounded_netlist_obligations(
           for(std::size_t i = 0; i < bits.size(); ++i)
             solver.set_equal(bits[i], frames.get(t, var->bits[i]));
         }
+        else if(id == ID_reduction_and)
+          supported &=
+            type == ID_bool &&
+            obligation_bit_width(to_unary_expr(sub).op().type()) != 0;
+        else if(id == ID_extractbit)
+          supported &= supported_obligation_extractbit(to_extractbit_expr(sub));
         else if(
           id != ID_constant && id != ID_and && id != ID_or && id != ID_not &&
           id != ID_implies && id != ID_equal && id != ID_notequal &&

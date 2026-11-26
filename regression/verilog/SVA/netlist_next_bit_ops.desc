@@ -1,0 +1,21 @@
+CORE
+netlist_next_bit_ops.sv
+--aig --bound 1 --reset main.reset --trace
+^\[main\.c_reset\].*: PROVED$
+^\[main\.p_and_ok\].*: PROVED up to bound 1$
+^\[main\.p_and_bad\].*: REFUTED$
+^\[main\.p_bit_ok\].*: PROVED up to bound 1$
+^\[main\.p_bit_bad\].*: REFUTED$
+^\[main\.p_index_ok\].*: PROVED up to bound 1$
+^\[main\.p_index_bad\].*: REFUTED$
+^\[main\.p_x_dominance\].*: PROVED up to bound 1$
+^\[main\.p_x_known_bit\].*: PROVED up to bound 1$
+^\[main\.p_x_is_zero\].*: REFUTED$
+^\[main\.p_x_is_one\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+property not supported by netlist BMC engine
+--
+The next-frame obligation uses the original netlist literals for reductions,
+constant and in-range symbolic bit selects, including known bits of X-bearing data.
