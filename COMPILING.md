@@ -156,6 +156,14 @@ gated processes are diagnosed when they would require repeated or unsupported
 sampling. Ordinary matching and existing package function lowering remain
 available without the assertion option.
 
+### Packed assignment patterns
+
+A one-dimensional packed vector accepts a runtime `'{default: expr}` using
+Slang's bound scalar value for each bit. For packed structs, goto-vv lowers
+the bound members in declaration order with each field's width and signedness.
+A one-bit field truncates a wider integral assignment to the low bit.
+Expressions with writes are diagnosed.
+
 ### Temporary Coral clock gate contract
 
 `goto-vv compile --clock-gate-contract FILE` opts into the temporary Coral W4
