@@ -531,9 +531,41 @@ exprt compilert::expr(
       reject_checked_call(b);
       EvalContext context(*scope);
       const auto value = b.eval(context);
-      if(!value.isInteger())
+      if(value.isInteger())
+      {
+        r = literal(value.integer(), t);
+        break;
+      }
+
+      const auto width = b.type->getBitWidth();
+      const auto &exponent_type = *b.right().type;
+      const auto base = b.left().eval(context);
+      if(
+        !b.left().type->isIntegral() || !exponent_type.isIntegral() ||
+        width < 2 || !base.isInteger() || base.integer().as<int>() != 2)
         fail(at, diagnostic);
-      r = literal(value.integer(), t);
+
+      // Keep the self-determined exponent intact. Sign extend before
+      // interpreting it as an unsigned distance, so a negative exponent
+      // is outside [0, width) even when its declared type is very narrow.
+      const auto distance_width = std::max(
+        exponent_type.getBitWidth(),
+        std::bit_width(width) + (exponent_type.isSigned() ? 1u : 0u));
+      const unsignedbv_typet distance_type{distance_width};
+      auto exponent = expr(b.right());
+      if(exponent_type.isSigned())
+        exponent = typecast_exprt::conditional_cast(
+          std::move(exponent), signedbv_typet{distance_width});
+      const auto distance = typecast_exprt::conditional_cast(
+        std::move(exponent), distance_type);
+
+      // Compare before a solver can narrow the shift distance to the result
+      // width. Keep the full distance in the shift for X/Z propagation.
+      r = if_exprt{
+        binary_relation_exprt{
+          distance, ID_lt, from_integer(width, distance_type)},
+        shl_exprt{from_integer(1, t), distance},
+        from_integer(0, t)};
       break;
     }
     if(
