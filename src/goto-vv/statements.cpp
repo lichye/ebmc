@@ -152,43 +152,155 @@ void compilert::require_read_only(
     }));
 }
 
-exprt compilert::immediate(
-  const ImmediateAssertionStatement &a,
-  const Symbol *label)
+void compilert::check_diagnostic_argument(const Expression &argument) const
 {
-  auto at = a.sourceRange.start();
-  if(a.assertionKind != AssertionKind::Assert || a.isDeferred)
-    fail(at, "unsupported procedural assertion kind or timing");
-  auto diagnostic_only = [](const Statement *action)
+  // Pure arguments contribute only to the discarded message. Reject calls
+  // whose effect is unknown, including functions hidden in a larger expression.
+  require_read_only(argument, "unsupported write in diagnostic argument");
+  argument.visit(makeVisitor(
+    [&](auto &visitor, const CallExpression &call)
+    {
+      const auto task = call.getSubroutineName();
+      if(
+        !call.isSystemCall() ||
+        (task != "$signed" && task != "$unsigned" && task != "$bits" &&
+         task != "$clog2" && task != "$sformatf"))
+        fail(
+          call.sourceRange.start(),
+          "unsupported call in diagnostic argument " + std::string(task));
+      visitor.visitDefault(call);
+    },
+    [&](auto &, const NewClassExpression &allocation)
+    {
+      fail(
+        allocation.sourceRange.start(),
+        "unsupported class construction in diagnostic argument");
+    },
+    [&](auto &, const NewCovergroupExpression &allocation)
+    {
+      fail(
+        allocation.sourceRange.start(),
+        "unsupported covergroup construction in diagnostic argument");
+    }));
+}
+
+bool compilert::assert_diagnostic(std::string_view task) const
+{
+  return (task == "$warning" && assert_warnings) ||
+         (task == "$error" && assert_errors);
+}
+
+exprt compilert::diagnostic_statement(const CallExpression &call)
+{
+  const auto task = call.getSubroutineName();
+  const auto at = call.sourceRange.start();
+  const auto selected = assert_diagnostic(task);
+  if(!call.isSystemCall() || (task != "$info" && task != "$warning" && !selected))
+    fail(at, "unsupported procedural call " + std::string(task));
+
+  // The RTL builder registers one property value per identifier. Repeated
+  // calls need an aggregation rule before they can form one property.
+  if(selected && (function || !locals.empty() || !expanded_indices.empty()))
+    fail(
+      at, "diagnostic assertion in a runtime function or loop is unsupported");
+
+  auto result = item(ID_block);
+  for(const auto *argument : call.arguments())
   {
-    if(!action || action->kind == StatementKind::Empty)
-      return true;
-    if(action->kind != StatementKind::ExpressionStatement)
-      return false;
-    auto &e = action->as<ExpressionStatement>().expr;
-    if(e.kind != ExpressionKind::Call)
-      return false;
-    auto &call = e.as<CallExpression>();
-    auto task = call.getSubroutineName();
-    if(!call.isSystemCall() || (task != "$error" && task != "$warning"))
-      return false;
-    return std::all_of(
-      call.arguments().begin(),
-      call.arguments().end(),
-      [](const Expression *arg)
-      {
-        return arg->kind == ExpressionKind::StringLiteral ||
-               arg->kind == ExpressionKind::IntegerLiteral ||
-               arg->kind == ExpressionKind::NamedValue;
-      });
-  };
-  if(!diagnostic_only(a.ifTrue) || !diagnostic_only(a.ifFalse))
-    fail(at, "unsupported procedural assertion action");
+    const auto &effect = strip_integral_conversions(*argument);
+    const auto *assignment = effect.as_if<AssignmentExpression>();
+    const auto *unary = effect.as_if<UnaryExpression>();
+    const auto *function_call = effect.as_if<CallExpression>();
+    const bool writes = assignment ||
+                        (unary && unary->op == UnaryOperator::Postincrement);
+    const bool calls_user_code = function_call && !function_call->isSystemCall();
+    if(!writes && !calls_user_code)
+    {
+      check_diagnostic_argument(*argument);
+      continue;
+    }
+
+    // We can retain a standalone effect with the existing statement
+    // lowering. Do not guess at the order of multiple effectful arguments.
+    const auto where = effect.sourceRange.start();
+    if(!result.operands().empty())
+      fail(where, "multiple side effects in diagnostic arguments");
+    if(calls_user_code)
+    {
+      const auto *callee =
+        std::get<const SubroutineSymbol *>(function_call->subroutine);
+      if(active_functions.count(callee))
+        fail(where, "recursive call in diagnostic argument");
+      for(const auto *actual : function_call->arguments())
+        check_diagnostic_argument(*actual);
+      auto value = runtime_call(*function_call);
+      auto sink = temporary_local(value.type(), where, "$diagnostic_argument_");
+      result.operands().push_back(
+        item(ID_verilog_blocking_assign, {std::move(sink), std::move(value)})
+          .with_source_location(loc(where)));
+      continue;
+    }
+
+    if(assignment)
+    {
+      if(assignment->isNonBlocking() || assignment->timingControl)
+        fail(where, "unsupported assignment in diagnostic argument");
+      check_diagnostic_argument(assignment->left());
+      check_diagnostic_argument(assignment->right());
+    }
+    else
+      check_diagnostic_argument(unary->operand());
+
+    result.operands().push_back(
+      stmt(ExpressionStatement(effect, effect.sourceRange)));
+  }
+
+  if(selected)
+  {
+    const auto site = sm.getFullyExpandedLoc(at);
+    const auto where = loc(site);
+    const auto stem = std::string(task) + "_" + id2string(where.get_line()) +
+                      "_" + id2string(where.get_column());
+    const auto prefix = name(*scope) + ".";
+    auto base = stem;
+    for(unsigned occurrence = 2; object.symbols.lookup(prefix + base);
+        ++occurrence)
+      base = stem + "_" + std::to_string(occurrence);
+    result.operands().push_back(
+      procedural_assertion(site, base, prefix + base, false_exprt{}, task));
+  }
+
+  if(result.operands().empty())
+    return item(ID_skip).with_source_location(loc(at));
+  return result.with_source_location(loc(at));
+}
+
+symbol_exprt compilert::temporary_local(
+  typet type,
+  SourceLocation at,
+  std::string_view stem)
+{
+  type.set("#vv_cycle_local", true);
+  const auto prefix = function ? function_identifier : name(*scope);
+  const auto id =
+    prefix + "." + std::string(stem) + std::to_string(next_procedural_local++);
+  symbolt symbol(id, type, ID_Verilog);
+  symbol.module = root;
+  symbol.location = loc(at);
+  symbol.is_lvalue = true;
+  if(object.symbols.add(symbol))
+    fail(at, "duplicate procedural local " + id);
+  return symbol.symbol_expr();
+}
+
+exprt compilert::procedural_assertion(
+  SourceLocation at,
+  const std::string &base,
+  const std::string &id,
+  exprt condition,
+  std::string_view diagnostic_task)
+{
   const auto where = loc(at);
-  std::string base = label ? std::string(label->name)
-                           : "$assert_" + id2string(where.get_line()) + "_" +
-                               id2string(where.get_column());
-  auto id = label ? name(*label) : name(*scope) + "." + base;
   symbolt symbol(id, bool_typet(), ID_Verilog);
   symbol.base_name = base;
   symbol.pretty_name = id.substr(std::string(root).size() + 1);
@@ -200,17 +312,97 @@ exprt compilert::immediate(
 
   auto result = item(
     ID_verilog_immediate_assert,
-    {boolean(expr(a.cond)), item(ID_verilog_action_then, {item(ID_skip)})});
+    {std::move(condition), item(ID_verilog_action_then, {item(ID_skip)})});
   result.set(ID_identifier, id);
   result.set(ID_base_name, base);
   result.add_source_location() = where;
   auto &info = object.metadata.add("properties").add(id);
   info.id("property");
   info.set("sampling", "procedural");
-  info.set("origin", "source");
+  info.set("origin", diagnostic_task.empty() ? "source" : "diagnostic-task");
+  if(!diagnostic_task.empty())
+    info.set("diagnostic_task", std::string(diagnostic_task));
   info.set("kind", ID_verilog_immediate_assert);
   info.add(ID_C_source_location) = where;
   return result;
+}
+
+void compilert::merge_procedural_locals(
+  const decltype(procedural_locals) &entered,
+  const decltype(procedural_locals) &other)
+{
+  for(const auto &entry : entered)
+  {
+    const auto *symbol = entry.first;
+    auto &local = procedural_locals.at(symbol);
+    const auto &alternative = other.at(symbol);
+    local.assigned &= alternative.assigned;
+    if(!local.assigned || !(local.constant == alternative.constant))
+      local.constant = {};
+  }
+}
+
+exprt compilert::immediate(
+  const ImmediateAssertionStatement &a,
+  const Symbol *label)
+{
+  auto at = a.sourceRange.start();
+  if(a.assertionKind != AssertionKind::Assert || a.isDeferred)
+    fail(at, "unsupported procedural assertion kind or timing");
+  auto condition = boolean(expr(a.cond));
+  auto lower_action = [&](const Statement *action)
+  {
+    if(!action || action->kind == StatementKind::Empty)
+      return item(ID_skip);
+    if(const auto *statement = action->as_if<ExpressionStatement>())
+    {
+      if(const auto *call = statement->expr.as_if<CallExpression>();
+         call && call->isSystemCall())
+      {
+        const auto task = call->getSubroutineName();
+        if(task == "$info" || task == "$warning" || assert_diagnostic(task))
+          return diagnostic_statement(*call);
+        // Preserve the existing representation of a simple assertion error
+        // action unless it was explicitly selected as another property.
+        if(
+          task == "$error" &&
+          std::all_of(
+             call->arguments().begin(),
+             call->arguments().end(),
+             [](const Expression *arg)
+             {
+               return arg->kind == ExpressionKind::StringLiteral ||
+                      arg->kind == ExpressionKind::IntegerLiteral ||
+                      arg->kind == ExpressionKind::NamedValue;
+             }))
+          return item(ID_skip);
+      }
+    }
+    fail(at, "unsupported procedural assertion action");
+  };
+  const auto entered = procedural_locals;
+  auto when_true = lower_action(a.ifTrue);
+  const auto after_true = std::move(procedural_locals);
+  procedural_locals = entered;
+  auto when_false = lower_action(a.ifFalse);
+  merge_procedural_locals(entered, after_true);
+
+  const auto where = loc(at);
+  const auto base = label ? std::string(label->name)
+                          : "$assert_" + id2string(where.get_line()) + "_" +
+                              id2string(where.get_column());
+  const auto id = label ? name(*label) : name(*scope) + "." + base;
+  if(when_true.id() == ID_skip && when_false.id() == ID_skip)
+    return procedural_assertion(at, base, id, std::move(condition));
+
+  // The original assertion and its action use the same sampled condition.
+  const auto ref = temporary_local(bool_typet(), at, "$assert_condition_");
+  return item(
+    ID_block,
+    {item(ID_verilog_blocking_assign, {ref, std::move(condition)}),
+     procedural_assertion(at, base, id, ref),
+     item(ID_if, {ref, std::move(when_true), std::move(when_false)})})
+    .with_source_location(where);
 }
 
 // Retain both native event operands for the clocked RTL builder. Only the
@@ -539,10 +731,20 @@ void compilert::require_empty_final(const Statement &s) const
   case StatementKind::ExpressionStatement:
     if(const auto *call =
          s.as<ExpressionStatement>().expr.as_if<CallExpression>())
+    {
+      const auto task = call->getSubroutineName();
+      if(
+        call->isSystemCall() && (task == "$info" || task == "$warning") &&
+        !assert_diagnostic(task))
+      {
+        for(const auto *argument : call->arguments())
+          check_diagnostic_argument(*argument);
+        return;
+      }
       fail(
         call->sourceRange.start(),
-        "unsupported reachable final call " +
-          std::string(call->getSubroutineName()));
+        "unsupported reachable final call " + std::string(task));
+    }
     break;
   default:
     break;
@@ -742,25 +944,14 @@ exprt compilert::stmt(const Statement &s)
     r = item(ID_if, {std::move(condition), std::move(when_true)});
     if(c.ifFalse)
       r.operands().push_back(stmt(*c.ifFalse));
-    for(const auto &entry : entered)
-    {
-      const auto *symbol = entry.first;
-      auto &after = procedural_locals.at(symbol);
-      const auto &other = after_true.at(symbol);
-      after.assigned &= other.assigned;
-      if(!after.assigned || !(after.constant == other.constant))
-        after.constant = {};
-    }
+    merge_procedural_locals(entered, after_true);
     break;
   }
   case StatementKind::ExpressionStatement:
   {
     auto &e = s.as<ExpressionStatement>().expr;
-    if(e.kind == ExpressionKind::Call)
-      fail(
-        at,
-        "unsupported procedural call " +
-          std::string(e.as<CallExpression>().getSubroutineName()));
+    if(const auto *call = e.as_if<CallExpression>())
+      return diagnostic_statement(*call);
     if(e.kind == ExpressionKind::UnaryOp)
     {
       auto &u = e.as<UnaryExpression>();
