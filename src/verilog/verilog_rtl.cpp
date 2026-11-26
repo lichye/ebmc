@@ -5737,9 +5737,29 @@ void verilog_rtl_buildert::finish_net_drivers()
   rtl.may_release = std::move(may_release);
   for(const auto &id : encoded)
   {
-    if(rtl.identifier_map.count(id))
-      throw errort{}.with_location(ns.lookup(id).location)
-        << "`" << id << "' has multiple drivers";
+    auto definitions = rtl.identifier_map.find(id);
+    if(definitions != rtl.identifier_map.end())
+    {
+      // A merging net resolves all of its bits from physical drives, and
+      // the physical drive of a net that may release has Z on the bits
+      // without a net drive.
+      if(rtl.merging_nets.count(id) || rtl.may_release.count(id))
+        throw errort{}.with_location(ns.lookup(id).location)
+          << "`" << id << "' has multiple drivers";
+      // Otherwise the four-state value of a bit without a net drive is the
+      // public bit (see verilog_resolve_nets), so a procedural definition
+      // of other bits of the vector supplies those bits. A definition of a
+      // bit that a net also drives is a conflict.
+      const auto &type = ns.lookup(id).type;
+      for(const auto &d : net_drivers[id])
+        for(const auto &definition : definitions->second)
+          if(definition.first.overlaps(d.drive.slice))
+            throw errort{}.with_location(d.location)
+              << "`" << id << "' has multiple drivers\n  "
+              << driver_slice(d.drive.slice, type) << " overlaps "
+              << driver_slice(definition.first, type) << " driven at "
+              << definition.second.driver_location.as_string();
+    }
     auto &drivers = rtl.resolved_nets[id];
     for(auto &d : net_drivers[id])
       drivers.push_back(d.drive);

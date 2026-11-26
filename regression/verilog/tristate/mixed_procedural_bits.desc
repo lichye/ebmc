@@ -1,0 +1,28 @@
+CORE
+mixed_procedural_bits.sv
+--bound 1
+^\[main\.p_v1\].*: PROVED up to bound 1$
+^\[main\.p_v1_r1\].*: PROVED up to bound 1$
+^\[main\.p_v0_known\].*: PROVED up to bound 1$
+^\[main\.p_r0_known\].*: PROVED up to bound 1$
+^\[main\.p_v0_one\].*: PROVED up to bound 1$
+^\[main\.p_r0_one\].*: PROVED up to bound 1$
+^\[main\.p_v2_known\].*: PROVED up to bound 1$
+^\[main\.p_r2_known\].*: PROVED up to bound 1$
+^\[main\.p_v2_zero\].*: PROVED up to bound 1$
+^\[main\.p_r2_zero\].*: PROVED up to bound 1$
+^\[main\.x_v0_low\].*: REFUTED$
+^\[main\.x_v0_high\].*: REFUTED$
+^\[main\.x_r0_low\].*: REFUTED$
+^\[main\.x_r0_high\].*: REFUTED$
+^\[main\.z_v2_low\].*: REFUTED$
+^\[main\.z_v2_high\].*: REFUTED$
+^\[main\.z_r2_low\].*: REFUTED$
+^\[main\.z_r2_high\].*: REFUTED$
+^\[main\.bad_v1\].*: REFUTED$
+^\[main\.bad_v0\].*: REFUTED$
+^\[main\.bad_v2\].*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+has multiple drivers
