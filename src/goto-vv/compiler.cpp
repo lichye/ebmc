@@ -157,7 +157,9 @@ void compilert::declare(const ValueSymbol &s, const PortSymbol *p, exprt &items)
   auto t =
     string_parameter ? typet(ID_verilog_string) : type(s.getType(), s.location);
   auto &symbol = add(s, t);
-  auto &info = object.metadata.add("signals").add(symbol.name);
+  if(signal_metadata.empty())
+    object.metadata.add("signals");
+  auto &info = signal_metadata[symbol.name];
   info.id("declaration");
   info.add("source_type") = describe_type(s.getType());
   info.add(ID_C_source_location) = symbol.location;
@@ -367,6 +369,24 @@ exprt compilert::runtime_call(const CallExpression &call)
     type(*call.type, at),
     {object.symbols.lookup_ref(id).symbol_expr(),
      item(ID_arguments, std::move(arguments))});
+}
+
+void compilert::finish_signal_metadata()
+{
+  if(signal_metadata.empty())
+    return;
+
+  auto &fields = object.metadata.add("signals").get_named_sub();
+#if NAMED_SUB_IS_FORWARD_LIST
+  // The map uses the same identifier order as the named-sub list.
+  // Append in that order without searching for each insertion point.
+  auto tail = fields.before_begin();
+  for(auto &[id, info] : signal_metadata)
+    tail = fields.emplace_after(tail, id, std::move(info));
+  signal_metadata.clear();
+#else
+  fields = std::move(signal_metadata);
+#endif
 }
 
 void compilert::module(const InstanceSymbol &i, bool top)
@@ -734,6 +754,7 @@ int compile_design(int argc, char **argv)
       std::cerr << lower.object.clock_gate_description() << '\n';
     }
     lower.module(top, true);
+    lower.finish_signal_metadata();
     if(lower.object.metadata.find("clock_gate_contract")
          .find("independent_resets")
          .is_not_nil())
