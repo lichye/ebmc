@@ -1,0 +1,19 @@
+CORE
+array_read_x_index_uniform1.sv
+--aig --bound 1
+^\[main\.p3_last\] .*: PROVED up to bound 1$
+^\[main\.p3_oob\] .*: PROVED up to bound 1$
+^\[main\.p4_zero\] .*: PROVED up to bound 1$
+^\[main\.p4_top\] .*: PROVED up to bound 1$
+^\[main\.ps_top\] .*: PROVED up to bound 1$
+^\[main\.ps_neg1\] .*: PROVED up to bound 1$
+^\[main\.ps_neg2\] .*: PROVED up to bound 1$
+^\[main\.x_any\] .*: REFUTED$
+^\[main\.bad4_top\] .*: REFUTED$
+^\[main\.bad3_oob\] .*: REFUTED$
+^\[main\.bads_neg\] .*: REFUTED$
+^\[main\.w_real\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^warning: ignoring
