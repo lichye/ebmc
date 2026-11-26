@@ -126,6 +126,28 @@ in this order.
     RstSync top.core.rst_sync
     reset-mux top.core.internal_reset
 
+After those bindings, add one line per independent ClockGate to project. Use
+the elaborated instance path. For example:
+
+    ClockGate top.core.cg
+
+An omitted list keeps the original RstSync-only contract. Listed gates must
+use the checked low-phase latch implementation with `te` bound to ENV1. Their
+inputs must resolve to the root clock, the named RstSync output, or an
+explicitly listed parent. All derived clocks reach low during the root low
+phase. The next root rising edge passes a branch when its own preponed enable
+and the enables of all its ancestors are true. A branch can be used for
+positive-edge processes. Waveform reads and unproved enable drivers are errors.
+
+A supported independent active-high asynchronous reset may come from the
+Coral functional reset mux whose active branch is the OR of two fixed bits of
+parent-clocked registers. Their global asynchronous reset must leave that OR
+asserted, including when the global reset follows a parent edge. The model
+honors their internal reset after the parent NBA even when the consumer's
+gate is closed. ENV2 applies to the original bound external reset only. The
+object and readback record the additional gate bindings and independent reset
+sampling.
+
 ENV1 fixes the bound test input to zero. ENV2 treats external reset as a
 boundary input driven after the root rising-edge preponed sample. The model
 requires at least two low samples for each assertion. Internal asynchronous

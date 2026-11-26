@@ -17,6 +17,7 @@ namespace
 {
 const std::string header = "goto-vv 1 slang-11.0.0 ebmc-eae879de";
 const std::string clock_gate_header = header + " clock-gate-contract-v1";
+const std::string clock_gate_branches_header = clock_gate_header + " branches";
 using numbert = std::size_t;
 using fields_t = std::map<std::string, const irept *>;
 
@@ -107,7 +108,10 @@ void vv_objectt::write(const std::string &path) const
   std::ofstream out(path);
   if(!out)
     throw std::runtime_error("cannot open " + path);
-  out << (has_clock_gate() ? clock_gate_header : header) << '\n';
+  out << (has_clock_gate_branches() ? clock_gate_branches_header
+          : has_clock_gate()        ? clock_gate_header
+                                    : header)
+      << '\n';
   irept root("object");
   root.add("metadata") = metadata;
   std::map<std::string, const symbolt *> sorted;
@@ -124,10 +128,13 @@ vv_objectt vv_objectt::read(const std::string &path)
 {
   std::ifstream in(path);
   std::string line;
-  if(!std::getline(in, line) || (line != header && line != clock_gate_header))
+  if(
+    !std::getline(in, line) || (line != header && line != clock_gate_header &&
+                                line != clock_gate_branches_header))
     throw std::runtime_error(
       path + ":1: unsupported goto-vv schema or tool versions");
-  const bool clock_gate = line == clock_gate_header;
+  const bool clock_gate = line != header;
+  const bool branches = line == clock_gate_branches_header;
   std::vector<irept> nodes;
   std::string id;
   auto bad = [&]
@@ -175,7 +182,9 @@ vv_objectt vv_objectt::read(const std::string &path)
   for(const auto &r : nodes.back().get_sub())
     if(r.id() != "symbol_record" || result.symbols.add(unpack(r)))
       bad();
-  if(result.has_clock_gate() != clock_gate)
+  if(
+    result.has_clock_gate() != clock_gate ||
+    result.has_clock_gate_branches() != branches)
     bad();
   return result;
 }
@@ -183,18 +192,27 @@ vv_objectt vv_objectt::read(const std::string &path)
 std::string vv_objectt::clock_gate_description() const
 {
   const auto &gate = metadata.find("clock_gate_contract");
-  return id2string(gate.id()) + " (temporary) ENV1 " +
-         id2string(gate.get("ENV1")) + "=0 | ENV2 " +
-         id2string(gate.get("ENV2")) + " changes only at " +
-         id2string(gate.get("master")) +
-         " rising boundaries, at least two low samples | " +
-         id2string(gate.get("sampling")) + " | gate " +
-         id2string(gate.get("gate")) + " | RstSync " +
-         id2string(gate.get("RstSync")) + " | reset mux " +
-         id2string(gate.get("reset_mux")) +
-         (metadata.get_bool("clock_gate_start_reset")
-            ? " | initial low required"
-            : "");
+  auto result =
+    id2string(gate.id()) + " (temporary) ENV1 " + id2string(gate.get("ENV1")) +
+    "=0 | ENV2 " + id2string(gate.get("ENV2")) + " changes only at " +
+    id2string(gate.get("master")) +
+    " rising boundaries, at least two low samples | " +
+    id2string(gate.get("sampling")) + " | gate " + id2string(gate.get("gate")) +
+    " | RstSync " + id2string(gate.get("RstSync")) + " | reset mux " +
+    id2string(gate.get("reset_mux")) +
+    (metadata.get_bool("clock_gate_start_reset") ? " | initial low required"
+                                                 : "");
+  for(const auto &[path, branch] : gate.find("ClockGate").get_named_sub())
+    result += " | ClockGate " + id2string(path) + " input " +
+              id2string(branch.get("input")) + " output " +
+              id2string(branch.get("output")) + " enable " +
+              id2string(branch.get("enable")) + " effective " +
+              id2string(branch.get("effective_enable")) + " low-phase/preponed";
+  for(const auto &[signal, policy] :
+      gate.find("independent_resets").get_named_sub())
+    result += " | independent reset " + id2string(signal) + " " +
+              id2string(policy.id());
+  return result;
 }
 
 void vv_objectt::validate(bool require_constraints) const
@@ -254,6 +272,46 @@ void vv_objectt::validate(bool require_constraints) const
       (stage != "clock-gate-compiled" && stage != "constrained") ||
       (initial && stage != "constrained"))
       error(loc, "invalid clock gate contract or conflicting reset");
+    const auto &branches = gate.find("ClockGate").get_named_sub();
+    std::map<irep_idt, irep_idt> branch_sources;
+    auto scalar = [&](const irep_idt &id)
+    {
+      const auto *s = symbols.lookup(id);
+      return s && s->type.id() == ID_bool;
+    };
+    for(const auto &[path, branch] : branches)
+    {
+      const auto id = "Verilog::$root." + id2string(path);
+      auto output = branch.get("output");
+      auto input = branch.get("input");
+      if(
+        branch.id() != "low-phase-preponed" || !symbols.lookup(id) ||
+        output == clock->name || output == gate.get("gate") ||
+        !scalar(output) || !scalar(input) || !scalar(branch.get("enable")) ||
+        !scalar(branch.get("effective_enable")) ||
+        !branch_sources.emplace(output, input).second)
+        error(loc, "invalid ClockGate branch " + id2string(path));
+    }
+    for(const auto &[output, input] : branch_sources)
+    {
+      std::set<irep_idt> seen{output};
+      auto parent = input;
+      while(parent != clock->name && parent != gate.get("gate"))
+      {
+        const auto earlier = branch_sources.find(parent);
+        if(earlier == branch_sources.end() || !seen.insert(parent).second)
+          error(
+            loc,
+            "ClockGate branch outside the root domain " + id2string(output));
+        parent = earlier->second;
+      }
+    }
+    for(const auto &[signal, policy] :
+        gate.find("independent_resets").get_named_sub())
+      if(
+        branches.empty() || !scalar(signal) || signal == gate.get("ENV2") ||
+        policy.id() != clock_gate_independent_reset_sampling)
+        error(loc, "invalid independent ClockGate reset " + id2string(signal));
     for(const auto &label : {"clock_gate_ENV1", "clock_gate_ENV2"})
     {
       const auto id = "Verilog::$root." + top + "." + label;
