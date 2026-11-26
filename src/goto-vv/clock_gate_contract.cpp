@@ -2,11 +2,14 @@
 #include <util/namespace.h>
 #include <util/simplify_expr.h>
 
+#include <slang/ast/ASTVisitor.h>
+#include <slang/ast/expressions/Operator.h>
 #include <slang/syntax/SyntaxTree.h>
 
 #include "lower.h"
 
 #include <fstream>
+#include <functional>
 #include <sstream>
 
 namespace vv
@@ -70,9 +73,9 @@ endmodule)sv";
 const Expression *port_expression(const PortConnection &connection)
 {
   auto *expression = connection.getExpression();
-  if(
-    const auto *assign =
-      expression ? expression->as_if<AssignmentExpression>() : nullptr)
+  if(const auto *assign =
+       expression ? expression->as_if<AssignmentExpression>() : nullptr;
+     assign && assign->isLValueArg())
     expression = &assign->left();
   return expression;
 }
@@ -103,6 +106,68 @@ void collect_instances(
           collect_instances(*entry, instances, signals);
     }
   }
+}
+
+struct async_resett
+{
+  const ValueSymbol *signal;
+  const ConditionalStatement *body;
+};
+
+std::optional<async_resett> positive_async_reset(const TimedStatement &timed)
+{
+  const auto *list = timed.timing.as_if<EventListControl>();
+  if(!list || list->events.size() != 2)
+    return {};
+  const auto *edge = list->events[1]->as_if<SignalEventControl>();
+  const auto *signal = edge ? named_value(&edge->expr) : nullptr;
+  if(!signal || edge->edge != EdgeKind::PosEdge || edge->iffCondition)
+    return {};
+  const Statement *body = &timed.stmt;
+  while(const auto *block = body->as_if<BlockStatement>())
+    body = &block->body;
+  const auto *condition = body->as_if<ConditionalStatement>();
+  if(
+    !condition || condition->conditions.size() != 1 ||
+    condition->conditions[0].pattern ||
+    named_value(&*condition->conditions[0].expr) != signal)
+    return {};
+  return async_resett{signal, condition};
+}
+
+const SignalEventControl *first_event(const TimedStatement &timed)
+{
+  if(const auto *list = timed.timing.as_if<EventListControl>())
+    return list->events.empty()
+             ? nullptr
+             : list->events.front()->as_if<SignalEventControl>();
+  return timed.timing.as_if<SignalEventControl>();
+}
+
+const AssignmentExpression *
+reset_assignment(const Statement &statement, const ValueSymbol &target)
+{
+  if(const auto *block = statement.as_if<BlockStatement>())
+    return reset_assignment(block->body, target);
+  if(const auto *list = statement.as_if<StatementList>())
+  {
+    const AssignmentExpression *found = nullptr;
+    for(const auto *child : list->list)
+    {
+      const auto *next = reset_assignment(*child, target);
+      if(next && found)
+        return nullptr;
+      if(next)
+        found = next;
+    }
+    return found;
+  }
+  if(const auto *expr = statement.as_if<ExpressionStatement>())
+    if(const auto *assignment = expr->expr.as_if<AssignmentExpression>();
+       assignment && assignment->isNonBlocking() &&
+       named_value(&assignment->left()) == &target)
+      return assignment;
+  return nullptr;
 }
 
 exprt assign(const exprt &lhs, const exprt &rhs)
@@ -188,14 +253,315 @@ std::string compilert::connected_signal(std::string id) const
   return id;
 }
 
+std::string compilert::clock_gate_enable(const std::string &output) const
+{
+  const auto &gate = *clock_gate;
+  if(output == gate.output)
+    return gate.enable;
+  const auto branch = gate.branches.find(output);
+  return branch == gate.branches.end() ? std::string{} : branch->second.enable;
+}
+
+std::string compilert::gated_clock_enable(const Expression &expression) const
+{
+  if(
+    !clock_gate || (expression.kind != ExpressionKind::NamedValue &&
+                    expression.kind != ExpressionKind::HierarchicalValue))
+    return {};
+  const auto *symbol = expression.getSymbolReference();
+  return symbol ? clock_gate_enable(connected_signal(name(*symbol)))
+                : std::string{};
+}
+
 bool compilert::gated_clock(const Expression &expression) const
 {
-  return clock_gate &&
-         (expression.kind == ExpressionKind::NamedValue ||
-          expression.kind == ExpressionKind::HierarchicalValue) &&
-         expression.getSymbolReference() &&
-         connected_signal(name(*expression.getSymbolReference())) ==
-           clock_gate->output;
+  return !gated_clock_enable(expression).empty();
+}
+
+const Expression *
+compilert::clock_gate_value_source(const ValueSymbol &value) const
+{
+  const auto &gate = *clock_gate;
+  const auto drivers = am.getDrivers(value);
+  const auto id = name(value);
+  if(const auto input = gate.input_values.find(id);
+     input != gate.input_values.end())
+  {
+    // Use the actual connection from this occurrence. Slang may analyze the
+    // module body through an identical canonical occurrence, so also exclude
+    // any internal driver recorded there.
+    auto only_port_driver = [](const auto &drivers)
+    {
+      return std::all_of(
+        drivers.begin(),
+        drivers.end(),
+        [](const auto *driver) { return driver->isInputPort(); });
+    };
+    if(!only_port_driver(drivers))
+      return nullptr;
+    const auto *scope = value.getParentScope();
+    const auto *body =
+      scope ? scope->asSymbol().as_if<InstanceBodySymbol>() : nullptr;
+    const auto *canonical = body && body->parentInstance
+                              ? body->parentInstance->getCanonicalBody()
+                              : nullptr;
+    if(canonical)
+    {
+      const auto *same = canonical->find(value.name);
+      const auto *same_value = same ? same->as_if<ValueSymbol>() : nullptr;
+      if(!same_value || !only_port_driver(am.getDrivers(*same_value)))
+        return nullptr;
+    }
+    return input->second;
+  }
+  if(drivers.size() != 1)
+    return nullptr;
+  if(value.kind == SymbolKind::Net && value.getInitializer())
+    return value.getInitializer();
+  const auto *assign =
+    drivers.front()->containingSymbol->as_if<ContinuousAssignSymbol>();
+  if(!assign || assign->getDelay())
+    return nullptr;
+  const auto *assignment =
+    assign->getAssignment().as_if<AssignmentExpression>();
+  return assignment && named_value(&assignment->left()) == &value
+           ? &assignment->right()
+           : nullptr;
+}
+
+const ProceduralBlockSymbol *
+compilert::clock_gate_register_driver(const ValueSymbol &value) const
+{
+  if(value.kind != SymbolKind::Variable)
+    return nullptr;
+  if(const auto *initial = value.getInitializer())
+  {
+    EvalContext context(value);
+    const auto constant = initial->eval(context);
+    if(!constant.isInteger() || constant.integer().hasUnknown())
+      return nullptr;
+  }
+  const ProceduralBlockSymbol *process = nullptr;
+  for(const auto *driver : am.getDrivers(value))
+  {
+    if(
+      value.getInitializer() &&
+      driver->flags.has(analysis::DriverFlags::Initializer))
+      continue;
+    const auto *next = driver->containingSymbol->as_if<ProceduralBlockSymbol>();
+    if(!next || (process && next != process))
+      return nullptr;
+    process = next;
+  }
+  if(
+    !process || (process->procedureKind != ProceduralBlockKind::Always &&
+                 process->procedureKind != ProceduralBlockKind::AlwaysFF))
+    return nullptr;
+  const auto *timed = process->getBody().as_if<TimedStatement>();
+  const auto *clock = timed ? first_event(*timed) : nullptr;
+  const auto *clock_signal = clock ? named_value(&clock->expr) : nullptr;
+  if(!clock_signal || clock->edge != EdgeKind::PosEdge || clock->iffCondition)
+    return nullptr;
+  const auto resolved = connected_signal(name(*clock_signal));
+  if(resolved != clock_gate->clock && clock_gate_enable(resolved).empty())
+    return nullptr;
+
+  bool has_assignment = false;
+  bool all_nonblocking = true;
+  timed->stmt.visit(makeVisitor(
+    [&](auto &visitor, const AssignmentExpression &assignment)
+    {
+      if(assignment.left().getSymbolReference() == &value)
+      {
+        has_assignment = true;
+        all_nonblocking &=
+          assignment.isNonBlocking() && !assignment.timingControl;
+      }
+      visitor.visitDefault(assignment);
+    },
+    [&](auto &visitor, const UnaryExpression &unary)
+    {
+      if(
+        OpInfo::isLValue(unary.op) &&
+        unary.operand().getSymbolReference() == &value)
+        all_nonblocking = false;
+      visitor.visitDefault(unary);
+    }));
+  return has_assignment && all_nonblocking ? process : nullptr;
+}
+
+bool compilert::certifies_clock_gate_reset(const ValueSymbol &reset) const
+{
+  const auto &gate = *clock_gate;
+  std::set<const ValueSymbol *> active;
+  auto dereference =
+    [&](auto &&self, const ValueSymbol &value) -> const Expression *
+  {
+    if(!active.insert(&value).second)
+      return nullptr;
+    const Expression *expr = nullptr;
+    if(auto output = gate.output_sources.find(name(value));
+       output != gate.output_sources.end())
+    {
+      if(output->second && am.getDrivers(value).size() == 1)
+        expr = self(self, *output->second);
+    }
+    else if(const auto *source = clock_gate_value_source(value))
+    {
+      const auto *alias = named_value(source);
+      expr = alias ? self(self, *alias) : source;
+    }
+    active.erase(&value);
+    return expr;
+  };
+  const auto *mux = dereference(dereference, reset);
+  const auto *select = mux ? mux->as_if<ConditionalExpression>() : nullptr;
+  if(!select || select->conditions.size() != 1 || select->conditions[0].pattern)
+    return false;
+  const auto *te = named_value(&*select->conditions[0].expr);
+  const auto *invert = select->left().as_if<UnaryExpression>();
+  const auto *rst_n = invert ? named_value(&invert->operand()) : nullptr;
+  if(
+    !te || connected_signal(name(*te)) != gate.test || !rst_n ||
+    invert->op != UnaryOperator::BitwiseNot ||
+    connected_signal(name(*rst_n)) != gate.reset_n)
+    return false;
+  const auto *active_or = select->right().as_if<BinaryExpression>();
+  if(!active_or || active_or->op != BinaryOperator::BinaryOr)
+    return false;
+
+  auto producer_reset_bit = [&](const Expression &term) -> std::optional<bool>
+  {
+    const auto *net = named_value(&term);
+    const auto *expr = net ? dereference(dereference, *net) : &term;
+    const auto *select =
+      expr ? expr->as_if<ElementSelectExpression>() : nullptr;
+    const auto *reg = select ? named_value(&select->value()) : nullptr;
+    const auto *proc = reg ? clock_gate_register_driver(*reg) : nullptr;
+    if(!proc || !reg->getType().isIntegral())
+      return {};
+    const auto &timed = proc->getBody().as<TimedStatement>();
+    if(gated_clock_enable(first_event(timed)->expr) != gate.enable)
+      return {};
+    const auto async = positive_async_reset(timed);
+    if(!async || connected_signal(name(*async->signal)) != gate.reset)
+      return {};
+    const auto *assign = reset_assignment(async->body->ifTrue, *reg);
+    if(!assign)
+      return {};
+    unsigned normal_writes = 0;
+    if(async->body->ifFalse)
+      async->body->ifFalse->visit(makeVisitor(
+        [&](auto &visitor, const AssignmentExpression &assignment)
+        {
+          if(assignment.left().getSymbolReference() == reg)
+            ++normal_writes;
+          visitor.visitDefault(assignment);
+        }));
+    if(normal_writes > 1)
+      return {};
+    EvalContext context(*proc);
+    const auto selected = select->selector().eval(context);
+    const auto constant = assign->right().eval(context);
+    const auto index =
+      selected.isInteger() ? selected.integer().as<int32_t>() : std::nullopt;
+    const auto range = reg->getType().getFixedRange();
+    if(
+      !index || !range.containsPoint(*index) || !constant.isInteger() ||
+      constant.integer().hasUnknown() ||
+      constant.integer().getBitWidth() != reg->getType().getBitWidth())
+      return {};
+    return bool(constant.integer()[range.translateIndex(*index)]);
+  };
+
+  // Both inputs change only with an NBA on the RstSync parent or with its
+  // proved asynchronous reset. At a boundary with both events, the shared
+  // reset must leave the OR asserted so that a short assertion cannot be lost.
+  const auto left = producer_reset_bit(active_or->left());
+  const auto right = producer_reset_bit(active_or->right());
+  return left && right && (*left || *right);
+}
+
+void compilert::verify_clock_gate_enable(const Expression &enable) const
+{
+  const auto &gate = *clock_gate;
+  std::set<const ValueSymbol *> visiting, checked;
+  std::function<void(const Expression &)> expression;
+  std::function<void(const ValueSymbol &)> signal;
+  signal = [&](const ValueSymbol &value)
+  {
+    if(
+      checked.count(&value) || value.kind == SymbolKind::Parameter ||
+      value.kind == SymbolKind::EnumValue)
+      return;
+    auto id = name(value);
+    auto established = connected_signal(id);
+    if(established == gate.test || established == gate.reset_n)
+      return;
+    if(established == gate.clock || !clock_gate_enable(established).empty())
+      fail(
+        value.location,
+        "clock gate contract does not support clock data in enable");
+    if(!visiting.insert(&value).second)
+      fail(
+        value.location,
+        "clock gate contract found an enable computation cycle");
+    if(auto output = gate.output_sources.find(id);
+       output != gate.output_sources.end())
+    {
+      if(!output->second || am.getDrivers(value).size() != 1)
+        fail(
+          value.location,
+          "clock gate contract cannot resolve a unique enable driver");
+      signal(*output->second);
+    }
+    else if(const auto *source = clock_gate_value_source(value))
+      expression(*source);
+    else
+    {
+      const auto *process = clock_gate_register_driver(value);
+      if(!process)
+        fail(
+          value.location,
+          "clock gate contract cannot prove a sampled enable driver");
+      const auto &timed = process->getBody().as<TimedStatement>();
+      if(timed.timing.kind == TimingControlKind::EventList)
+      {
+        const auto reset = positive_async_reset(timed);
+        if(
+          !reset || (connected_signal(name(*reset->signal)) != gate.reset &&
+                     !certifies_clock_gate_reset(*reset->signal)))
+          fail(
+            value.location,
+            "clock gate contract cannot prove enable reset timing");
+      }
+    }
+    visiting.erase(&value);
+    checked.insert(&value);
+  };
+  expression = [&](const Expression &expr)
+  {
+    require_read_only(
+      expr, "clock gate contract requires a side-effect-free enable");
+    expr.visit(makeVisitor(
+      [&](auto &, const CallExpression &call)
+      {
+        fail(
+          call.sourceRange.start(),
+          "clock gate contract does not support a call in enable");
+      }));
+    expr.visitSymbolReferences(
+      [&](const Expression &at, const Symbol &symbol)
+      {
+        if(const auto *value = symbol.as_if<ValueSymbol>())
+          signal(*value);
+        else
+          fail(
+            at.sourceRange.start(),
+            "clock gate contract cannot prove an enable reference");
+      });
+  };
+  expression(enable);
 }
 
 void compilert::load_clock_gate(
@@ -210,11 +576,21 @@ void compilert::load_clock_gate(
   if(
     !(in >> version >> env1 >> test >> env2 >> reset_n >> clock >> sync_key >>
       sync_path >> mux_key >> mux) ||
-    (in >> extra) || version != vv_objectt::clock_gate_v1 || env1 != "ENV1" ||
-    env2 != "ENV2" || sync_key != "RstSync" || mux_key != "reset-mux")
+    version != vv_objectt::clock_gate_v1 || env1 != "ENV1" || env2 != "ENV2" ||
+    sync_key != "RstSync" || mux_key != "reset-mux")
     reject(
       "expected coral-w4-env1-env2.v1, ENV1, ENV2, RstSync and reset-mux "
       "bindings");
+
+  std::map<std::string, const InstanceSymbol *> listed;
+  while(in >> extra)
+  {
+    std::string instance;
+    if(extra != "ClockGate" || !(in >> instance))
+      reject("expected ClockGate and its elaborated instance path");
+    if(!listed.emplace(instance, nullptr).second)
+      reject("duplicate ClockGate instance " + instance);
+  }
 
   auto prefix = std::string(root) + ".";
   clock_gatet gate;
@@ -247,10 +623,29 @@ void compilert::load_clock_gate(
   {
     if(instance->getHierarchicalPath() == sync_path)
       gate.sync = instance;
+    if(auto found = listed.find(instance->getHierarchicalPath());
+       found != listed.end())
+      found->second = instance;
     for(const auto *connection : instance->getPortConnections())
     {
       const auto *p = connection->port.as_if<PortSymbol>();
-      const auto *actual = named_value(port_expression(*connection));
+      const auto *value = port_expression(*connection);
+      const auto *actual = named_value(value);
+      const auto *internal = p && p->internalSymbol
+                               ? p->internalSymbol->as_if<ValueSymbol>()
+                               : nullptr;
+      if(!listed.empty() && internal && value)
+      {
+        if(p->direction == ArgumentDirection::In)
+          gate.input_values.emplace(name(*p->internalSymbol), value);
+        else if(p->direction == ArgumentDirection::Out && actual)
+        {
+          auto [it, unique] =
+            gate.output_sources.emplace(name(*actual), internal);
+          if(!unique)
+            it->second = nullptr;
+        }
+      }
       if(
         p && actual && p->internalSymbol &&
         (p->direction == ArgumentDirection::In ||
@@ -349,8 +744,84 @@ void compilert::load_clock_gate(
   metadata.set("RstSync", sync_path);
   metadata.set("sampling", vv_objectt::clock_gate_sampling);
   metadata.add(ID_C_source_location) = loc(gate.sync->location);
+  for(const auto &[path, instance] : listed)
+  {
+    if(!instance)
+      reject("unbound ClockGate instance " + path);
+    if(
+      instance == &icg->as<InstanceSymbol>() ||
+      !has_active_definition(instance->getDefinition(), clock_gate_v1))
+      fail(
+        instance->location,
+        "clock gate contract requires an independent Coral v1 low-phase "
+        "ClockGate body");
+    auto binding = [&](std::string_view key) -> const ValueSymbol &
+    {
+      const auto *symbol = instance->body.find(key);
+      if(!symbol || !symbol->as_if<ValueSymbol>())
+        fail(
+          instance->location,
+          "clock gate contract requires port " + std::string(key));
+      return symbol->as<ValueSymbol>();
+    };
+    auto input = connected_signal(name(binding("clk_i")));
+    auto output = connected_signal(name(binding("clk_o")));
+    const auto sink = gate.signals.find(output);
+    if(connected_signal(name(binding("te"))) != gate.test)
+      fail(
+        instance->location, "clock gate contract ClockGate.te must bind ENV1");
+    if(
+      output == name(binding("clk_o")) || output == gate.output ||
+      output == gate.clock || output == gate.reset || output == gate.reset_n ||
+      output == gate.test || sink == gate.signals.end() ||
+      sink->second->kind != SymbolKind::Net || sink->second->getInitializer() ||
+      am.getDrivers(*sink->second).size() != 1)
+      fail(
+        instance->location,
+        "clock gate contract requires a single driven ClockGate output");
+    auto enable = name(*instance) + ".__clock_gate_enable";
+    if(!gate.branches
+          .emplace(output, clock_gate_branch_t{instance, input, output, enable})
+          .second)
+      fail(
+        instance->location,
+        "clock gate contract ClockGate output is already bound");
+  }
+  for(const auto &[output, branch] : gate.branches)
+  {
+    std::set<std::string> visited{output};
+    auto parent = branch.input;
+    while(parent != gate.clock && parent != gate.output)
+    {
+      auto found = gate.branches.find(parent);
+      if(found == gate.branches.end() || !visited.insert(parent).second)
+        fail(
+          branch.instance->location,
+          "clock gate contract ClockGate input is outside the root domain or "
+          "forms a cycle");
+      parent = found->second.input;
+    }
+    auto &entry =
+      metadata.add("ClockGate").add(branch.instance->getHierarchicalPath());
+    entry.id("low-phase-preponed");
+    entry.set("input", branch.input);
+    entry.set("output", output);
+    entry.set("enable", name(*branch.instance->body.find("enable")));
+    entry.set("effective_enable", branch.enable);
+    entry.add(ID_C_source_location) = loc(branch.instance->location);
+  }
   object.metadata.set("clock", gate.clock);
   clock_gate = std::move(gate);
+  for(const auto &[output, branch] : clock_gate->branches)
+  {
+    auto input = clock_gate->input_values.find(
+      name(*branch.instance->body.find("enable")));
+    if(input == clock_gate->input_values.end())
+      fail(
+        branch.instance->location,
+        "clock gate contract requires a connected ClockGate.enable");
+    verify_clock_gate_enable(*input->second);
+  }
 }
 
 void compilert::emit_clock_gate(exprt &items)
@@ -379,6 +850,30 @@ void compilert::emit_clock_gate(exprt &items)
   items.operands().push_back(item(
     ID_verilog_always,
     {root_edge(gate.clock, update(shift, if_exprt{rst_n, advanced, clear}))}));
+}
+
+void compilert::emit_clock_gate_branch(
+  const clock_gate_branch_t &branch,
+  exprt &items)
+{
+  auto port = [&](std::string_view key)
+  {
+    return object.symbols.lookup_ref(name(*branch.instance->body.find(key)))
+      .symbol_expr();
+  };
+  auto effective = add_local(
+    object, branch.enable, bool_typet(), loc(branch.instance->location));
+  auto local = port("enable");
+  auto parent = clock_gate_enable(branch.input);
+  items.operands().push_back(assign(
+    effective,
+    parent.empty()
+      ? exprt{local}
+      : exprt{and_exprt{symbol_exprt{parent, bool_typet()}, local}}));
+  // Each parent output is low during the root low phase. A subsequent
+  // root rising edge passes only when every latch sampled an open enable.
+  items.operands().push_back(
+    assign(port("clk_o"), and_exprt{port("clk_i"), local}));
 }
 
 void compilert::emit_clock_environment(exprt &items)
@@ -428,10 +923,9 @@ std::optional<exprt> compilert::gated_statement(
     return {};
   const auto &gate = *clock_gate;
   const auto *list = timed.timing.as_if<EventListControl>();
-  const auto *edge = list && !list->events.empty()
-                       ? list->events.front()->as_if<SignalEventControl>()
-                       : timed.timing.as_if<SignalEventControl>();
-  if(!edge || !gated_clock(edge->expr))
+  const auto *edge = first_event(timed);
+  auto enable_id = edge ? gated_clock_enable(edge->expr) : std::string{};
+  if(enable_id.empty())
     return {};
   auto at = timed.timing.sourceRange.start();
   if(
@@ -439,28 +933,31 @@ std::optional<exprt> compilert::gated_statement(
     (process.procedureKind != ProceduralBlockKind::Always &&
      process.procedureKind != ProceduralBlockKind::AlwaysFF))
     fail(at, "clock gate contract requires a positive-edge clocked process");
-  auto enable = symbol_exprt{gate.enable, bool_typet()};
+  auto enable = symbol_exprt{enable_id, bool_typet()};
   if(!list)
     return root_edge(gate.clock, item(ID_if, {enable, stmt(timed.stmt)}));
   if(list->events.size() != 2)
     fail(at, "clock gate contract requires one asynchronous reset");
-  const auto *reset = list->events[1]->as_if<SignalEventControl>();
-  const auto *reset_signal = reset ? named_value(&reset->expr) : nullptr;
-  const Statement *body = &timed.stmt;
-  while(const auto *block = body->as_if<BlockStatement>())
-    body = &block->body;
-  const auto *condition = body->as_if<ConditionalStatement>();
-  if(
-    !reset || reset->edge != EdgeKind::PosEdge || reset->iffCondition ||
-    !reset_signal || connected_signal(name(*reset_signal)) != gate.reset ||
-    !condition || condition->conditions.size() != 1 ||
-    condition->conditions[0].pattern ||
-    named_value(&*condition->conditions[0].expr) != reset_signal)
+  const auto reset = positive_async_reset(timed);
+  if(!reset)
     fail(
       at,
-      "clock gate contract requires the bound asynchronous reset in the outer "
+      "clock gate contract requires a positive asynchronous reset in the outer "
       "if");
-  auto reset_test = boolean(expr(reset->expr));
+  const auto reset_id = connected_signal(name(*reset->signal));
+  if(
+    reset_id != gate.reset &&
+    (enable_id == gate.enable || !certifies_clock_gate_reset(*reset->signal)))
+    fail(
+      at,
+      "clock gate contract cannot prove the independent asynchronous reset "
+      "timing");
+  if(reset_id != gate.reset)
+    object.metadata.add("clock_gate_contract")
+      .add("independent_resets")
+      .set(reset_id, vv_objectt::clock_gate_independent_reset_sampling);
+  const auto *condition = reset->body;
+  auto reset_test = boolean(expr(*condition->conditions[0].expr));
   auto reset_body = stmt(condition->ifTrue);
   auto normal = condition->ifFalse ? stmt(*condition->ifFalse) : item(ID_skip);
 

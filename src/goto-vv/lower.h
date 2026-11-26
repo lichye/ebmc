@@ -95,6 +95,11 @@ public:
   bool in_always_comb = false;
   std::map<const ConcurrentAssertionStatement *, const TimingControl *> clocks;
   std::map<std::string, std::string> clock_alias;
+  struct clock_gate_branch_t
+  {
+    const InstanceSymbol *instance;
+    std::string input, output, enable;
+  };
   struct clock_gatet
   {
     const InstanceSymbol *sync = nullptr;
@@ -102,11 +107,22 @@ public:
     std::map<std::string, const ValueSymbol *> signals;
     std::string clock, reset_n, test, output, reset;
     std::string enable;
+    std::map<std::string, clock_gate_branch_t> branches;
+    std::map<std::string, const Expression *> input_values;
+    std::map<std::string, const ValueSymbol *> output_sources;
   };
   std::optional<clock_gatet> clock_gate;
   std::map<std::string, std::string> gate_connections;
   std::string connected_signal(std::string) const;
+  std::string clock_gate_enable(const std::string &) const;
+  std::string gated_clock_enable(const Expression &) const;
   bool gated_clock(const Expression &) const;
+  const Expression *clock_gate_value_source(const ValueSymbol &) const;
+  const ProceduralBlockSymbol *
+  clock_gate_register_driver(const ValueSymbol &) const;
+  bool certifies_clock_gate_reset(const ValueSymbol &) const;
+  void verify_clock_gate_enable(const Expression &) const;
+  void emit_clock_gate_branch(const clock_gate_branch_t &, exprt &);
   void load_clock_gate(const std::string &, const InstanceSymbol &);
   void emit_clock_gate(exprt &);
   void emit_clock_environment(exprt &);

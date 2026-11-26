@@ -384,7 +384,21 @@ void compilert::module(const InstanceSymbol &i, bool top)
     emit_clock_gate(items);
   }
   else
-    members(i.body, ports, items);
+  {
+    const clock_gate_branch_t *branch = nullptr;
+    if(clock_gate)
+      for(const auto &[output, entry] : clock_gate->branches)
+        if(entry.instance == &i)
+          branch = &entry;
+    if(branch)
+    {
+      for(const auto &[signal, port] : ports)
+        declare(signal->as<ValueSymbol>(), port, items);
+      emit_clock_gate_branch(*branch, items);
+    }
+    else
+      members(i.body, ports, items);
+  }
   if(clock_gate && top)
     emit_clock_environment(items);
   symbolt mod(id, mt, ID_Verilog);
@@ -699,6 +713,10 @@ int compile_design(int argc, char **argv)
       std::cerr << lower.object.clock_gate_description() << '\n';
     }
     lower.module(top, true);
+    if(lower.object.metadata.find("clock_gate_contract")
+         .find("independent_resets")
+         .is_not_nil())
+      std::cerr << lower.object.clock_gate_description() << '\n';
     lower.object.validate(false);
     lower.object.write(argv[1]);
     for(const auto &[id, property] : meta.find("properties").get_named_sub())
