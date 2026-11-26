@@ -1,0 +1,16 @@
+CORE
+descending_init_512.sv
+--top main --bound 3
+^\[main\.p_low\] .*: PROVED up to bound 3$
+^\[main\.p_high\] .*: PROVED up to bound 3$
+^\[main\.p_rt\] .*: PROVED up to bound 3$
+^\[main\.p_rt_value\] .*: PROVED up to bound 3$
+^\[main\.p_write\] .*: PROVED up to bound 3$
+^\[main\.r_sanity\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+512 descending words initialised one by one, as Yosys writes a memory with
+an init file. A constant index is one element; as a selector over all 512
+elements per initial word, this took 13 seconds and 1.1 GB.
