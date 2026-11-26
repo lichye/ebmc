@@ -28,6 +28,11 @@ exprt verilog_sample_drive(
   const exprt &,
   const std::function<exprt(const typet &)> &fresh);
 
+/// Whether verilog_sample_drive would introduce a fresh value somewhere in
+/// \p e, i.e., \p e has an x/z that the sampling replaces or a switch.
+/// Shared subterms are visited once.
+bool verilog_sample_drive_reaches_unknowns(const exprt &e);
+
 void verilog_resolve_nets(
   verilog_rtlt &,
   symbol_table_baset &,

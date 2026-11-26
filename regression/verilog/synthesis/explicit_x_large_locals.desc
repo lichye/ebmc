@@ -1,0 +1,30 @@
+CORE
+explicit_x_large_locals.sv
+--top main --bound 2
+^\[main\.p_b1_x\] .*: PROVED up to bound 2$
+^\[main\.p_b1_known\] .*: PROVED up to bound 2$
+^\[main\.p_b2_x\] .*: PROVED up to bound 2$
+^\[main\.p_b3_x\] .*: PROVED up to bound 2$
+^\[main\.p_b3_known\] .*: PROVED up to bound 2$
+^\[main\.r_v_x\] .*: PROVED up to bound 2$
+^\[main\.p_v_known\] .*: PROVED up to bound 2$
+^\[main\.r_v3_x\] .*: PROVED up to bound 2$
+^\[main\.p_s1_x\] .*: PROVED up to bound 2$
+^\[main\.p_s1_known\] .*: PROVED up to bound 2$
+^\[main\.p_s2_x\] .*: PROVED up to bound 2$
+^\[main\.p_s3_x\] .*: PROVED up to bound 2$
+^\[main\.r_sv_x\] .*: REFUTED$
+^\[main\.p_sv_known\] .*: PROVED up to bound 2$
+^\[main\.r_sv3_x\] .*: REFUTED$
+^\[main\.r_w_independent\] .*: REFUTED$
+^\[main\.p_w_known\] .*: PROVED up to bound 2$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+Large values with explicit x in a function local and in a module variable
+written with blocking assignments, read within the always construct. Two-state
+targets, implicit or explicit conversion, read 0 for the x bits; four-state
+targets sample the x bits that the sampling reaches (merged shifts), not those
+in a runtime bit update. The values exceed the auxiliary wire threshold. The
+same value at two positions of a concatenation has independent samples.

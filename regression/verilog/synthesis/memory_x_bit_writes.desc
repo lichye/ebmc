@@ -1,0 +1,14 @@
+CORE
+memory_x_bit_writes.sv
+--top main --bound 3
+^\[main\.p_low\] .*: PROVED up to bound 3$
+^\[main\.p_high\] .*: PROVED up to bound 3$
+^\[main\.p_keep\] .*: PROVED up to bound 3$
+^EXIT=0$
+^SIGNAL=0$
+--
+--
+A Yosys-style byte-masked memory write: 32 guarded bit writes at a runtime
+address, with x for the bits outside the enabled byte. The x is inside the
+array update, which the commit does not sample, so the merged value is bound
+to auxiliary wires (unbound, this took more than 5 GiB).
