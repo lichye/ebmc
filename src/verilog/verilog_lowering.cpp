@@ -1715,8 +1715,13 @@ exprt verilog_lowering_node(exprt expr)
                                     ? (*index_int - offset)
                                     : (offset + array_size - 1 - *index_int);
 
+            // The internal index is a constant, too: the expression above
+            // is not folded, and the back end would treat it as a runtime
+            // index, e.g., for each per-word initial assignment of a
+            // descending memory.
             if(internal >= 0 && internal < array_size)
-              return index_exprt{src, index, element_type};
+              return index_exprt{
+                src, from_integer(internal, index_type), element_type};
 
             auto default_opt = element_default();
             if(default_opt.has_value())

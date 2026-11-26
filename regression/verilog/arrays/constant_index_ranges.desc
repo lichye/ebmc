@@ -1,0 +1,27 @@
+CORE
+constant_index_ranges.sv
+--top main --bound 3
+^\[main\.p_desc_init\] .*: PROVED up to bound 3$
+^\[main\.p_desc_low\] .*: PROVED up to bound 3$
+^\[main\.p_asc_init\] .*: PROVED up to bound 3$
+^\[main\.p_two_oob\] .*: PROVED up to bound 3$
+^\[main\.p_desc_write\] .*: PROVED up to bound 3$
+^\[main\.p_asc_write\] .*: PROVED up to bound 3$
+^\[main\.p_desc_keep\] .*: PROVED up to bound 3$
+^\[main\.r_desc_changes\] .*: REFUTED$
+^\[main\.p_desc_rt\] .*: PROVED up to bound 3$
+^\[main\.p_desc_rt5\] .*: PROVED up to bound 3$
+^\[main\.p_desc_rt63\] .*: PROVED up to bound 3$
+^\[main\.p_asc_rt8\] .*: PROVED up to bound 3$
+^\[main\.p_asc_rt70\] .*: PROVED up to bound 3$
+^\[main\.p_asc_rt71\] .*: PROVED up to bound 3$
+^\[main\.p_two_rt_oob\] .*: PROVED up to bound 3$
+^\[main\.p_two_rt7\] .*: PROVED up to bound 3$
+^\[main\.r_sanity\] .*: REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+Constant indices of a descending array and of an ascending array with a
+non-zero lower bound: per-word initial values, constant writes, reads in and
+out of range, each equal to the read with a runtime index of the same value.
