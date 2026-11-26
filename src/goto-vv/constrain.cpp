@@ -70,12 +70,16 @@ void apply(vv_objectt &o, const std::string &path)
       if(o.has_clock_gate())
         reject(
           "single-cycle reset conflicts with ENV2; use clock-gate-start-reset");
-      std::string n;
-      if(
-        !(in >> n) || in >> rest || signal(n).type.id() != ID_bool ||
-        !o.metadata.get("reset").empty())
+      std::string n, polarity;
+      if(!(in >> n) || !o.metadata.get("reset").empty())
+        reject("invalid initial reset");
+      if(in >> polarity && (polarity != "low" || in >> rest))
+        reject("expected reset NAME [low]");
+      if(signal(n).type.id() != ID_bool)
         reject("invalid initial reset");
       o.metadata.set("reset", n);
+      if(polarity == "low")
+        o.metadata.set("reset_polarity", polarity);
       o.metadata.add("reset_location") = loc;
       continue;
     }

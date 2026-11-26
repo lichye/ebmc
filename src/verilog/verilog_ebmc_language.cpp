@@ -862,6 +862,9 @@ verilog_ebmc_languaget::receive(vv_objectt object)
     object, result, object.metadata.get_bool("clock_gate_start_reset"));
   const auto reset = object.metadata.get("reset");
   if(!reset.empty())
-    create_reset_logic(id2string(reset), result);
+    create_reset_logic(
+      (object.metadata.get("reset_polarity") == "low" ? "!" : "") +
+        id2string(reset),
+      result);
   return result;
 }
