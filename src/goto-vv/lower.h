@@ -94,6 +94,7 @@ public:
   SourceManager &sm;
   analysis::AnalysisManager &am;
   vv_objectt object;
+  std::map<irep_idt, irept> signal_metadata;
   const Symbol *scope = nullptr;
   const SubroutineSymbol *function = nullptr;
   std::set<const SubroutineSymbol *> active_functions;
@@ -223,6 +224,7 @@ public:
   exprt assertion(const AssertionExpr &a, SourceLocation at, irept &references);
   std::string clock(const TimingControl *ev, SourceLocation at);
   void module(const InstanceSymbol &inst, bool top);
+  void finish_signal_metadata();
   using port_mapt = std::map<const Symbol *, const PortSymbol *>;
   void members(const Scope &body, const port_mapt &ports, exprt &items);
   void property(
