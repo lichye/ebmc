@@ -928,10 +928,31 @@ exprt compilert::stmt(const Statement &s)
     const bool normal = c.condition == CaseStatementCondition::Normal;
     const bool package_case = in_package_function() && normal;
     const bool casez = c.condition == CaseStatementCondition::WildcardJustZ;
-    const bool unique =
-      package_case && c.check == UniquePriorityCheck::Unique && c.defaultCase;
-    if((!normal && !casez) || (c.check != UniquePriorityCheck::None && !unique))
+    const bool unique = c.check == UniquePriorityCheck::Unique;
+    const bool priority = c.check == UniquePriorityCheck::Priority;
+    const bool qualified = normal && (unique || priority);
+    if(
+      (!normal && !casez) ||
+      (c.check != UniquePriorityCheck::None && !qualified))
       fail(at, "unsupported case matching mode");
+
+    const bool check_overlap = assert_case_qualifiers && qualified && unique;
+    const bool check_coverage =
+      assert_case_qualifiers && qualified && !c.defaultCase;
+    if(check_overlap || check_coverage)
+    {
+      if(
+        function || !locals.empty() || !expanded_indices.empty() ||
+        in_gated_async)
+        fail(
+          at,
+          "unsupported case qualifier assertion in this procedural context");
+      const auto diagnostic = "unsupported expression effect in a checked case";
+      require_read_only(c.expr, diagnostic);
+      for(const auto &group : c.items)
+        for(const auto *label : group.expressions)
+          require_read_only(*label, diagnostic);
+    }
 
     // Retain exact X/Z matching when Slang knows the selector and item values,
     // even if a different argument keeps the call itself at run time.
@@ -1009,6 +1030,28 @@ exprt compilert::stmt(const Statement &s)
     if(c.defaultCase)
       r.operands().push_back(
         item(ID_case_item, {item(ID_default), stmt(*c.defaultCase)}));
+    auto add_check = [&](const irep_idt &key, const char *stem)
+    {
+      const auto site = sm.getFullyExpandedLoc(at);
+      const auto where = loc(site);
+      const auto prefix = name(*scope) + ".";
+      const auto name = std::string(stem) + "_" + id2string(where.get_line()) +
+                        "_" + id2string(where.get_column());
+      auto base = name;
+      for(unsigned occurrence = 2; object.symbols.lookup(prefix + base);
+          ++occurrence)
+        base = name + "_" + std::to_string(occurrence);
+      const auto id = prefix + base;
+      r.add(key) = procedural_assertion(site, base, id, true_exprt{});
+      object.metadata.add("properties").add(id).set("origin", "case-qualifier");
+    };
+    if(check_overlap)
+      add_check(
+        verilog_case_statement_baset::overlap_check, "$case_unique_overlap");
+    if(check_coverage)
+      add_check(
+        verilog_case_statement_baset::coverage_check,
+        unique ? "$case_unique_coverage" : "$case_priority_coverage");
     break;
   }
   case StatementKind::Timed:

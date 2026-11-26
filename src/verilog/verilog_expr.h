@@ -1576,6 +1576,9 @@ inline verilog_blockt &to_verilog_block(exprt &expr)
 class verilog_case_statement_baset : public verilog_statementt
 {
 public:
+  static constexpr auto overlap_check = "#vv_case_overlap_check";
+  static constexpr auto coverage_check = "#vv_case_coverage_check";
+
   verilog_case_statement_baset()
   {
   }

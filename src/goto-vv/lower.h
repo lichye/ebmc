@@ -102,6 +102,7 @@ public:
   std::map<const VariableSymbol *, ConstantValue> function_constants;
   bool assert_warnings = false;
   bool assert_errors = false;
+  bool assert_case_qualifiers = false;
   bool in_clocked_property = false;
   bool in_always_comb = false;
   bool in_posedge_process = false;
