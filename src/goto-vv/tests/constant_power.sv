@@ -101,7 +101,7 @@ module constant_power(input bit clk, input logic [4:0] a, input logic [8:0] b);
 endmodule
 
 module power_runtime_exponent(input bit clk, input logic [7:0] n);
-  wire [7:0] y = 8'd2 ** n;
+  wire [7:0] y = 8'd3 ** n;
   p: assert property (@(posedge clk) y == 0);
 endmodule
 

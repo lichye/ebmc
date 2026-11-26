@@ -759,5 +759,6 @@ EBMC="$eb" VV_BIN="$vv" bash "$front/tests/compilation_units.sh" "$work/compilat
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/diagnostic_tasks.sh" "$work/diagnostics"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/package_diagnostics.sh" "$work/package-diagnostics"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/constant_power.sh" "$work/constant-power"
+EBMC="$eb" VV_BIN="$vv" bash "$front/tests/runtime_power.sh" "$work/runtime-power"
 EBMC="$eb" VV_BIN="$vv" bash "$front/tests/package_function.sh" "$work/package-function"
 echo PASS
