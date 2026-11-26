@@ -867,18 +867,68 @@ exprt compilert::stmt(const Statement &s)
     if(!procedural_locals.empty())
       fail(at, "unsupported case with active procedural locals");
     const auto &c = s.as<CaseStatement>();
-    if(
-      (c.condition != CaseStatementCondition::Normal &&
-       c.condition != CaseStatementCondition::WildcardJustZ) ||
-      c.check != UniquePriorityCheck::None)
-      fail(at, "unsupported case matching mode");
+    const bool normal = c.condition == CaseStatementCondition::Normal;
+    const bool package_case = in_package_function() && normal;
     const bool casez = c.condition == CaseStatementCondition::WildcardJustZ;
-    r = item(casez ? ID_verilog_casez : ID_verilog_case, {expr(c.expr)});
+    const bool unique =
+      package_case && c.check == UniquePriorityCheck::Unique && c.defaultCase;
+    if((!normal && !casez) || (c.check != UniquePriorityCheck::None && !unique))
+      fail(at, "unsupported case matching mode");
+
+    // Retain exact X/Z matching when Slang knows the selector and item values,
+    // even if a different argument keeps the call itself at run time.
+    const auto selector = package_case ? eval_known(c.expr) : ConstantValue{};
+    const bool exact =
+      selector.isInteger() && std::all_of(
+                                c.items.begin(),
+                                c.items.end(),
+                                [&](const auto &group)
+                                {
+                                  return std::all_of(
+                                    group.expressions.begin(),
+                                    group.expressions.end(),
+                                    [&](const Expression *label)
+                                    { return eval_known(*label).isInteger(); });
+                                });
+    if(selector.isInteger() && selector.integer().hasUnknown() && !exact)
+      fail(
+        at,
+        "runtime package case with an X/Z selector requires constant labels");
+
+    // A unique qualifier adds no match or completeness assumption.
+    auto operand = expr(c.expr);
+    r = item(
+      casez ? ID_verilog_casez : ID_verilog_case,
+      {exact ? exprt{true_exprt{}} : std::move(operand)});
     for(auto &group : c.items)
     {
       auto labels = item(ID_empty_string);
       for(auto *x : group.expressions)
       {
+        if(exact)
+        {
+          // Check the original expression before replacing a known match.
+          (void)expr(*x);
+          const auto label = eval_known(*x);
+          labels.operands().push_back(
+            exactlyEqual(selector.integer(), label.integer())
+              ? exprt{true_exprt{}}
+              : exprt{false_exprt{}});
+          continue;
+        }
+        if(package_case)
+        {
+          const auto label = eval_known(*x);
+          if(label.isInteger() && label.integer().hasUnknown())
+          {
+            if(selector.isInteger() || !c.expr.type->isFourState())
+              continue; // X/Z never matches a known binary value in plain case.
+            fail(
+              x->sourceRange.start(),
+              "runtime package case cannot preserve an X/Z label with a "
+              "variable four-state selector");
+          }
+        }
         if(!casez)
         {
           labels.operands().push_back(expr(*x));
@@ -951,7 +1001,12 @@ exprt compilert::stmt(const Statement &s)
   {
     auto &e = s.as<ExpressionStatement>().expr;
     if(const auto *call = e.as_if<CallExpression>())
+    {
+      if(in_package_function())
+        fail(
+          at, "unsupported call statement in a pure runtime package function");
       return diagnostic_statement(*call);
+    }
     if(e.kind == ExpressionKind::UnaryOp)
     {
       auto &u = e.as<UnaryExpression>();
