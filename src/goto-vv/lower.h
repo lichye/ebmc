@@ -126,6 +126,10 @@ public:
   dynamic_packed_write(const AssignmentExpression &assignment);
   std::optional<exprt>
   dynamic_packed_bank_write(const AssignmentExpression &assignment);
+  exprt runtime_packed_element_read(
+    const ElementSelectExpression &,
+    const PackedArrayType &,
+    const typet &);
   ConstantRange
   packed_range(const RangeSelectExpression &, const PackedArrayType &) const;
   void require_read_only(const Expression &expr, const char *diagnostic) const;
