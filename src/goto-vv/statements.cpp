@@ -997,8 +997,6 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
     break;
   case StatementKind::Case:
   {
-    if(!procedural_locals.empty())
-      fail(at, "unsupported case with active procedural locals");
     const auto &c = s.as<CaseStatement>();
     const bool normal = c.condition == CaseStatementCondition::Normal;
     const bool package_case = in_package_function() && normal;
@@ -1006,6 +1004,11 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
     const bool unique = c.check == UniquePriorityCheck::Unique;
     const bool priority = c.check == UniquePriorityCheck::Priority;
     const bool qualified = normal && (unique || priority);
+    if(
+      !procedural_locals.empty() &&
+      (!in_always_comb_procedure || !normal ||
+       (c.check != UniquePriorityCheck::None && !unique)))
+      fail(at, "unsupported case with active procedural locals");
     if(
       (!normal && !casez) ||
       (c.check != UniquePriorityCheck::None && !qualified))
@@ -1022,7 +1025,13 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
         fail(
           at,
           "unsupported case qualifier assertion in this procedural context");
-      const auto diagnostic = "unsupported expression effect in a checked case";
+    }
+    if(check_overlap || check_coverage || !procedural_locals.empty())
+    {
+      const auto diagnostic =
+        check_overlap || check_coverage
+          ? "unsupported expression effect in a checked case"
+          : "unsupported expression effect in a case with procedural locals";
       require_read_only(c.expr, diagnostic);
       for(const auto &group : c.items)
         for(const auto *label : group.expressions)
@@ -1048,6 +1057,20 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
       fail(
         at,
         "runtime package case with an X/Z selector requires constant labels");
+
+    // Every item reads the same entry bindings. The RTL builder merges the
+    // ordinary result writes using the existing case and branch semantics.
+    const auto entered = procedural_locals;
+    auto lower_branch = [&](const Statement &branch)
+    {
+      if(entered.empty())
+        return stmt(branch);
+      for(auto &entry : procedural_locals)
+        entry.second.case_read_only = true;
+      auto lowered = stmt(branch);
+      procedural_locals = entered;
+      return lowered;
+    };
 
     // A unique qualifier adds no match or completeness assumption.
     auto operand = expr(c.expr);
@@ -1100,11 +1123,12 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
         labels.operands().push_back(
           literal(v, v.hasUnknown() ? t : type(*x->type)));
       }
-      r.operands().push_back(item(ID_case_item, {labels, stmt(*group.stmt)}));
+      r.operands().push_back(
+        item(ID_case_item, {std::move(labels), lower_branch(*group.stmt)}));
     }
     if(c.defaultCase)
       r.operands().push_back(
-        item(ID_case_item, {item(ID_default), stmt(*c.defaultCase)}));
+        item(ID_case_item, {item(ID_default), lower_branch(*c.defaultCase)}));
     auto add_check = [&](const irep_idt &key, const char *stem)
     {
       const auto site = sm.getFullyExpandedLoc(at);
@@ -1209,6 +1233,11 @@ exprt compilert::stmt(const Statement &s, bool at_initial_entry)
        entry != procedural_locals.end())
     {
       auto &local = entry->second;
+      if(local.case_read_only)
+        fail(
+          a.left().sourceRange.start(),
+          "case branch writes an active procedural local: " +
+            std::string(target->name));
       const bool packed_or =
         in_always_comb && a.op == BinaryOperator::BinaryOr &&
         is_automatic_packed_struct(target->as<VariableSymbol>());

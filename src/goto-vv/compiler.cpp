@@ -646,7 +646,9 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       exprt statement;
       const bool level_combinational =
         kind == "Always" && timed && checked_level_event(p, *timed);
-      in_always_comb = kind == "AlwaysComb" || level_combinational;
+      in_always_comb_procedure =
+        p.procedureKind == ProceduralBlockKind::AlwaysComb;
+      in_always_comb = in_always_comb_procedure || level_combinational;
       const auto *event =
         timed ? timed->timing.as_if<SignalEventControl>() : nullptr;
       in_posedge_process = (kind == "Always" || kind == "AlwaysFF") && event &&
@@ -670,6 +672,7 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
       else
         statement = stmt(body, p.procedureKind == ProceduralBlockKind::Initial);
       in_always_comb = false;
+      in_always_comb_procedure = false;
       in_posedge_process = false;
       auto process = item(op, {std::move(statement)});
       process.add_source_location() = loc(s.location);

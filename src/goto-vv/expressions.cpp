@@ -151,6 +151,16 @@ exprt as_property(exprt e)
       ID_sva_sequence_property, verilog_sva_property_typet(), {std::move(e)});
   return e;
 }
+
+bool hierarchical_procedural_local(
+  const Expression &reference,
+  const Symbol &symbol)
+{
+  const auto *parent = symbol.getParentScope();
+  return reference.kind == ExpressionKind::HierarchicalValue &&
+         symbol.kind == SymbolKind::Variable && parent &&
+         parent->asSymbol().kind == SymbolKind::StatementBlock;
+}
 } // namespace
 
 ConstantValue compilert::eval_known(const Expression &e) const
@@ -159,6 +169,13 @@ ConstantValue compilert::eval_known(const Expression &e) const
     e.visitSymbolReferences(
       [&](const Expression &reference, const Symbol &symbol)
       {
+        if(
+          in_always_comb_procedure &&
+          hierarchical_procedural_local(reference, symbol))
+          fail(
+            reference.sourceRange.start(),
+            "hierarchical reference to a procedural local outside its "
+            "lexical scope");
         const auto local = procedural_locals.find(&symbol);
         if(local != procedural_locals.end() && !local->second.assigned)
           fail(
@@ -386,6 +403,13 @@ exprt compilert::expr(
     auto *s = e.getSymbolReference();
     if(!s)
       fail(at, "unbound expression");
+    if(
+      in_always_comb_procedure && !procedural_locals.empty() &&
+      hierarchical_procedural_local(e, *s))
+      fail(
+        at,
+        "hierarchical reference to a procedural local outside its "
+        "lexical scope");
     if(auto l = locals.find(s); l != locals.end())
       return l->second;
     if(auto l = expanded_indices.find(s); l != expanded_indices.end())
