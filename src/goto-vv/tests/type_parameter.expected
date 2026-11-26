@@ -1,0 +1,8 @@
+p_widths PROVED up to bound 3
+p_sign PROVED up to bound 3
+p_default PROVED up to bound 3
+p_frame PROVED up to bound 3
+p_forward PROVED up to bound 3
+p_bad_default REFUTED
+p_bad_frame REFUTED
+p_bad_forward REFUTED

@@ -431,6 +431,9 @@ void compilert::members(const Scope &body, const port_mapt &ports, exprt &items)
     case SymbolKind::StatementBlock:
     case SymbolKind::WildcardImport:
     case SymbolKind::ExplicitImport:
+    // Each use already has the effective Slang type from its instance.
+    // A type parameter, like a typedef, has no RTL symbol or module item.
+    case SymbolKind::TypeParameter:
     case SymbolKind::TypeAlias:
     case SymbolKind::EmptyMember:
       break;
