@@ -1,0 +1,13 @@
+CORE
+bad-name-duplicate.btor2
+--bound 0
+^\[repeated\] : PROVED up to bound 0$
+^\[repeated\$5\$\$\] : REFUTED$
+^\[repeated\$5\] : PROVED up to bound 0$
+^\[repeated\$5\$\] : PROVED up to bound 0$
+^EXIT=10$
+^SIGNAL=0$
+--
+--
+Repeated labels must keep all bad nodes. An automatically generated
+suffix must not replace a label present in the input.

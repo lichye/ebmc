@@ -188,11 +188,10 @@ btor2_modelt btor2_parse(std::istream &in)
         node.args.push_back(arg);
     }
 
-    // Read optional symbol (for input/state nodes that haven't
-    // consumed the rest of the line)
+    // Read optional symbols for bad nodes and declarations without literals.
     if(
-      node.symbol.empty() && input_tags.count(tag) && tag != "const" &&
-      tag != "constd" && tag != "consth")
+      node.symbol.empty() && (tag == "bad" || input_tags.count(tag)) &&
+      tag != "const" && tag != "constd" && tag != "consth")
     {
       std::string sym;
       if(ss >> sym && !sym.empty() && sym[0] != ';')

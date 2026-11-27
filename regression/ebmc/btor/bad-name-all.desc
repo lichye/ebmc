@@ -1,0 +1,8 @@
+CORE
+bad-name-default-collision.btor2
+--bound 0
+^\[bad4\$4\] : PROVED up to bound 0$
+^\[bad4\] : REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--

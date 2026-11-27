@@ -1,0 +1,11 @@
+CORE
+bad-name-default-collision.btor2
+--bound 0 --property bad4
+^\[bad4\] : REFUTED$
+^EXIT=10$
+^SIGNAL=0$
+--
+^\[bad4\$4\]
+--
+An explicit bad name takes precedence over the default name of an
+earlier anonymous node.

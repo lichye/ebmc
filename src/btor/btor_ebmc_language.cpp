@@ -29,6 +29,7 @@ Author: Daniel Kroening, kroening@kroening.com
 
 #include <fstream>
 #include <iostream>
+#include <set>
 
 /// Convert a BTOR2 sort ID to a CBMC type
 static typet sort_to_type(std::size_t sort_id, const btor2_modelt &model)
@@ -601,7 +602,32 @@ static transition_systemt build_transition_system(const btor2_modelt &model)
     invar_exprs.push_back(constraint_expr);
   }
 
-  // Bad state properties: G(!bad)
+  const auto property_name = [&model](std::size_t id)
+  {
+    const auto &node = model.nodes.at(id);
+    return node.symbol.empty() ? node.tag + std::to_string(id) : node.symbol;
+  };
+  // Reserve original spellings (including anonymous defaults) so generated
+  // suffixes cannot consume a name used by a later bad node.
+  std::set<std::string> bad_names, explicit_bad_names, liveness_names;
+  for(auto id : model.bad_properties)
+  {
+    bad_names.insert(property_name(id));
+    if(const auto &label = model.nodes.at(id).symbol; !label.empty())
+      explicit_bad_names.insert(label);
+  }
+  for(auto id : model.fair_properties)
+    liveness_names.insert(property_name(id));
+  for(auto id : model.justice_properties)
+    liveness_names.insert(property_name(id));
+  const auto property_prefix = id2string(module_id) + "::spec::";
+  const auto name_taken = [&](const std::string &name)
+  {
+    return liveness_names.count(name) ||
+           result.symbol_table.lookup(property_prefix + name);
+  };
+
+  // Bad state properties: G(!bad), in the input's original bad order.
   for(auto bad_id : model.bad_properties)
   {
     auto &node = model.nodes.at(bad_id);
@@ -610,9 +636,16 @@ static transition_systemt build_transition_system(const btor2_modelt &model)
     if(bad_expr.type().id() != ID_bool)
       bad_expr = notequal_exprt{bad_expr, from_integer(0, bad_expr.type())};
 
-    std::string name =
-      node.symbol.empty() ? "bad" + std::to_string(bad_id) : node.symbol;
-    irep_idt prop_id = id2string(module_id) + "::spec::" + name;
+    auto name = property_name(bad_id);
+    if(
+      (node.symbol.empty() && explicit_bad_names.count(name)) ||
+      name_taken(name))
+    {
+      name += '$' + std::to_string(bad_id);
+      while(bad_names.count(name) || name_taken(name))
+        name += '$';
+    }
+    irep_idt prop_id = property_prefix + name;
 
     symbolt prop_symbol{prop_id, bool_typet(), mode};
     prop_symbol.base_name = name;
@@ -633,9 +666,8 @@ static transition_systemt build_transition_system(const btor2_modelt &model)
     if(fair_expr.type().id() != ID_bool)
       fair_expr = notequal_exprt{fair_expr, from_integer(0, fair_expr.type())};
 
-    std::string name =
-      node.symbol.empty() ? "fair" + std::to_string(fair_id) : node.symbol;
-    irep_idt prop_id = id2string(module_id) + "::spec::" + name;
+    auto name = property_name(fair_id);
+    irep_idt prop_id = property_prefix + name;
 
     symbolt prop_symbol{prop_id, bool_typet(), mode};
     prop_symbol.base_name = name;
@@ -661,8 +693,8 @@ static transition_systemt build_transition_system(const btor2_modelt &model)
       conjuncts.push_back(e);
     }
 
-    std::string name = "justice" + std::to_string(justice_id);
-    irep_idt prop_id = id2string(module_id) + "::spec::" + name;
+    auto name = property_name(justice_id);
+    irep_idt prop_id = property_prefix + name;
 
     symbolt prop_symbol{prop_id, bool_typet(), mode};
     prop_symbol.base_name = name;

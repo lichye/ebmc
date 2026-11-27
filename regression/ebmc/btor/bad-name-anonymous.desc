@@ -1,0 +1,10 @@
+CORE
+bad-name-default-collision.btor2
+--bound 0 --property 'bad4$4'
+^\[bad4\$4\] : PROVED up to bound 0$
+^EXIT=0$
+^SIGNAL=0$
+--
+^\[bad4\]
+--
+The anonymous bad still has a unique selectable name.
